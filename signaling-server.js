@@ -9,6 +9,7 @@ const AVATAR_COLORS = ['#56e2cf', '#ff8b72', '#6676ea', '#a879ff', '#e8b65a', '#
 const MAX_VOICE_CHANNEL_SIZE = 7;
 const MAX_HUMAN_VOICE_CHANNEL_SIZE = 6;
 const safeChannel = (value, fallback) => String(value || fallback).trim().slice(0, 24) || fallback;
+const safeIdentity = (value) => String(value || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 80);
 const voiceKey = (room, channel) => `voice:${room}:${channel}`;
 const serverKey = (room) => `server:${room}`;
 
@@ -17,14 +18,30 @@ function startSignalingServer(port = 3000, options = {}) {
   const server = http.createServer(app);
   const io = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
   const startedAt = Date.now();
-  const events = { connections: 0, signals: 0, joins: 0, messages: 0 };
+  const events = { connections: 0, signals: 0, joins: 0, messages: 0, kicks: 0, bans: 0 };
   const logs = [];
   const addLog = (level, message) => { logs.unshift({ time: new Date().toLocaleTimeString('pt-BR'), level, message }); if (logs.length > 80) logs.pop(); };
-  const peersIn = (key) => [...(io.sockets.adapter.rooms.get(key) || [])].filter((id) => id !== undefined).map((id) => { const peer = io.sockets.sockets.get(id)?.data || {}; return { id, name: peer.name || 'Visitante', color: peer.color || AVATAR_COLORS[0], avatar: peer.avatar || '', voiceChannel: peer.voiceChannel || 'Geral' }; });
+  const peersIn = (key) => [...(io.sockets.adapter.rooms.get(key) || [])].map((id) => {
+    const peer = io.sockets.sockets.get(id)?.data || {};
+    return { id, name: peer.name || 'Visitante', color: peer.color || AVATAR_COLORS[0], avatar: peer.avatar || '', voiceChannel: peer.voiceChannel || 'Geral' };
+  });
   const broadcastPresence = (serverRoom, excludedId) => io.to(serverRoom).emit('room-presence', { members: peersIn(serverRoom).filter((peer) => peer.id !== excludedId) });
   const musicFolder = options.musicDirectory || path.join(__dirname, 'music');
   fs.mkdirSync(musicFolder, { recursive: true });
   const musicFiles = () => fs.readdirSync(musicFolder).filter((name) => /\.(mp3|ogg|wav|m4a|aac)$/i.test(name)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+  const bansFile = options.bansFile || '';
+  const banned = new Map();
+  try {
+    const saved = JSON.parse(fs.readFileSync(bansFile, 'utf8'));
+    if (Array.isArray(saved)) saved.forEach((entry) => { if (safeIdentity(entry?.clientId)) banned.set(safeIdentity(entry.clientId), entry); });
+  } catch { /* first start or invalid optional file */ }
+  const persistBans = () => {
+    if (!bansFile) return;
+    try { fs.mkdirSync(path.dirname(bansFile), { recursive: true }); fs.writeFileSync(bansFile, JSON.stringify([...banned.values()], null, 2), 'utf8'); } catch (error) { addLog('error', `Não foi possível salvar banimentos: ${error.message}`); }
+  };
+  const publishNotice = (room, text) => { if (room) io.to(serverKey(room)).emit('text-message', { from: 'server:moderation', text, textChannel: 'geral', name: 'VoiceUP Server', color: '#ff8b72' }); };
+
   const plugins = loadPlugins({
     directories: options.pluginDirectories || [path.join(__dirname, 'plugins')],
     addLog,
@@ -40,12 +57,18 @@ function startSignalingServer(port = 3000, options = {}) {
   app.get('/health', (_req, res) => res.json({ ok: true, app: 'VoiceUp Server', maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, plugins: plugins.list().map(({ id, version }) => ({ id, version })), musicFiles: musicFiles() }));
   io.on('connection', (socket) => {
     events.connections += 1; addLog('info', 'Novo cliente conectado');
-    socket.on('join-room', ({ roomId, voiceChannel, name, color, avatar, bot }) => {
+    socket.on('join-room', ({ roomId, voiceChannel, name, color, avatar, bot, clientId }) => {
       const room = String(roomId || '').trim().slice(0, 48);
       const voiceChannelName = safeChannel(voiceChannel, 'Geral');
       const safeName = String(name || 'Visitante').trim().slice(0, 24) || 'Visitante';
-      const serverRoom = serverKey(room); const voiceRoom = voiceKey(room, voiceChannelName);
+      const identity = safeIdentity(clientId);
       if (!room) return socket.emit('app-error', 'Informe um código de sala.');
+      if (!bot && identity && banned.has(identity)) {
+        socket.emit('server-action', { action: 'banned', message: 'Você foi banido deste Server Host.' });
+        addLog('ban', `${safeName} tentou entrar, mas está banido`);
+        return setTimeout(() => socket.disconnect(true), 120);
+      }
+      const serverRoom = serverKey(room); const voiceRoom = voiceKey(room, voiceChannelName);
       if ((io.sockets.adapter.rooms.get(voiceRoom)?.size || 0) >= MAX_VOICE_CHANNEL_SIZE) return socket.emit('app-error', `O canal de voz já possui o limite de ${MAX_VOICE_CHANNEL_SIZE} pessoas.`);
       const regularPeers = [...(io.sockets.adapter.rooms.get(voiceRoom) || [])].filter((id) => !io.sockets.sockets.get(id)?.data?.isBot);
       if (!bot && regularPeers.length >= MAX_HUMAN_VOICE_CHANNEL_SIZE) return socket.emit('app-error', `O canal de voz atingiu o limite de ${MAX_HUMAN_VOICE_CHANNEL_SIZE} pessoas.`);
@@ -54,7 +77,7 @@ function startSignalingServer(port = 3000, options = {}) {
       const safeColor = usedColors.includes(requestedColor) ? AVATAR_COLORS.find((candidate) => !usedColors.includes(candidate)) || requestedColor : requestedColor;
       const safeAvatar = typeof avatar === 'string' && avatar.startsWith('data:image/') && avatar.length <= 150000 ? avatar : '';
       socket.join(serverRoom); socket.join(voiceRoom);
-      Object.assign(socket.data, { room, serverRoom, voiceRoom, voiceChannel: voiceChannelName, name: safeName, color: safeColor, avatar: safeAvatar, isBot: Boolean(bot) });
+      Object.assign(socket.data, { room, serverRoom, voiceRoom, voiceChannel: voiceChannelName, name: safeName, color: safeColor, avatar: safeAvatar, clientId: identity, isBot: Boolean(bot), joinedAt: Date.now() });
       socket.emit('color-assigned', { color: safeColor }); events.joins += 1; addLog('join', `${safeName} entrou em ${room} / ${voiceChannelName}`);
       const peers = peersIn(voiceRoom).filter((peer) => peer.id !== socket.id);
       socket.emit('room-joined', { roomId: room, voiceChannel: voiceChannelName, peers });
@@ -71,8 +94,7 @@ function startSignalingServer(port = 3000, options = {}) {
       const peers = peersIn(nextVoiceRoom).filter((peer) => peer.id !== socket.id);
       socket.emit('room-joined', { roomId: socket.data.room, voiceChannel: channel, peers });
       socket.to(nextVoiceRoom).emit('peer-joined', { id: socket.id, name: socket.data.name, color: socket.data.color, avatar: socket.data.avatar });
-      broadcastPresence(socket.data.serverRoom);
-      addLog('channel', `${socket.data.name} mudou para ${channel}`);
+      broadcastPresence(socket.data.serverRoom); addLog('channel', `${socket.data.name} mudou para ${channel}`);
     });
     socket.on('text-message', ({ text, textChannel }) => {
       if (!socket.data.serverRoom) return;
@@ -87,7 +109,33 @@ function startSignalingServer(port = 3000, options = {}) {
     socket.on('server-pong', ({ sentAt }) => { const ping = Date.now() - Number(sentAt); if (Number.isFinite(ping) && ping >= 0 && ping < 10000) socket.data.ping = ping; });
     socket.on('disconnecting', () => { if (socket.data.voiceRoom) { addLog('leave', `${socket.data.name || 'Cliente'} saiu da sala`); socket.to(socket.data.voiceRoom).emit('peer-left', { id: socket.id, name: socket.data.name }); } if (socket.data.serverRoom) broadcastPresence(socket.data.serverRoom, socket.id); });
   });
-  const getStats = () => { const voiceRooms = [...io.sockets.adapter.rooms.entries()].filter(([key, value]) => key.startsWith('voice:') && value.size > 0); const pings = [...io.sockets.sockets.values()].map((socket) => socket.data.ping).filter(Number.isFinite); io.emit('server-ping', Date.now()); return { uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), participants: io.sockets.sockets.size, rooms: voiceRooms.length, averagePing: pings.length ? Math.round(pings.reduce((total, ping) => total + ping, 0) / pings.length) : null, events, logs, plugins: plugins.list(), pluginErrors: plugins.errors() }; };
-  return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '0.0.0.0', () => { addLog('info', `Servidor iniciado na porta ${port}`); resolve({ server, io, port, getStats }); }); });
+
+  const members = () => [...io.sockets.sockets.values()].map((socket) => ({ id: socket.id, clientId: socket.data.clientId || '', name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0], room: socket.data.room || '', voiceChannel: socket.data.voiceChannel || '', isBot: Boolean(socket.data.isBot), connectedSeconds: socket.data.joinedAt ? Math.floor((Date.now() - socket.data.joinedAt) / 1000) : 0 }));
+  const disconnectMember = (id, action, notice) => {
+    const socket = io.sockets.sockets.get(String(id || ''));
+    if (!socket || socket.data.isBot) return { ok: false, message: 'Participante não encontrado.' };
+    const name = socket.data.name || 'Participante'; const room = socket.data.room;
+    socket.emit('server-action', { action, message: action === 'banned' ? 'Você foi banido deste Server Host.' : 'Você foi expulso pelo Server Host.' });
+    publishNotice(room, notice || `${name} foi removido pelo Server Host.`);
+    setTimeout(() => socket.disconnect(true), 120);
+    addLog(action === 'banned' ? 'ban' : 'kick', `${name}: ${action}`);
+    return { ok: true, message: action === 'banned' ? `${name} foi banido.` : `${name} foi expulso.` };
+  };
+  const kick = (id) => { events.kicks += 1; return disconnectMember(id, 'kicked'); };
+  const ban = (id) => {
+    const socket = io.sockets.sockets.get(String(id || ''));
+    const identity = safeIdentity(socket?.data?.clientId);
+    if (!identity) return { ok: false, message: 'Este cliente é antigo e não pode receber banimento persistente. Peça para atualizar o Client.' };
+    banned.set(identity, { clientId: identity, name: socket.data.name || 'Visitante', bannedAt: new Date().toISOString() }); persistBans(); events.bans += 1;
+    return disconnectMember(id, 'banned', `${socket.data.name || 'Participante'} foi banido pelo Server Host.`);
+  };
+  const unban = (clientId) => { const identity = safeIdentity(clientId); if (!identity || !banned.has(identity)) return { ok: false, message: 'Banimento não encontrado.' }; const name = banned.get(identity).name || 'Participante'; banned.delete(identity); persistBans(); addLog('ban', `${name} foi desbanido`); return { ok: true, message: `${name} pode entrar novamente.` }; };
+  const getStats = () => {
+    const voiceRooms = [...io.sockets.adapter.rooms.entries()].filter(([key, value]) => key.startsWith('voice:') && value.size > 0);
+    const pings = [...io.sockets.sockets.values()].map((socket) => socket.data.ping).filter(Number.isFinite);
+    io.emit('server-ping', Date.now());
+    return { uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), participants: io.sockets.sockets.size, rooms: voiceRooms.length, averagePing: pings.length ? Math.round(pings.reduce((total, ping) => total + ping, 0) / pings.length) : null, events, logs, plugins: plugins.list(), pluginErrors: plugins.errors(), members: members(), bans: [...banned.values()] };
+  };
+  return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '0.0.0.0', () => { addLog('info', `Servidor iniciado na porta ${port}`); resolve({ server, io, port, getStats, members, kick, ban, unban }); }); });
 }
 module.exports = { startSignalingServer };

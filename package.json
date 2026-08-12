@@ -1,6 +1,6 @@
 {
   "name": "voiceup",
-  "version": "1.0.22",
+  "version": "1.0.23",
   "private": true,
   "author": "Goat Gank",
   "description": "Comunicação P2P simples por voz e texto",
@@ -38,7 +38,7 @@
       "host/**/*",
       "public/**/*",
       "plugins/**/*",
-      "music/**/*",
+      "music/README.md",
       "package.json"
     ],
     "win": {
