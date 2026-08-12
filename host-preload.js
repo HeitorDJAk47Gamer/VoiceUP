@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
+
 contextBridge.exposeInMainWorld('voiceupServer', {
   info: () => ipcRenderer.invoke('server-info'),
   stats: () => ipcRenderer.invoke('server-stats'),
@@ -12,52 +13,46 @@ contextBridge.exposeInMainWorld('voiceupServer', {
 });
 
 window.addEventListener('DOMContentLoaded', () => {
-  const root = document.querySelector('.wrap');
-  if (!root) return;
-  const control = document.createElement('section');
-  control.className = 'section';
-  control.innerHTML = `<div class="toolbar"><h2>Controle do servidor</h2><span id="host-state" class="note" style="margin-left:auto">Carregando...</span></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button data-server-control="start" style="background:#56e2cf;color:#102026;border:0;border-radius:8px;padding:8px 11px;font-weight:700">Iniciar</button><button data-server-control="restart" style="background:#6676ea;color:#fff;border:0;border-radius:8px;padding:8px 11px;font-weight:700">Reiniciar</button><button data-server-control="stop" style="background:#553344;color:#ffd5dd;border:0;border-radius:8px;padding:8px 11px;font-weight:700">Desligar sem fechar painel</button></div>
-    <label style="display:grid;gap:6px;max-width:340px;margin-top:16px;font-size:12px;color:#b9c6d9">Ao clicar no X do programa<select id="host-close-behavior" style="background:#101625;color:#e8edf8;border:1px solid #40506c;border-radius:7px;padding:8px"><option value="tray">Manter ativo na bandeja do Windows</option><option value="ask">Perguntar o que fazer</option><option value="quit">Encerrar o programa</option></select></label><small id="host-control-message" class="note"></small>`;
-  root.querySelector('.grid')?.after(control);
-
-  const moderation = document.createElement('section');
-  moderation.className = 'section';
-  moderation.innerHTML = '<h2>Moderação</h2><div id="member-list" class="logs" style="height:auto;max-height:220px">Carregando participantes...</div><h2 style="margin-top:18px">Banimentos</h2><div id="ban-list" class="logs" style="height:auto;max-height:150px">Nenhum banimento.</div><p class="note">Expulsar desconecta a pessoa da sala. Banir bloqueia o identificador salvo no Client até você remover o banimento.</p>';
-  root.querySelector('.section:last-child')?.before(moderation);
-
-  const updateSection = document.createElement('section');
-  updateSection.className = 'section';
-  updateSection.innerHTML = '<div class="toolbar"><h2>Atualizações</h2><button id="check-update" style="margin-left:auto;background:#6676ea;color:#fff;border:0;border-radius:8px;padding:8px 11px;font-weight:600;cursor:pointer">Procurar atualizações</button></div><div id="update-status" class="note">Consulte as Releases oficiais do GitHub.</div>';
-  root.querySelector('.grid')?.before(updateSection);
-
-  const pluginSection = document.createElement('section');
-  pluginSection.className = 'section';
-  pluginSection.innerHTML = '<h2>Plugins e músicas do servidor (beta)</h2><div id="plugin-list" class="note">Carregando plugins...</div><div id="plugin-folder" class="url" style="margin-top:10px"></div><div id="music-folder" class="url" style="margin-top:8px"></div><p class="note">Adicione arquivos .js em plugins e MP3/OGG/WAV/M4A/AAC em music. Reinicie o Server Host após alterar arquivos. Instale somente plugins confiáveis.</p>';
-  root.querySelector('.section:last-child')?.before(pluginSection);
-
-  const message = (text) => { control.querySelector('#host-control-message').textContent = text || ''; };
-  const renderPlugins = (stats) => { const plugins = stats.plugins || []; pluginSection.querySelector('#plugin-list').innerHTML = plugins.length ? plugins.map((plugin) => `<div style="margin:7px 0"><b style="color:#56e2cf">${plugin.name}</b> <span style="color:#99a6bc">${plugin.version}</span><br><span>${plugin.description || plugin.id}</span></div>`).join('') : 'Nenhum plugin carregado.'; };
-  const renderMembers = (stats) => {
-    const members = stats.members || [];
-    moderation.querySelector('#member-list').innerHTML = members.length ? members.map((member) => `<div class="log" style="align-items:center;border-bottom:1px solid #29354a;padding:8px 0"><span style="width:10px;height:10px;border-radius:50%;background:${member.color};display:inline-block;flex:none"></span><span style="flex:1"><b style="color:#e8edf8">${member.name}</b><br><small style="color:#8fa0b7">${member.room} · ${member.voiceChannel} · ${member.connectedSeconds}s</small></span>${member.isBot ? '<small>Bot</small>' : `<button data-moderate="kick" data-member="${member.id}" style="background:#433243;color:#ffd3dd;border:0;border-radius:7px;padding:6px 8px">Expulsar</button><button data-moderate="ban" data-member="${member.id}" style="background:#6b2e3c;color:#fff;border:0;border-radius:7px;padding:6px 8px">Banir</button>`}</div>`).join('') : '<span>Nenhum participante conectado.</span>';
-    moderation.querySelector('#ban-list').innerHTML = (stats.bans || []).length ? stats.bans.map((ban) => `<div class="log" style="align-items:center;padding:6px 0"><span style="flex:1"><b>${ban.name || 'Visitante'}</b><br><small>${ban.bannedAt || ''}</small></span><button data-unban="${ban.clientId}" style="background:#275c62;color:#d9fff8;border:0;border-radius:7px;padding:6px 8px">Remover ban</button></div>`).join('') : '<span>Nenhum banimento.</span>';
-    moderation.querySelectorAll('[data-moderate]').forEach((button) => button.addEventListener('click', async () => { const action = button.dataset.moderate; if (!window.confirm(`${action === 'ban' ? 'Banir' : 'Expulsar'} este participante?`)) return; const result = await window.voiceupServer.moderate(action, button.dataset.member); message(result.message); }));
-    moderation.querySelectorAll('[data-unban]').forEach((button) => button.addEventListener('click', async () => { const result = await window.voiceupServer.unban(button.dataset.unban); message(result.message); }));
+  const $ = (id) => document.getElementById(id);
+  const history = [];
+  const text = (value) => String(value ?? '');
+  const fmt = (seconds) => { const minutes = Math.floor(Number(seconds || 0) / 60); const rest = Number(seconds || 0) % 60; return minutes ? `${minutes}m ${rest}s` : `${rest}s`; };
+  const message = (value) => { $('host-control-message').textContent = text(value); };
+  const escape = (value) => text(value).replace(/[&<>'"]/g, (letter) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[letter]));
+  const draw = () => {
+    const canvas = $('chart'); const context = canvas.getContext('2d'); const width = canvas.clientWidth; const height = canvas.clientHeight; const dpr = devicePixelRatio || 1;
+    canvas.width = width * dpr; canvas.height = height * dpr; context.scale(dpr, dpr); context.clearRect(0, 0, width, height);
+    const key = $('metric-select').value; const values = history.map((item) => Number(item[key] || 0)); const max = Math.max(1, ...values);
+    context.strokeStyle = '#31405b'; for (let index = 1; index < 4; index += 1) { const y = height * index / 4; context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke(); }
+    if (values.length < 2) return;
+    context.strokeStyle = '#56e2cf'; context.lineWidth = 2; context.beginPath(); values.forEach((value, index) => { const x = index * width / (values.length - 1); const y = height - 12 - (value / max) * (height - 24); index ? context.lineTo(x, y) : context.moveTo(x, y); }); context.stroke();
   };
-  control.querySelectorAll('[data-server-control]').forEach((button) => button.addEventListener('click', async () => { button.disabled = true; const result = await window.voiceupServer.control(button.dataset.serverControl); message(result.message); button.disabled = false; }));
-  const closeSelect = control.querySelector('#host-close-behavior');
-  window.voiceupServer.settings().then((settings) => { closeSelect.value = settings.closeBehavior || 'tray'; });
-  closeSelect.addEventListener('change', async () => { await window.voiceupServer.saveSettings({ closeBehavior: closeSelect.value }); message('Preferência de fechamento salva.'); });
-  window.voiceupServer.info().then((info) => { pluginSection.querySelector('#plugin-folder').textContent = `Plugins: ${info.pluginFolder || 'indisponível'}`; pluginSection.querySelector('#music-folder').textContent = `Músicas: ${info.musicFolder || 'indisponível'}`; });
-  const poll = async () => { const stats = await window.voiceupServer.stats(); renderPlugins(stats); renderMembers(stats); control.querySelector('#host-state').textContent = stats.online ? '● Online' : '● Desligado'; control.querySelector('#host-state').style.color = stats.online ? '#56e2cf' : '#ff8b72'; };
-  poll(); setInterval(poll, 1500);
-  let pendingUpdate = null;
-  const updateButton = updateSection.querySelector('#check-update'); const updateStatus = updateSection.querySelector('#update-status');
-  updateButton.addEventListener('click', async () => {
-    if (pendingUpdate) { if (!window.confirm(`Baixar e abrir o instalador VoiceUP Server ${pendingUpdate.version}?`)) return; updateButton.disabled = true; updateStatus.textContent = 'Baixando o instalador...'; const download = await window.voiceupServer.downloadUpdate(); updateStatus.textContent = download.ok ? 'Instalador aberto. Siga os passos para atualizar.' : download.message; if (!download.ok) updateButton.disabled = false; return; }
-    updateButton.disabled = true; updateStatus.textContent = 'Consultando a última release no GitHub...'; const result = await window.voiceupServer.checkForUpdates(); updateButton.disabled = false;
-    if (!result.ok) { updateStatus.textContent = result.message; return; } if (!result.available) { updateStatus.textContent = `Você já está na versão mais recente (${result.installedVersion}).`; return; }
-    pendingUpdate = result; updateStatus.textContent = `A versão ${result.version} está pronta para baixar.`; updateButton.textContent = `Baixar ${result.version}`;
-  });
+  const renderMembers = (stats) => {
+    const members = Array.isArray(stats.members) ? stats.members : [];
+    $('member-count').textContent = `${members.length} conectado${members.length === 1 ? '' : 's'}`;
+    $('member-list').innerHTML = members.length ? members.map((member) => `<div class="member"><i class="color-dot" style="background:${escape(member.color || '#56e2cf')}"></i><span class="member-info"><b>${escape(member.name || 'Visitante')}</b><br><small>${escape(member.room || 'sem sala')} · ${escape(member.voiceChannel || 'sem canal')} · ${Number(member.connectedSeconds || 0)}s</small></span>${member.isBot ? '<small>Bot</small>' : `<button class="button danger" data-moderate="kick" data-member="${escape(member.id)}">Expulsar</button><button class="button ban" data-moderate="ban" data-member="${escape(member.id)}">Banir</button>`}</div>`).join('') : '<span>Nenhum participante conectado.</span>';
+    $('ban-list').innerHTML = Array.isArray(stats.bans) && stats.bans.length ? stats.bans.map((ban) => `<div class="member"><span class="member-info"><b>${escape(ban.name || 'Visitante')}</b><br><small>${escape(ban.bannedAt || '')}</small></span><button class="button unban" data-unban="${escape(ban.clientId)}">Remover ban</button></div>`).join('') : '<span>Nenhum banimento.</span>';
+    document.querySelectorAll('[data-moderate]').forEach((button) => { button.onclick = async () => { const action = button.dataset.moderate; if (!window.confirm(`${action === 'ban' ? 'Banir' : 'Expulsar'} este participante?`)) return; button.disabled = true; const result = await window.voiceupServer.moderate(action, button.dataset.member); message(result.message); button.disabled = false; }; });
+    document.querySelectorAll('[data-unban]').forEach((button) => { button.onclick = async () => { button.disabled = true; const result = await window.voiceupServer.unban(button.dataset.unban); message(result.message); button.disabled = false; }; });
+  };
+  const renderPlugins = (stats) => {
+    const plugins = Array.isArray(stats.plugins) ? stats.plugins : [];
+    $('plugin-list').innerHTML = plugins.length ? plugins.map((plugin) => `<div><b style="color:#56e2cf">${escape(plugin.name)}</b> <span style="color:#99a6bc">${escape(plugin.version)}</span><br><span>${escape(plugin.description || plugin.id)}</span></div>`).join('') : '<span>Nenhum plugin carregado. Verifique a pasta plugins e use Recarregar plugins.</span>';
+    const errors = Array.isArray(stats.pluginErrors) ? stats.pluginErrors : [];
+    $('plugin-errors').textContent = errors.length ? `Erros de plugin: ${errors.join(' | ')}` : '';
+  };
+  const render = (stats) => {
+    ['participants', 'rooms', 'signals'].forEach((key) => { $(key).textContent = Number(stats[key] || 0); });
+    $('ping').textContent = stats.averagePing == null ? '—' : `${stats.averagePing} ms`; $('cpu').textContent = `${stats.cpuPercent || 0}%`; $('memory').textContent = `${stats.memoryMb || 0} MB`; $('heap').textContent = `${stats.heapMb || 0} MB`; $('uptime').textContent = fmt(stats.uptimeSeconds);
+    $('host-state').innerHTML = `<span class="dot" style="background:${stats.online ? '#56e2cf' : '#ff8b72'}"></span>${stats.online ? 'Online · porta 3000' : 'Desligado'}`;
+    $('logs').innerHTML = (stats.logs || []).map((log) => `<div class="log"><time>${escape(log.time)}</time><b>${escape(log.level).toUpperCase()}</b><span>${escape(log.message)}</span></div>`).join('') || '<span>Nenhum evento ainda.</span>';
+    renderMembers(stats); renderPlugins(stats); history.push(stats); if (history.length > 60) history.shift(); draw();
+  };
+  const refresh = async () => { try { render(await window.voiceupServer.stats()); } catch (error) { message(`Não foi possível atualizar o painel: ${error.message || 'erro desconhecido'}`); } };
+  window.voiceupServer.info().then((info) => { $('urls').innerHTML = (info.urls?.length ? info.urls : ['http://localhost:3000']).map((url) => `<div class="url">${escape(url)}</div>`).join(''); $('connection-code').textContent = info.connectionCode || ''; $('plugin-folder').textContent = `Plugins (pasta principal): ${info.pluginFolder || 'indisponível'}${info.portablePluginFolder ? ` · teste portátil: ${info.portablePluginFolder}` : ''}`; $('music-folder').textContent = `Músicas: ${info.musicFolder || 'indisponível'}`; });
+  document.querySelectorAll('[data-server-control]').forEach((button) => { button.addEventListener('click', async () => { button.disabled = true; const result = await window.voiceupServer.control(button.dataset.serverControl); message(result.message); button.disabled = false; refresh(); }); });
+  $('reload-plugins').addEventListener('click', async () => { if (!window.confirm('Recarregar plugins reinicia o servidor e desconecta as pessoas da sala. Continuar?')) return; $('reload-plugins').disabled = true; const result = await window.voiceupServer.control('reload-plugins'); message(result.message); $('reload-plugins').disabled = false; refresh(); });
+  const closeBehavior = $('host-close-behavior'); window.voiceupServer.settings().then((settings) => { closeBehavior.value = settings.closeBehavior || 'tray'; }); closeBehavior.addEventListener('change', async () => { await window.voiceupServer.saveSettings({ closeBehavior: closeBehavior.value }); message('Preferência de fechamento salva.'); });
+  let pendingUpdate = null; $('check-update').addEventListener('click', async () => { const button = $('check-update'); const status = $('update-status'); if (pendingUpdate) { if (!window.confirm(`Baixar VoiceUP Server ${pendingUpdate.version}?`)) return; button.disabled = true; status.textContent = 'Baixando instalador...'; const result = await window.voiceupServer.downloadUpdate(); status.textContent = result.ok ? 'Instalador aberto.' : result.message; if (!result.ok) button.disabled = false; return; } button.disabled = true; status.textContent = 'Consultando GitHub...'; const result = await window.voiceupServer.checkForUpdates(); button.disabled = false; if (!result.ok) { status.textContent = result.message; return; } if (!result.available) { status.textContent = `Você já está na versão atual (${result.installedVersion}).`; return; } pendingUpdate = result; status.textContent = `A versão ${result.version} está pronta.`; button.textContent = `Baixar ${result.version}`; });
+  $('metric-select').addEventListener('change', draw); new ResizeObserver(draw).observe($('chart')); refresh(); setInterval(refresh, 1500);
 });

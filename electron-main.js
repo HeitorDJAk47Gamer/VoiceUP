@@ -45,7 +45,13 @@ async function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
 }
 registerUpdateHandlers(ipcMain, 'VoiceUP Setup ');
-ipcMain.handle('capture:sources', async () => (await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: true })).map((source) => ({ id: source.id, name: source.name, kind: source.id.startsWith('screen:') ? 'screen' : 'window' })));
+ipcMain.handle('capture:sources', async () => (await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: true, thumbnailSize: { width: 420, height: 236 } })).map((source) => ({
+  id: source.id,
+  name: source.name,
+  kind: source.id.startsWith('screen:') ? 'screen' : 'window',
+  thumbnail: source.thumbnail?.isEmpty?.() ? '' : source.thumbnail?.toDataURL?.() || '',
+  appIcon: source.appIcon?.isEmpty?.() ? '' : source.appIcon?.toDataURL?.() || ''
+})));
 ipcMain.handle('capture:select', (_event, selection = {}) => { selectedCapture = { id: String(selection.id || ''), includeAudio: Boolean(selection.includeAudio) }; return true; });
 ipcMain.handle('window:set-video-fullscreen', (_event, enabled) => { mainWindow?.setFullScreen(Boolean(enabled)); return Boolean(enabled); });
 ipcMain.handle('window:settings', () => windowSettings);

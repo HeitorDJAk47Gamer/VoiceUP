@@ -15,6 +15,7 @@ let isQuitting = false;
 let lastCpu = process.cpuUsage();
 let lastCpuAt = process.hrtime.bigint();
 let pluginFolder = '';
+let portablePluginFolder = '';
 let musicFolder = '';
 let hostSettings = { closeBehavior: 'tray' };
 
@@ -36,7 +37,7 @@ async function sendMusicBotCommand(command) {
 async function startHostedSignaling() {
   if (signaling) return { ok: true, message: 'Servidor já está online.' };
   signaling = await startSignalingServer(3000, {
-    pluginDirectories: [pluginFolder, path.join(__dirname, 'plugins')],
+    pluginDirectories: [pluginFolder, portablePluginFolder, path.join(__dirname, 'plugins')],
     musicDirectory: musicFolder,
     bansFile: path.join(app.getPath('userData'), 'bans.json'),
     onPluginEvent: (event) => { if (event?.event === 'music-bot') sendMusicBotCommand(event.payload).catch(() => {}); }
@@ -56,6 +57,7 @@ async function restartHostedSignaling() { await stopHostedSignaling(); return st
 async function openWindow() {
   loadSettings();
   pluginFolder = path.join(app.getPath('userData'), 'plugins');
+  portablePluginFolder = path.join(path.dirname(process.execPath), 'plugins');
   musicFolder = path.join(app.getPath('userData'), 'music');
   fs.mkdirSync(pluginFolder, { recursive: true }); fs.mkdirSync(musicFolder, { recursive: true });
   const bundledPluginFolder = path.join(__dirname, 'plugins');
@@ -92,7 +94,7 @@ async function openWindow() {
 
 ipcMain.handle('server-info', () => {
   const urls = addresses(); const host = urls[0] || 'http://localhost:3000';
-  return { port: 3000, urls, connectionCode: `VU1:${Buffer.from(JSON.stringify({ host })).toString('base64')}`, pluginFolder, musicFolder, online: Boolean(signaling) };
+  return { port: 3000, urls, connectionCode: `VU1:${Buffer.from(JSON.stringify({ host })).toString('base64')}`, pluginFolder, portablePluginFolder, musicFolder, online: Boolean(signaling) };
 });
 ipcMain.handle('server-stats', () => {
   const now = process.hrtime.bigint(); const usage = process.cpuUsage(lastCpu); const elapsedMicros = Number(now - lastCpuAt) / 1000;
@@ -110,7 +112,13 @@ ipcMain.handle('server:moderate', (_event, { action, id } = {}) => {
 });
 ipcMain.handle('server:unban', (_event, clientId) => signaling ? signaling.unban(clientId) : { ok: false, message: 'O servidor está desligado.' });
 ipcMain.handle('server:control', async (_event, action) => {
-  try { if (action === 'start') return await startHostedSignaling(); if (action === 'stop') return await stopHostedSignaling(); if (action === 'restart') return await restartHostedSignaling(); return { ok: false, message: 'Ação inválida.' }; } catch (error) { return { ok: false, message: error.message || 'Não foi possível alterar o servidor.' }; }
+  try {
+    if (action === 'start') return await startHostedSignaling();
+    if (action === 'stop') return await stopHostedSignaling();
+    if (action === 'restart') return await restartHostedSignaling();
+    if (action === 'reload-plugins') { await restartHostedSignaling(); return { ok: true, message: 'Plugins recarregados. As pessoas precisam entrar novamente na sala.' }; }
+    return { ok: false, message: 'Ação inválida.' };
+  } catch (error) { return { ok: false, message: error.message || 'Não foi possível alterar o servidor.' }; }
 });
 ipcMain.handle('server:settings', () => hostSettings);
 ipcMain.handle('server:save-settings', (_event, next = {}) => { const allowed = ['tray', 'ask', 'quit']; hostSettings.closeBehavior = allowed.includes(next.closeBehavior) ? next.closeBehavior : 'tray'; saveSettings(); return hostSettings; });
