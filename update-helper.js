@@ -29,6 +29,7 @@ function requestJson(url) {
       response.setEncoding('utf8');
       response.on('data', (chunk) => { body += chunk; });
       response.on('end', () => {
+        if (response.statusCode === 404) return reject(new Error('Ainda nao existe uma atualizacao publicada no GitHub. Tente novamente depois.'));
         if (response.statusCode !== 200) return reject(new Error(`GitHub respondeu ${response.statusCode}.`));
         try { resolve(JSON.parse(body)); } catch { reject(new Error('Resposta de atualizacao invalida.')); }
       });
