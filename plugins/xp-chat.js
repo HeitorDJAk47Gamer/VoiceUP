@@ -1,0 +1,27 @@
+const profiles = new Map();
+const COOLDOWN_MS = 30_000;
+
+module.exports = {
+  id: 'xp-chat',
+  name: 'XP de chat',
+  version: 'beta.1',
+  description: 'Concede XP por mensagens e exibe !xp. Os dados desta beta ficam em memória enquanto o servidor estiver ligado.',
+
+  onTextMessage({ text, room, textChannel, user, api, plugin }) {
+    const key = `${room}:${user.id}`;
+    const profile = profiles.get(key) || { xp: 0, level: 1, lastMessageAt: 0 };
+    const command = String(text).trim().toLowerCase();
+    if (command === '!xp') {
+      const required = profile.level * 100;
+      api.systemMessage(room, textChannel, `⭐ ${user.name}: nível ${profile.level} — ${profile.xp}/${required} XP para o próximo nível.`, { name: 'XP de Chat', color: '#68e1ad', pluginId: plugin.id });
+      return;
+    }
+    if (command.startsWith('!') || String(text).trim().length < 3 || Date.now() - profile.lastMessageAt < COOLDOWN_MS) return;
+    const gained = Math.min(20, 5 + Math.floor(String(text).trim().length / 40));
+    profile.xp += gained; profile.lastMessageAt = Date.now();
+    let leveledUp = false;
+    while (profile.xp >= profile.level * 100) { profile.xp -= profile.level * 100; profile.level += 1; leveledUp = true; }
+    profiles.set(key, profile);
+    if (leveledUp) api.systemMessage(room, textChannel, `⭐ ${user.name} chegou ao nível ${profile.level}!`, { name: 'XP de Chat', color: '#68e1ad', pluginId: plugin.id });
+  }
+};

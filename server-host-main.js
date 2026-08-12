@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, Tray, Menu, dialog } = require('electron');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const { startSignalingServer } = require('./signaling-server');
 const { registerUpdateHandlers } = require('./update-helper');
 
@@ -10,11 +11,19 @@ let tray;
 let isQuitting = false;
 let lastCpu = process.cpuUsage();
 let lastCpuAt = process.hrtime.bigint();
+let pluginFolder = '';
 function addresses() {
   return Object.values(os.networkInterfaces()).flat().filter((item) => item && item.family === 'IPv4' && !item.internal).map((item) => `http://${item.address}:3000`);
 }
 async function openWindow() {
-  signaling = await startSignalingServer(3000);
+  pluginFolder = path.join(app.getPath('userData'), 'plugins');
+  fs.mkdirSync(pluginFolder, { recursive: true });
+  const bundledPluginFolder = path.join(__dirname, 'plugins');
+  if (fs.existsSync(bundledPluginFolder)) for (const file of fs.readdirSync(bundledPluginFolder).filter((name) => name.endsWith('.js'))) {
+    const destination = path.join(pluginFolder, file);
+    if (!fs.existsSync(destination)) fs.copyFileSync(path.join(bundledPluginFolder, file), destination);
+  }
+  signaling = await startSignalingServer(3000, { pluginDirectories: [pluginFolder, bundledPluginFolder] });
   mainWindow = new BrowserWindow({ width: 920, height: 760, minWidth: 650, minHeight: 560, title: 'VoiceUp Server', icon: path.join(__dirname, 'assets', 'voiceup-icon.ico'), backgroundColor: '#101522', autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'host-preload.js'), contextIsolation: true, nodeIntegration: false } });
   mainWindow.on('close', (event) => {
     if (isQuitting) return;
@@ -45,7 +54,7 @@ ipcMain.handle('server-info', () => {
   const urls = addresses();
   const host = urls[0] || 'http://localhost:3000';
   const connectionCode = `VU1:${Buffer.from(JSON.stringify({ host })).toString('base64')}`;
-  return { port: 3000, urls, connectionCode };
+  return { port: 3000, urls, connectionCode, pluginFolder };
 });
 ipcMain.handle('server-stats', () => {
   const now = process.hrtime.bigint();

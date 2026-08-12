@@ -13,6 +13,19 @@ window.addEventListener('DOMContentLoaded', () => {
   section.className = 'section';
   section.innerHTML = '<div class="toolbar"><h2>Atualizacoes</h2><button id="check-update" style="margin-left:auto;background:#6676ea;color:#fff;border:0;border-radius:8px;padding:8px 11px;font-weight:600;cursor:pointer">Procurar atualizacoes</button></div><div id="update-status" class="note">Consulte as Releases oficiais do GitHub.</div>';
   root.querySelector('.grid')?.before(section);
+  const pluginSection = document.createElement('section');
+  pluginSection.className = 'section';
+  pluginSection.innerHTML = '<h2>Plugins do servidor (beta)</h2><div id="plugin-list" class="note">Carregando plugins...</div><div id="plugin-folder" class="url" style="margin-top:10px"></div><p class="note">Adicione ou remova arquivos .js nesta pasta e reinicie o Server Host. Instale somente plugins confiáveis.</p>';
+  root.querySelector('.section:last-child')?.before(pluginSection);
+  const pluginList = pluginSection.querySelector('#plugin-list');
+  const pluginFolder = pluginSection.querySelector('#plugin-folder');
+  ipcRenderer.invoke('server-info').then((info) => { pluginFolder.textContent = info.pluginFolder || 'Pasta de plugins indisponível'; });
+  const renderPlugins = (stats) => {
+    const plugins = stats.plugins || [];
+    pluginList.innerHTML = plugins.length ? plugins.map((plugin) => `<div style="margin:7px 0"><b style="color:#56e2cf">${plugin.name}</b> <span style="color:#99a6bc">${plugin.version}</span><br><span>${plugin.description || plugin.id}</span></div>`).join('') : 'Nenhum plugin carregado.';
+  };
+  setInterval(() => ipcRenderer.invoke('server-stats').then(renderPlugins), 1500);
+  ipcRenderer.invoke('server-stats').then(renderPlugins);
   let pendingUpdate = null;
   const button = section.querySelector('#check-update');
   const status = section.querySelector('#update-status');
