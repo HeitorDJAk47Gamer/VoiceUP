@@ -16,15 +16,16 @@ function loadPlugins({ directories = [], addLog = () => {}, emitSystemMessage, e
       color: options.color || '#a879ff',
       pluginId: options.pluginId || ''
     }),
-    broadcast: (room, event, payload = {}) => emitPluginEvent({ room, event: safeText(event, 48), payload, pluginId: payload.pluginId || '' }),
+    botCommand: (room, payload = {}) => emitPluginEvent({ room, event: 'music-bot', payload, pluginId: payload.pluginId || '' }),
     media: { list: () => (typeof media.list === 'function' ? media.list() : []), url: (name) => (typeof media.url === 'function' ? media.url(name) : '') },
     log: (pluginId, message) => addLog('plugin', `[${pluginId}] ${safeText(message, 180)}`)
   };
 
   for (const directory of directories.filter(Boolean)) {
-    if (!fs.existsSync(directory)) continue;
-    for (const file of fs.readdirSync(directory).filter((name) => name.endsWith('.js')).sort()) {
-      const absolutePath = path.join(directory, file);
+    const resolvedDirectory = path.resolve(directory);
+    if (!fs.existsSync(resolvedDirectory)) continue;
+    for (const file of fs.readdirSync(resolvedDirectory).filter((name) => name.endsWith('.js')).sort()) {
+      const absolutePath = path.join(resolvedDirectory, file);
       try {
         delete require.cache[require.resolve(absolutePath)];
         const plugin = require(absolutePath);
@@ -32,7 +33,7 @@ function loadPlugins({ directories = [], addLog = () => {}, emitSystemMessage, e
         if (seenIds.has(plugin.id)) { addLog('plugin', `[${plugin.id}] ignorado: existe outro plugin com este id`); continue; }
         seenIds.add(plugin.id);
         loaded.push({ id: plugin.id, name: safeText(plugin.name || plugin.id, 48), version: safeText(plugin.version || 'beta', 24), description: safeText(plugin.description || '', 140), plugin });
-        addLog('plugin', `[${plugin.id}] carregado de ${path.basename(directory)}`);
+        addLog('plugin', `[${plugin.id}] carregado de ${path.basename(resolvedDirectory)}`);
       } catch (error) {
         const message = `${file}: ${safeText(error.message, 180)}`;
         errors.push(message); addLog('error', `Plugin inválido: ${message}`);

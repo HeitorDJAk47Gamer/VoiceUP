@@ -6,7 +6,8 @@ const fs = require('fs');
 const { loadPlugins } = require('./plugin-runtime');
 
 const AVATAR_COLORS = ['#56e2cf', '#ff8b72', '#6676ea', '#a879ff', '#e8b65a', '#47a7f5', '#ec6fa8'];
-const MAX_VOICE_CHANNEL_SIZE = 6;
+const MAX_VOICE_CHANNEL_SIZE = 7;
+const MAX_HUMAN_VOICE_CHANNEL_SIZE = 6;
 const safeChannel = (value, fallback) => String(value || fallback).trim().slice(0, 24) || fallback;
 const voiceKey = (room, channel) => `voice:${room}:${channel}`;
 const serverKey = (room) => `server:${room}`;
@@ -24,7 +25,6 @@ function startSignalingServer(port = 3000, options = {}) {
   const musicFolder = options.musicDirectory || path.join(__dirname, 'music');
   fs.mkdirSync(musicFolder, { recursive: true });
   const musicFiles = () => fs.readdirSync(musicFolder).filter((name) => /\.(mp3|ogg|wav|m4a|aac)$/i.test(name)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  app.use('/music', express.static(musicFolder, { fallthrough: false, index: false }));
   const plugins = loadPlugins({
     directories: options.pluginDirectories || [path.join(__dirname, 'plugins')],
     addLog,
@@ -33,26 +33,28 @@ function startSignalingServer(port = 3000, options = {}) {
       events.messages += 1;
       io.to(serverKey(room)).emit('text-message', { from: `plugin:${pluginId || 'server'}`, text, textChannel, name, color, pluginId });
     },
-    emitPluginEvent: ({ room, event, payload, pluginId }) => { if (room && event) io.to(serverKey(room)).emit('plugin-event', { event, payload, pluginId }); },
-    media: { list: musicFiles, url: (name) => musicFiles().includes(name) ? `/music/${encodeURIComponent(name)}` : '' }
+    emitPluginEvent: (event) => options.onPluginEvent?.(event),
+    media: { list: musicFiles, url: () => '' }
   });
 
   app.get('/health', (_req, res) => res.json({ ok: true, app: 'VoiceUp Server', maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, plugins: plugins.list().map(({ id, version }) => ({ id, version })), musicFiles: musicFiles() }));
   io.on('connection', (socket) => {
     events.connections += 1; addLog('info', 'Novo cliente conectado');
-    socket.on('join-room', ({ roomId, voiceChannel, name, color, avatar }) => {
+    socket.on('join-room', ({ roomId, voiceChannel, name, color, avatar, bot }) => {
       const room = String(roomId || '').trim().slice(0, 48);
       const voiceChannelName = safeChannel(voiceChannel, 'Geral');
       const safeName = String(name || 'Visitante').trim().slice(0, 24) || 'Visitante';
       const serverRoom = serverKey(room); const voiceRoom = voiceKey(room, voiceChannelName);
       if (!room) return socket.emit('app-error', 'Informe um código de sala.');
       if ((io.sockets.adapter.rooms.get(voiceRoom)?.size || 0) >= MAX_VOICE_CHANNEL_SIZE) return socket.emit('app-error', `O canal de voz já possui o limite de ${MAX_VOICE_CHANNEL_SIZE} pessoas.`);
+      const regularPeers = [...(io.sockets.adapter.rooms.get(voiceRoom) || [])].filter((id) => !io.sockets.sockets.get(id)?.data?.isBot);
+      if (!bot && regularPeers.length >= MAX_HUMAN_VOICE_CHANNEL_SIZE) return socket.emit('app-error', `O canal de voz atingiu o limite de ${MAX_HUMAN_VOICE_CHANNEL_SIZE} pessoas.`);
       const usedColors = peersIn(serverRoom).map((peer) => peer.color);
       const requestedColor = AVATAR_COLORS.includes(color) ? color : AVATAR_COLORS[0];
       const safeColor = usedColors.includes(requestedColor) ? AVATAR_COLORS.find((candidate) => !usedColors.includes(candidate)) || requestedColor : requestedColor;
       const safeAvatar = typeof avatar === 'string' && avatar.startsWith('data:image/') && avatar.length <= 150000 ? avatar : '';
       socket.join(serverRoom); socket.join(voiceRoom);
-      Object.assign(socket.data, { room, serverRoom, voiceRoom, voiceChannel: voiceChannelName, name: safeName, color: safeColor, avatar: safeAvatar });
+      Object.assign(socket.data, { room, serverRoom, voiceRoom, voiceChannel: voiceChannelName, name: safeName, color: safeColor, avatar: safeAvatar, isBot: Boolean(bot) });
       socket.emit('color-assigned', { color: safeColor }); events.joins += 1; addLog('join', `${safeName} entrou em ${room} / ${voiceChannelName}`);
       const peers = peersIn(voiceRoom).filter((peer) => peer.id !== socket.id);
       socket.emit('room-joined', { roomId: room, voiceChannel: voiceChannelName, peers });
@@ -78,7 +80,7 @@ function startSignalingServer(port = 3000, options = {}) {
       events.messages += 1;
       const safeTextChannel = safeChannel(textChannel, 'geral');
       io.to(socket.data.serverRoom).emit('text-message', { from: socket.id, text: safeText, textChannel: safeTextChannel, name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0] });
-      plugins.onTextMessage({ text: safeText, room: socket.data.room, textChannel: safeTextChannel, user: { id: socket.id, name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0] }, serverIsCloud: false });
+      plugins.onTextMessage({ text: safeText, room: socket.data.room, textChannel: safeTextChannel, voiceChannel: socket.data.voiceChannel, user: { id: socket.id, name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0] }, serverIsCloud: false });
     });
     socket.on('signal', ({ target, data }) => { if (target) { events.signals += 1; io.to(target).emit('signal', { from: socket.id, name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0], avatar: socket.data.avatar || '', data }); } });
     socket.on('latency-ping', ({ sentAt }) => socket.emit('latency-pong', { sentAt }));

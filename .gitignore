@@ -1,6 +1,7 @@
 node_modules/
 release/
 release-server/
+release-server-v*/
 release-v*/
 test-v*/
 *.blockmap

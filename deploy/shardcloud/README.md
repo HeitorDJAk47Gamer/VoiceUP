@@ -1,21 +1,25 @@
-# VoiceUP Server Cloud — ShardCloud
+# VoiceUP Server Cloud - ShardCloud
 
-Este pacote hospeda apenas a sinalização das chamadas. Áudio, vídeo, tela e chat seguem diretamente entre os dois clientes após a conexão P2P.
+Este pacote hospeda apenas a sinalizacao das chamadas. Audio, video, tela e chat seguem diretamente entre os clientes apos a conexao P2P.
 
 ## Como publicar
 
-1. Compacte o conteúdo desta pasta em um `.zip` — não inclua `node_modules`.
-2. No painel ShardCloud, envie o arquivo `.zip` como uma aplicação Node.js.
-3. Após o deploy, a ShardCloud mostrará o subdomínio HTTPS do app.
-4. Use no cliente o endereço mostrado, como `https://SEU_SUBDOMINIO.shardweb.app`.
-5. Todos entram usando esse endereço e o mesmo código de sala.
+1. Compacte o conteudo desta pasta em um `.zip` - nao inclua `node_modules`.
+2. No painel ShardCloud, envie o arquivo `.zip` como uma aplicacao Node.js.
+3. Apos o deploy, a ShardCloud mostrara o subdominio HTTPS do app.
+4. Use no cliente o endereco mostrado, como `https://SEU_SUBDOMINIO.shardweb.app`.
+5. Todos entram usando esse endereco e o mesmo codigo de sala.
 
-Se quiser escolher o seu próprio subdomínio antes do upload, acrescente ao arquivo `.shardcloud` uma linha como `SUBDOMAIN=voiceupgoatgank` (somente letras e números).
+Se quiser escolher seu proprio subdominio antes do upload, acrescente ao arquivo `.shardcloud` uma linha como `SUBDOMAIN=voiceupgoatgank` (somente letras e numeros).
 
 ## Recursos
 
-512 MB são configurados no arquivo `.shardcloud`; 1 GB é mais que suficiente para esta função. A ShardCloud instala as dependências definidas em `package.json`.
+512 MB sao configurados no arquivo `.shardcloud`; 1 GB e mais que suficiente para esta funcao. A ShardCloud instala as dependencias definidas em `package.json`.
 
 ## Limite importante
 
-O servidor cloud elimina Radmin para entrar na sala, mas a mídia ainda é P2P. Redes muito restritas podem precisar de um servidor TURN no futuro.
+O servidor Cloud elimina Radmin para entrar na sala, mas a midia ainda e P2P. Redes muito restritas podem precisar de um servidor TURN no futuro.
+
+## Music Bot
+
+O plugin Music Bot com audio dentro da chamada funciona no VoiceUP Server Host para Windows; o Cloud precisaria de um processo de bot adicional.

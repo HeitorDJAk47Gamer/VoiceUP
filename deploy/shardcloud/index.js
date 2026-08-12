@@ -17,8 +17,7 @@ const peersIn = (key) => [...(io.sockets.adapter.rooms.get(key) || [])].map((id)
 const broadcastPresence = (serverRoom, excludedId) => io.to(serverRoom).emit('room-presence', { members: peersIn(serverRoom).filter((peer) => peer.id !== excludedId) });
 const musicFolder = path.join(__dirname, 'music'); fs.mkdirSync(musicFolder, { recursive: true });
 const musicFiles = () => fs.readdirSync(musicFolder).filter((name) => /\.(mp3|ogg|wav|m4a|aac)$/i.test(name)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
-app.use('/music', express.static(musicFolder, { fallthrough: false, index: false }));
-const plugins = loadPlugins({ directories: [path.join(__dirname, 'plugins')], addLog: addPluginLog, emitSystemMessage: ({ room, textChannel, text, name, color, pluginId }) => { if (room && text) io.to(serverKey(room)).emit('text-message', { from: `plugin:${pluginId || 'server'}`, text, textChannel, name, color, pluginId }); }, emitPluginEvent: ({ room, event, payload, pluginId }) => { if (room && event) io.to(serverKey(room)).emit('plugin-event', { event, payload, pluginId }); }, media: { list: musicFiles, url: (name) => musicFiles().includes(name) ? `/music/${encodeURIComponent(name)}` : '' } });
+const plugins = loadPlugins({ directories: [path.join(__dirname, 'plugins')], addLog: addPluginLog, emitSystemMessage: ({ room, textChannel, text, name, color, pluginId }) => { if (room && text) io.to(serverKey(room)).emit('text-message', { from: `plugin:${pluginId || 'server'}`, text, textChannel, name, color, pluginId }); }, emitPluginEvent: () => {}, media: { list: () => [], url: () => '' } });
 app.get('/', (_request, response) => response.sendFile(path.join(__dirname, 'site.html')));
 app.get('/health', (_request, response) => response.json({ ok: true, service: 'VoiceUP Server Cloud', maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, plugins: plugins.list(), pluginErrors: plugins.errors(), pluginLogs, musicFiles: musicFiles() }));
 io.on('connection', (socket) => {

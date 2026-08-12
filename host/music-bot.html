@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<title>VoiceUP Music Bot</title>
+<script>
+let socket, audioContext, destination, source;
+let activeRoom = '', activeChannel = '';
+const peers = new Map();
+const serverUrl = 'http://127.0.0.1:3000';
+const loadSocket = () => new Promise((resolve, reject) => {
+  const script = document.createElement('script'); script.src = `${serverUrl}/socket.io/socket.io.js`;
+  script.onload = () => window.io ? resolve(window.io) : reject(new Error('Socket.IO indisponivel'));
+  script.onerror = () => reject(new Error('Socket.IO local indisponivel')); document.head.append(script);
+});
+const closePeers = () => { peers.forEach(({ pc }) => pc.close()); peers.clear(); };
+function makePeer(id, name, initiator) {
+  if (peers.has(id)) return peers.get(id);
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] });
+  const peer = { id, name, pc, pending: [] }; peers.set(id, peer);
+  const audioTrack = destination?.stream.getAudioTracks()[0]; if (audioTrack) pc.addTrack(audioTrack, destination.stream);
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.onicecandidate = ({ candidate }) => { if (candidate) socket?.emit('signal', { target: id, data: { candidate: candidate.toJSON() } }); };
+  pc.ondatachannel = ({ channel }) => { channel.onopen = () => channel.send(JSON.stringify({ type: 'intro', name: 'Music Bot', color: '#47a7f5', avatar: '' })); };
+  if (initiator) {
+    const channel = pc.createDataChannel('voiceup-chat');
+    channel.onopen = () => channel.send(JSON.stringify({ type: 'intro', name: 'Music Bot', color: '#47a7f5', avatar: '' }));
+    pc.createOffer().then((offer) => pc.setLocalDescription(offer)).then(() => socket.emit('signal', { target: id, data: { description: pc.localDescription } })).catch(() => {});
+  }
+  return peer;
+}
+async function receiveSignal({ from, name, data }) {
+  const peer = makePeer(from, name, false);
+  if (data.description) {
+    await peer.pc.setRemoteDescription(data.description);
+    for (const candidate of peer.pending.splice(0)) await peer.pc.addIceCandidate(candidate);
+    if (data.description.type === 'offer') { await peer.pc.setLocalDescription(await peer.pc.createAnswer()); socket.emit('signal', { target: from, data: { description: peer.pc.localDescription } }); }
+  }
+  if (data.candidate) { if (peer.pc.remoteDescription) await peer.pc.addIceCandidate(data.candidate); else peer.pending.push(data.candidate); }
+}
+async function join(room, voiceChannel) {
+  if (socket && activeRoom === room && activeChannel === voiceChannel) return;
+  socket?.disconnect(); closePeers(); await loadSocket(); socket = window.io(serverUrl, { transports: ['websocket', 'polling'] }); activeRoom = room; activeChannel = voiceChannel;
+  socket.on('connect', () => socket.emit('join-room', { roomId: room, voiceChannel, name: 'Music Bot', color: '#47a7f5', avatar: '', bot: true }));
+  socket.on('room-joined', ({ peers: items }) => items.forEach((item) => makePeer(item.id, item.name, true)));
+  socket.on('peer-joined', (item) => makePeer(item.id, item.name, false));
+  socket.on('peer-left', ({ id }) => { peers.get(id)?.pc.close(); peers.delete(id); });
+  socket.on('signal', (data) => receiveSignal(data).catch(() => {}));
+}
+async function play(command) {
+  if (!audioContext) { audioContext = new AudioContext(); destination = audioContext.createMediaStreamDestination(); }
+  await audioContext.resume().catch(() => {}); await join(command.room, command.voiceChannel || 'Geral');
+  const bytes = await window.voiceupMusicBot.readTrack(command.fileName);
+  const buffer = await audioContext.decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  source?.stop(); source = audioContext.createBufferSource(); source.buffer = buffer; source.connect(destination); source.start(); source.onended = () => { source = null; };
+}
+window.voiceupMusicBot.onCommand((command) => { if (command.action === 'stop') { source?.stop(); source = null; return; } if (command.action === 'play') play(command).catch(() => {}); });
+window.voiceupMusicBot.ready();
+</script>
+</html>
