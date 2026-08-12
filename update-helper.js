@@ -5,7 +5,7 @@ const https = require('https');
 
 const OWNER = 'HeitorDJAk47Gamer';
 const REPOSITORY = 'VoiceUP';
-const RELEASE_API = `https://api.github.com/repos/${OWNER}/${REPOSITORY}/releases/latest`;
+const RELEASE_LATEST = `https://github.com/${OWNER}/${REPOSITORY}/releases/latest`;
 
 function versionParts(value) {
   return String(value || '').replace(/^v/i, '').split('.').map((part) => Number.parseInt(part, 10) || 0);
@@ -22,19 +22,23 @@ function isNewer(candidate, installed) {
   return false;
 }
 
-function requestJson(url) {
+function latestReleaseVersion() {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'VoiceUP-Desktop-Updater', Accept: 'application/vnd.github+json' } }, (response) => {
-      let body = '';
-      response.setEncoding('utf8');
-      response.on('data', (chunk) => { body += chunk; });
-      response.on('end', () => {
-        if (response.statusCode === 404) return reject(new Error('Ainda nao existe uma atualizacao publicada no GitHub. Tente novamente depois.'));
-        if (response.statusCode !== 200) return reject(new Error(`GitHub respondeu ${response.statusCode}.`));
-        try { resolve(JSON.parse(body)); } catch { reject(new Error('Resposta de atualizacao invalida.')); }
-      });
+    https.get(RELEASE_LATEST, { headers: { 'User-Agent': 'VoiceUP-Desktop-Updater', Accept: 'text/html' } }, (response) => {
+      const target = String(response.headers.location || '');
+      response.resume();
+      const match = target.match(/\/releases\/tag\/v?([0-9]+(?:\.[0-9]+)*)/i);
+      if (response.statusCode >= 300 && response.statusCode < 400 && match) return resolve(match[1]);
+      if (response.statusCode === 404) return reject(new Error('Ainda nao existe uma atualizacao publicada no GitHub. Tente novamente depois.'));
+      return reject(new Error('Nao foi possivel descobrir a ultima Release publica. Tente novamente em instantes.'));
     }).on('error', reject);
   });
+}
+
+function assetFor(assetPrefix, version) {
+  const baseName = String(assetPrefix || '').trim().replace(/\s+/g, '.');
+  const assetName = `${baseName}.${version}.exe`;
+  return { assetName, url: `https://github.com/${OWNER}/${REPOSITORY}/releases/download/v${version}/${assetName}` };
 }
 
 function download(url, destination, redirects = 0) {
@@ -58,16 +62,14 @@ function download(url, destination, redirects = 0) {
 
 function registerUpdateHandlers(ipcMain, assetPrefix) {
   async function check() {
-    const release = await requestJson(RELEASE_API);
-    const version = String(release.tag_name || '').replace(/^v/i, '');
-    const asset = (release.assets || []).find((item) => item.name.replace(/[._-]+/g, ' ').startsWith(assetPrefix) && item.name.toLowerCase().endsWith('.exe'));
-    if (!version || !asset) throw new Error('A release publicada nao possui o instalador esperado.');
+    const version = await latestReleaseVersion();
+    const asset = assetFor(assetPrefix, version);
     return {
       installedVersion: app.getVersion(),
       version,
       available: isNewer(version, app.getVersion()),
-      notes: release.body || '',
-      assetName: asset.name
+      assetName: asset.assetName,
+      downloadUrl: asset.url
     };
   }
 
@@ -78,11 +80,9 @@ function registerUpdateHandlers(ipcMain, assetPrefix) {
 
   ipcMain.handle('update:download', async () => {
     try {
-      const release = await requestJson(RELEASE_API);
-      const asset = (release.assets || []).find((item) => item.name.replace(/[._-]+/g, ' ').startsWith(assetPrefix) && item.name.toLowerCase().endsWith('.exe'));
-      if (!asset) throw new Error('Instalador nao encontrado na release.');
-      const destination = path.join(app.getPath('temp'), asset.name);
-      await download(asset.browser_download_url, destination);
+      const update = await check();
+      const destination = path.join(app.getPath('temp'), update.assetName);
+      await download(update.downloadUrl, destination);
       const result = await shell.openPath(destination);
       if (result) throw new Error(result);
       return { ok: true };
