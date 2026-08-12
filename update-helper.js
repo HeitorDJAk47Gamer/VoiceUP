@@ -60,7 +60,7 @@ function registerUpdateHandlers(ipcMain, assetPrefix) {
   async function check() {
     const release = await requestJson(RELEASE_API);
     const version = String(release.tag_name || '').replace(/^v/i, '');
-    const asset = (release.assets || []).find((item) => item.name.startsWith(assetPrefix) && item.name.toLowerCase().endsWith('.exe'));
+    const asset = (release.assets || []).find((item) => item.name.replace(/[._-]+/g, ' ').startsWith(assetPrefix) && item.name.toLowerCase().endsWith('.exe'));
     if (!version || !asset) throw new Error('A release publicada nao possui o instalador esperado.');
     return {
       installedVersion: app.getVersion(),
@@ -79,7 +79,7 @@ function registerUpdateHandlers(ipcMain, assetPrefix) {
   ipcMain.handle('update:download', async () => {
     try {
       const release = await requestJson(RELEASE_API);
-      const asset = (release.assets || []).find((item) => item.name.startsWith(assetPrefix) && item.name.toLowerCase().endsWith('.exe'));
+      const asset = (release.assets || []).find((item) => item.name.replace(/[._-]+/g, ' ').startsWith(assetPrefix) && item.name.toLowerCase().endsWith('.exe'));
       if (!asset) throw new Error('Instalador nao encontrado na release.');
       const destination = path.join(app.getPath('temp'), asset.name);
       await download(asset.browser_download_url, destination);
