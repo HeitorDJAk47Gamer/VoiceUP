@@ -25,12 +25,12 @@ jobs:
         run: npm ci
 
       - name: Gerar instalador do cliente
-        run: npm run dist
+        run: npm run dist -- --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Gerar instalador do Server Host
-        run: npm run dist:server
+        run: npm run dist:server -- --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
