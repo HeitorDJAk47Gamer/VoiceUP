@@ -15,7 +15,7 @@ const addPluginLog = (level, message) => { pluginLogs.unshift({ level, message, 
 const peersIn = (key) => [...(io.sockets.adapter.rooms.get(key) || [])].map((id) => { const peer = io.sockets.sockets.get(id)?.data || {}; return { id, name: peer.name || 'Visitante', color: peer.color || colors[0], avatar: peer.avatar || '', voiceChannel: peer.voiceChannel || 'Geral' }; });
 const broadcastPresence = (serverRoom, excludedId) => io.to(serverRoom).emit('room-presence', { members: peersIn(serverRoom).filter((peer) => peer.id !== excludedId) });
 const plugins = loadPlugins({ directories: [path.join(__dirname, 'plugins')], addLog: addPluginLog, emitSystemMessage: ({ room, textChannel, text, name, color, pluginId }) => { if (room && text) io.to(serverKey(room)).emit('text-message', { from: `plugin:${pluginId || 'server'}`, text, textChannel, name, color, pluginId }); } });
-app.get('/', (_request, response) => response.json({ ok: true, service: 'VoiceUP Server Cloud', mode: 'signaling', maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, plugins: plugins.list() }));
+app.get('/', (_request, response) => response.sendFile(path.join(__dirname, 'site.html')));
 app.get('/health', (_request, response) => response.json({ ok: true, service: 'VoiceUP Server Cloud', maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, plugins: plugins.list(), pluginErrors: plugins.errors(), pluginLogs }));
 io.on('connection', (socket) => {
   socket.on('join-room', ({ roomId, voiceChannel, name, color, avatar }) => {
