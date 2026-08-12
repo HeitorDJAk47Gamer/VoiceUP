@@ -3,6 +3,7 @@ const path = require('path');
 const { registerUpdateHandlers } = require('./update-helper');
 
 let mainWindow;
+let selectedCapture = { id: '', includeAudio: false };
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -27,8 +28,9 @@ async function createWindow() {
   mainWindow.webContents.session.setPermissionCheckHandler((_webContents, permission) => permission === 'media' || permission === 'display-capture');
   mainWindow.webContents.session.setDisplayMediaRequestHandler(async (_request, callback) => {
     try {
-      const sources = await desktopCapturer.getSources({ types: ['screen'] });
-      callback(sources[0] ? { video: sources[0] } : {});
+      const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: true });
+      const source = sources.find((item) => item.id === selectedCapture.id) || sources[0];
+      callback(source ? { video: source, ...(selectedCapture.includeAudio ? { audio: 'loopback' } : {}) } : {});
     } catch {
       callback({});
     }
@@ -41,6 +43,12 @@ async function createWindow() {
 }
 
 registerUpdateHandlers(ipcMain, 'VoiceUP Setup ');
+ipcMain.handle('capture:sources', async () => {
+  const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: true });
+  return sources.map((source) => ({ id: source.id, name: source.name, kind: source.id.startsWith('screen:') ? 'screen' : 'window' }));
+});
+ipcMain.handle('capture:select', (_event, selection = {}) => { selectedCapture = { id: String(selection.id || ''), includeAudio: Boolean(selection.includeAudio) }; return true; });
+ipcMain.handle('window:set-video-fullscreen', (_event, enabled) => { mainWindow?.setFullScreen(Boolean(enabled)); return Boolean(enabled); });
 app.whenReady().then(createWindow);
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
