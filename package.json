@@ -1,0 +1,60 @@
+{
+  "name": "voiceup",
+  "version": "1.0.9",
+  "private": true,
+  "author": "Goat Gank",
+  "description": "Comunicação P2P simples por voz e texto",
+  "main": "electron-main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "dist": "electron-builder --win nsis",
+    "dist:server": "electron-builder --win nsis --config.appId=com.goatgank.voiceup.server --config.extraMetadata.main=server-host-main.js --config.productName=VoiceUPServer --config.directories.output=release-server"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.voiceup.app",
+    "productName": "VoiceUP",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron-main.js",
+      "client-preload.js",
+      "update-helper.js",
+      "server-host-main.js",
+      "host-preload.js",
+      "signaling-server.js",
+      "assets/**/*",
+      "host/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/voiceup-icon.ico",
+      "executableName": "VoiceUP"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "VoiceUP",
+      "uninstallDisplayName": "VoiceUP — Goat Gank",
+      "installerHeader": "build/installerHeader.bmp",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/uninstallerSidebar.bmp",
+      "installerIcon": "build/installerIcon.ico",
+      "uninstallerIcon": "build/uninstallerIcon.ico",
+      "include": "build/installer.nsh"
+    }
+  }
+}

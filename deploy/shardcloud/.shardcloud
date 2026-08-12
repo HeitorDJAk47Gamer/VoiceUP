@@ -1,0 +1,6 @@
+DISPLAY_NAME=VoiceUP Server Cloud
+DESCRIPTION=Servidor de sinalização para salas VoiceUP
+MAIN=index.js
+LANGUAGE=node
+MEMORY=512
+VERSION=recommended
