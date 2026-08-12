@@ -15,11 +15,12 @@ window.addEventListener('DOMContentLoaded', () => {
   root.querySelector('.grid')?.before(section);
   const pluginSection = document.createElement('section');
   pluginSection.className = 'section';
-  pluginSection.innerHTML = '<h2>Plugins do servidor (beta)</h2><div id="plugin-list" class="note">Carregando plugins...</div><div id="plugin-folder" class="url" style="margin-top:10px"></div><p class="note">Adicione ou remova arquivos .js nesta pasta e reinicie o Server Host. Instale somente plugins confiáveis.</p>';
+  pluginSection.innerHTML = '<h2>Plugins e músicas do servidor (beta)</h2><div id="plugin-list" class="note">Carregando plugins...</div><div id="plugin-folder" class="url" style="margin-top:10px"></div><div id="music-folder" class="url" style="margin-top:8px"></div><p class="note">Adicione arquivos .js em plugins e MP3/OGG/WAV/M4A/AAC em music. Reinicie o Server Host após alterar arquivos. Instale somente plugins confiáveis.</p>';
   root.querySelector('.section:last-child')?.before(pluginSection);
   const pluginList = pluginSection.querySelector('#plugin-list');
   const pluginFolder = pluginSection.querySelector('#plugin-folder');
-  ipcRenderer.invoke('server-info').then((info) => { pluginFolder.textContent = info.pluginFolder || 'Pasta de plugins indisponível'; });
+  const musicFolder = pluginSection.querySelector('#music-folder');
+  ipcRenderer.invoke('server-info').then((info) => { pluginFolder.textContent = `Plugins: ${info.pluginFolder || 'indisponível'}`; musicFolder.textContent = `Músicas: ${info.musicFolder || 'indisponível'}`; });
   const renderPlugins = (stats) => {
     const plugins = stats.plugins || [];
     pluginList.innerHTML = plugins.length ? plugins.map((plugin) => `<div style="margin:7px 0"><b style="color:#56e2cf">${plugin.name}</b> <span style="color:#99a6bc">${plugin.version}</span><br><span>${plugin.description || plugin.id}</span></div>`).join('') : 'Nenhum plugin carregado.';

@@ -2,6 +2,7 @@ const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
 const path = require('path');
+const fs = require('fs');
 const { loadPlugins } = require('./plugin-runtime');
 
 const AVATAR_COLORS = ['#56e2cf', '#ff8b72', '#6676ea', '#a879ff', '#e8b65a', '#47a7f5', '#ec6fa8'];
@@ -20,6 +21,10 @@ function startSignalingServer(port = 3000, options = {}) {
   const addLog = (level, message) => { logs.unshift({ time: new Date().toLocaleTimeString('pt-BR'), level, message }); if (logs.length > 80) logs.pop(); };
   const peersIn = (key) => [...(io.sockets.adapter.rooms.get(key) || [])].filter((id) => id !== undefined).map((id) => { const peer = io.sockets.sockets.get(id)?.data || {}; return { id, name: peer.name || 'Visitante', color: peer.color || AVATAR_COLORS[0], avatar: peer.avatar || '', voiceChannel: peer.voiceChannel || 'Geral' }; });
   const broadcastPresence = (serverRoom, excludedId) => io.to(serverRoom).emit('room-presence', { members: peersIn(serverRoom).filter((peer) => peer.id !== excludedId) });
+  const musicFolder = options.musicDirectory || path.join(__dirname, 'music');
+  fs.mkdirSync(musicFolder, { recursive: true });
+  const musicFiles = () => fs.readdirSync(musicFolder).filter((name) => /\.(mp3|ogg|wav|m4a|aac)$/i.test(name)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  app.use('/music', express.static(musicFolder, { fallthrough: false, index: false }));
   const plugins = loadPlugins({
     directories: options.pluginDirectories || [path.join(__dirname, 'plugins')],
     addLog,
@@ -27,10 +32,12 @@ function startSignalingServer(port = 3000, options = {}) {
       if (!room || !text) return;
       events.messages += 1;
       io.to(serverKey(room)).emit('text-message', { from: `plugin:${pluginId || 'server'}`, text, textChannel, name, color, pluginId });
-    }
+    },
+    emitPluginEvent: ({ room, event, payload, pluginId }) => { if (room && event) io.to(serverKey(room)).emit('plugin-event', { event, payload, pluginId }); },
+    media: { list: musicFiles, url: (name) => musicFiles().includes(name) ? `/music/${encodeURIComponent(name)}` : '' }
   });
 
-  app.get('/health', (_req, res) => res.json({ ok: true, app: 'VoiceUp Server', maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, plugins: plugins.list().map(({ id, version }) => ({ id, version })) }));
+  app.get('/health', (_req, res) => res.json({ ok: true, app: 'VoiceUp Server', maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, plugins: plugins.list().map(({ id, version }) => ({ id, version })), musicFiles: musicFiles() }));
   io.on('connection', (socket) => {
     events.connections += 1; addLog('info', 'Novo cliente conectado');
     socket.on('join-room', ({ roomId, voiceChannel, name, color, avatar }) => {

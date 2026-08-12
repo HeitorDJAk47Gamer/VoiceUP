@@ -15,5 +15,5 @@ Use `api.systemMessage(room, textChannel, texto, opcoes)` para publicar uma mens
 ## Exemplos inclusos
 
 - `dados.js`: responda com `d20`, `2d6+3` ou `4d8 - 1`.
-- `musica.js`: `!music help`, `!music play <link>`, `!music queue`, `!music skip`. A beta controla a fila; ela ainda não transmite áudio de YouTube/arquivo para a chamada.
+- `musica.js`: coloque arquivos MP3/OGG/WAV/M4A/AAC na pasta `music` do servidor. Use `!music list`, `!music play <nome>`, `!music queue`, `!music skip` e `!music stop`. Os Clientes na sala baixam e tocam o arquivo diretamente do Host/Cloud.
 - `xp-chat.js`: ganha XP ao conversar e mostra o status com `!xp`. Dados em memória, reiniciam junto do servidor.

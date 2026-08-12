@@ -12,18 +12,25 @@ let isQuitting = false;
 let lastCpu = process.cpuUsage();
 let lastCpuAt = process.hrtime.bigint();
 let pluginFolder = '';
+let musicFolder = '';
 function addresses() {
   return Object.values(os.networkInterfaces()).flat().filter((item) => item && item.family === 'IPv4' && !item.internal).map((item) => `http://${item.address}:3000`);
 }
 async function openWindow() {
   pluginFolder = path.join(app.getPath('userData'), 'plugins');
+  musicFolder = path.join(app.getPath('userData'), 'music');
   fs.mkdirSync(pluginFolder, { recursive: true });
+  fs.mkdirSync(musicFolder, { recursive: true });
   const bundledPluginFolder = path.join(__dirname, 'plugins');
   if (fs.existsSync(bundledPluginFolder)) for (const file of fs.readdirSync(bundledPluginFolder).filter((name) => name.endsWith('.js'))) {
     const destination = path.join(pluginFolder, file);
-    if (!fs.existsSync(destination)) fs.copyFileSync(path.join(bundledPluginFolder, file), destination);
+    const oldMusicPlugin = file === 'musica.js' && fs.existsSync(destination) && fs.readFileSync(destination, 'utf8').includes('isYouTube');
+    if (!fs.existsSync(destination) || oldMusicPlugin) fs.copyFileSync(path.join(bundledPluginFolder, file), destination);
   }
-  signaling = await startSignalingServer(3000, { pluginDirectories: [pluginFolder, bundledPluginFolder] });
+  const bundledMusicReadme = path.join(__dirname, 'music', 'README.md');
+  const musicReadme = path.join(musicFolder, 'README.md');
+  if (fs.existsSync(bundledMusicReadme) && !fs.existsSync(musicReadme)) fs.copyFileSync(bundledMusicReadme, musicReadme);
+  signaling = await startSignalingServer(3000, { pluginDirectories: [pluginFolder, bundledPluginFolder], musicDirectory: musicFolder });
   mainWindow = new BrowserWindow({ width: 920, height: 760, minWidth: 650, minHeight: 560, title: 'VoiceUp Server', icon: path.join(__dirname, 'assets', 'voiceup-icon.ico'), backgroundColor: '#101522', autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'host-preload.js'), contextIsolation: true, nodeIntegration: false } });
   mainWindow.on('close', (event) => {
     if (isQuitting) return;
@@ -54,7 +61,7 @@ ipcMain.handle('server-info', () => {
   const urls = addresses();
   const host = urls[0] || 'http://localhost:3000';
   const connectionCode = `VU1:${Buffer.from(JSON.stringify({ host })).toString('base64')}`;
-  return { port: 3000, urls, connectionCode, pluginFolder };
+  return { port: 3000, urls, connectionCode, pluginFolder, musicFolder };
 });
 ipcMain.handle('server-stats', () => {
   const now = process.hrtime.bigint();

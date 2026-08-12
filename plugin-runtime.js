@@ -3,7 +3,7 @@ const path = require('path');
 
 const safeText = (value, max = 500) => String(value || '').replace(/[\r\n]+/g, ' ').trim().slice(0, max);
 
-function loadPlugins({ directories = [], addLog = () => {}, emitSystemMessage }) {
+function loadPlugins({ directories = [], addLog = () => {}, emitSystemMessage, emitPluginEvent = () => {}, media = {} }) {
   const loaded = [];
   const seenIds = new Set();
   const errors = [];
@@ -16,6 +16,8 @@ function loadPlugins({ directories = [], addLog = () => {}, emitSystemMessage })
       color: options.color || '#a879ff',
       pluginId: options.pluginId || ''
     }),
+    broadcast: (room, event, payload = {}) => emitPluginEvent({ room, event: safeText(event, 48), payload, pluginId: payload.pluginId || '' }),
+    media: { list: () => (typeof media.list === 'function' ? media.list() : []), url: (name) => (typeof media.url === 'function' ? media.url(name) : '') },
     log: (pluginId, message) => addLog('plugin', `[${pluginId}] ${safeText(message, 180)}`)
   };
 

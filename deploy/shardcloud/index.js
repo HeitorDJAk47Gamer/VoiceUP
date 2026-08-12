@@ -2,6 +2,7 @@ const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
 const path = require('path');
+const fs = require('fs');
 const { loadPlugins } = require('./plugin-runtime');
 const port = Number(process.env.PORT || process.env.SERVER_PORT || 80);
 const MAX_VOICE_CHANNEL_SIZE = 6;
@@ -14,9 +15,12 @@ const pluginLogs = [];
 const addPluginLog = (level, message) => { pluginLogs.unshift({ level, message, time: new Date().toISOString() }); if (pluginLogs.length > 40) pluginLogs.pop(); };
 const peersIn = (key) => [...(io.sockets.adapter.rooms.get(key) || [])].map((id) => { const peer = io.sockets.sockets.get(id)?.data || {}; return { id, name: peer.name || 'Visitante', color: peer.color || colors[0], avatar: peer.avatar || '', voiceChannel: peer.voiceChannel || 'Geral' }; });
 const broadcastPresence = (serverRoom, excludedId) => io.to(serverRoom).emit('room-presence', { members: peersIn(serverRoom).filter((peer) => peer.id !== excludedId) });
-const plugins = loadPlugins({ directories: [path.join(__dirname, 'plugins')], addLog: addPluginLog, emitSystemMessage: ({ room, textChannel, text, name, color, pluginId }) => { if (room && text) io.to(serverKey(room)).emit('text-message', { from: `plugin:${pluginId || 'server'}`, text, textChannel, name, color, pluginId }); } });
+const musicFolder = path.join(__dirname, 'music'); fs.mkdirSync(musicFolder, { recursive: true });
+const musicFiles = () => fs.readdirSync(musicFolder).filter((name) => /\.(mp3|ogg|wav|m4a|aac)$/i.test(name)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+app.use('/music', express.static(musicFolder, { fallthrough: false, index: false }));
+const plugins = loadPlugins({ directories: [path.join(__dirname, 'plugins')], addLog: addPluginLog, emitSystemMessage: ({ room, textChannel, text, name, color, pluginId }) => { if (room && text) io.to(serverKey(room)).emit('text-message', { from: `plugin:${pluginId || 'server'}`, text, textChannel, name, color, pluginId }); }, emitPluginEvent: ({ room, event, payload, pluginId }) => { if (room && event) io.to(serverKey(room)).emit('plugin-event', { event, payload, pluginId }); }, media: { list: musicFiles, url: (name) => musicFiles().includes(name) ? `/music/${encodeURIComponent(name)}` : '' } });
 app.get('/', (_request, response) => response.sendFile(path.join(__dirname, 'site.html')));
-app.get('/health', (_request, response) => response.json({ ok: true, service: 'VoiceUP Server Cloud', maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, plugins: plugins.list(), pluginErrors: plugins.errors(), pluginLogs }));
+app.get('/health', (_request, response) => response.json({ ok: true, service: 'VoiceUP Server Cloud', maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, plugins: plugins.list(), pluginErrors: plugins.errors(), pluginLogs, musicFiles: musicFiles() }));
 io.on('connection', (socket) => {
   socket.on('join-room', ({ roomId, voiceChannel, name, color, avatar }) => {
     const room = String(roomId || '').trim().slice(0, 48); const channel = safeChannel(voiceChannel, 'Geral'); if (!room) return socket.emit('app-error', 'Informe um código de sala.');
