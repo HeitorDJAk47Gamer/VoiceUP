@@ -16,7 +16,8 @@ function startSignalingServer(port = 3000) {
   const events = { connections: 0, signals: 0, joins: 0, messages: 0 };
   const logs = [];
   const addLog = (level, message) => { logs.unshift({ time: new Date().toLocaleTimeString('pt-BR'), level, message }); if (logs.length > 80) logs.pop(); };
-  const peersIn = (key) => [...(io.sockets.adapter.rooms.get(key) || [])].filter((id) => id !== undefined).map((id) => { const peer = io.sockets.sockets.get(id)?.data || {}; return { id, name: peer.name || 'Visitante', color: peer.color || AVATAR_COLORS[0], avatar: peer.avatar || '' }; });
+  const peersIn = (key) => [...(io.sockets.adapter.rooms.get(key) || [])].filter((id) => id !== undefined).map((id) => { const peer = io.sockets.sockets.get(id)?.data || {}; return { id, name: peer.name || 'Visitante', color: peer.color || AVATAR_COLORS[0], avatar: peer.avatar || '', voiceChannel: peer.voiceChannel || 'Geral' }; });
+  const broadcastPresence = (serverRoom, excludedId) => io.to(serverRoom).emit('room-presence', { members: peersIn(serverRoom).filter((peer) => peer.id !== excludedId) });
 
   app.get('/health', (_req, res) => res.json({ ok: true, app: 'VoiceUp Server', maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE }));
   io.on('connection', (socket) => {
@@ -38,6 +39,7 @@ function startSignalingServer(port = 3000) {
       const peers = peersIn(voiceRoom).filter((peer) => peer.id !== socket.id);
       socket.emit('room-joined', { roomId: room, voiceChannel: voiceChannelName, peers });
       socket.to(voiceRoom).emit('peer-joined', { id: socket.id, name: safeName, color: safeColor, avatar: safeAvatar });
+      broadcastPresence(serverRoom);
     });
     socket.on('switch-voice-channel', ({ voiceChannel }) => {
       if (!socket.data.room) return;
@@ -49,6 +51,7 @@ function startSignalingServer(port = 3000) {
       const peers = peersIn(nextVoiceRoom).filter((peer) => peer.id !== socket.id);
       socket.emit('room-joined', { roomId: socket.data.room, voiceChannel: channel, peers });
       socket.to(nextVoiceRoom).emit('peer-joined', { id: socket.id, name: socket.data.name, color: socket.data.color, avatar: socket.data.avatar });
+      broadcastPresence(socket.data.serverRoom);
       addLog('channel', `${socket.data.name} mudou para ${channel}`);
     });
     socket.on('text-message', ({ text, textChannel }) => {
@@ -60,7 +63,7 @@ function startSignalingServer(port = 3000) {
     socket.on('signal', ({ target, data }) => { if (target) { events.signals += 1; io.to(target).emit('signal', { from: socket.id, name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0], avatar: socket.data.avatar || '', data }); } });
     socket.on('latency-ping', ({ sentAt }) => socket.emit('latency-pong', { sentAt }));
     socket.on('server-pong', ({ sentAt }) => { const ping = Date.now() - Number(sentAt); if (Number.isFinite(ping) && ping >= 0 && ping < 10000) socket.data.ping = ping; });
-    socket.on('disconnecting', () => { if (socket.data.voiceRoom) { addLog('leave', `${socket.data.name || 'Cliente'} saiu da sala`); socket.to(socket.data.voiceRoom).emit('peer-left', { id: socket.id, name: socket.data.name }); } });
+    socket.on('disconnecting', () => { if (socket.data.voiceRoom) { addLog('leave', `${socket.data.name || 'Cliente'} saiu da sala`); socket.to(socket.data.voiceRoom).emit('peer-left', { id: socket.id, name: socket.data.name }); } if (socket.data.serverRoom) broadcastPresence(socket.data.serverRoom, socket.id); });
   });
   const getStats = () => { const voiceRooms = [...io.sockets.adapter.rooms.entries()].filter(([key, value]) => key.startsWith('voice:') && value.size > 0); const pings = [...io.sockets.sockets.values()].map((socket) => socket.data.ping).filter(Number.isFinite); io.emit('server-ping', Date.now()); return { uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), participants: io.sockets.sockets.size, rooms: voiceRooms.length, averagePing: pings.length ? Math.round(pings.reduce((total, ping) => total + ping, 0) / pings.length) : null, events, logs }; };
   return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '0.0.0.0', () => { addLog('info', `Servidor iniciado na porta ${port}`); resolve({ server, io, port, getStats }); }); });
