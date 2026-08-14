@@ -3,6 +3,7 @@ release/
 release-server/
 release-server-v*/
 release-v*/
+releases/
 test-v*/
 *.blockmap
 *.log
