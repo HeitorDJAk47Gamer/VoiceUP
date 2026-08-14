@@ -73,8 +73,10 @@ foreach ($folder in @($stableFolders | Select-Object -Skip $StableKeep)) {
 
 # Test builds keep their own three-version window.
 $betaFolders = Get-ChildItem -LiteralPath $projectRoot -Directory -Filter 'test-v*-beta.*' |
-  Where-Object { $_.Name -match '-beta\.(\d+)$' } |
-  Sort-Object { [int]([regex]::Match($_.Name, '-beta\.(\d+)$').Groups[1].Value) } -Descending
+  Where-Object { $_.Name -match '^test-v(\d+\.\d+\.\d+)-beta\.(\d+)$' } |
+  Sort-Object `
+    @{ Expression = { [Version]([regex]::Match($_.Name, '^test-v(\d+\.\d+\.\d+)-beta\.').Groups[1].Value) }; Descending = $true }, `
+    @{ Expression = { [int]([regex]::Match($_.Name, '-beta\.(\d+)$').Groups[1].Value) }; Descending = $true }
 
 foreach ($folder in @($betaFolders | Select-Object -Skip $BetaKeep)) {
   if ($folder.FullName.StartsWith($projectRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -84,8 +86,8 @@ foreach ($folder in @($betaFolders | Select-Object -Skip $BetaKeep)) {
 
 # electron-builder reuses these output directories. Retain only the installers
 # belonging to the same latest beta versions preserved above.
-$keptBetaNumbers = @($betaFolders | Select-Object -First $BetaKeep | ForEach-Object {
-  [regex]::Match($_.Name, '-beta\.(\d+)$').Groups[1].Value
+$keptBetaVersions = @($betaFolders | Select-Object -First $BetaKeep | ForEach-Object {
+  $_.Name.Substring('test-v'.Length)
 })
 
 foreach ($outputDirectory in @('release', 'release-server')) {
@@ -93,10 +95,10 @@ foreach ($outputDirectory in @('release', 'release-server')) {
   if (-not (Test-Path -LiteralPath $fullOutput)) { continue }
 
   Get-ChildItem -LiteralPath $fullOutput -File |
-    Where-Object { $_.Name -match '-beta\.(\d+)\.exe(?:\.blockmap)?$' } |
+    Where-Object { $_.Name -match '(\d+\.\d+\.\d+-beta\.\d+)\.exe(?:\.blockmap)?$' } |
     Where-Object {
-      $number = [regex]::Match($_.Name, '-beta\.(\d+)\.').Groups[1].Value
-      $keptBetaNumbers -notcontains $number
+      $betaVersion = [regex]::Match($_.Name, '(\d+\.\d+\.\d+-beta\.\d+)\.exe').Groups[1].Value
+      $keptBetaVersions -notcontains $betaVersion
     } |
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 }
@@ -104,10 +106,10 @@ foreach ($outputDirectory in @('release', 'release-server')) {
 $deployDirectory = Join-Path $projectRoot 'deploy'
 if (Test-Path -LiteralPath $deployDirectory) {
   Get-ChildItem -LiteralPath $deployDirectory -File |
-    Where-Object { $_.Name -match '-beta\.(\d+)\.zip$' } |
+    Where-Object { $_.Name -match '(\d+\.\d+\.\d+-beta\.\d+)\.zip$' } |
     Where-Object {
-      $number = [regex]::Match($_.Name, '-beta\.(\d+)\.zip$').Groups[1].Value
-      $keptBetaNumbers -notcontains $number
+      $betaVersion = [regex]::Match($_.Name, '(\d+\.\d+\.\d+-beta\.\d+)\.zip$').Groups[1].Value
+      $keptBetaVersions -notcontains $betaVersion
     } |
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 }
