@@ -5,6 +5,16 @@
 As versões públicas usam versionamento sem sufixo, por exemplo `1.1.0`.
 Localmente, são mantidas as três versões públicas mais recentes em `releases/`.
 
+O número da versão pública muda conforme o tamanho da atualização:
+
+- Correções, ajustes e poucas novidades: aumenta o último número. Exemplo:
+  `1.1.0` passa para `1.1.1`.
+- Atualização grande, com muitas novidades ou mudanças importantes: aumenta o
+  número do meio e reinicia o último. Exemplo: `1.1.1` passa para `1.2.0`.
+
+O tamanho da atualização deve ser avaliado pelo conjunto das mudanças desde a
+última versão pública, e não pela quantidade de versões beta criadas.
+
 ## Versões beta
 
 Toda beta usa exatamente a versão pública mais recente como base, seguida por
