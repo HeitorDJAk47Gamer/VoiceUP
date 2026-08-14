@@ -3,57 +3,77 @@
 <meta charset="utf-8">
 <title>VoiceUP Music Bot</title>
 <script>
-let socket, audioContext, destination, source;
-let activeRoom = '', activeChannel = '';
-const peers = new Map();
+const bots = new Map();
 const serverUrl = 'http://127.0.0.1:3000';
 const loadSocket = () => new Promise((resolve, reject) => {
+  if (window.io) return resolve(window.io);
   const script = document.createElement('script'); script.src = `${serverUrl}/socket.io/socket.io.js`;
   script.onload = () => window.io ? resolve(window.io) : reject(new Error('Socket.IO indisponivel'));
   script.onerror = () => reject(new Error('Socket.IO local indisponivel')); document.head.append(script);
 });
-const closePeers = () => { peers.forEach(({ pc }) => pc.close()); peers.clear(); };
-function makePeer(id, name, initiator) {
-  if (peers.has(id)) return peers.get(id);
+const botState = (botId = 1) => {
+  if (!bots.has(botId)) bots.set(botId, { botId, botName: `Music Bot ${botId}`, avatar: '', socket: null, audioContext: null, destination: null, source: null, gain: null, activeRoom: '', activeChannel: '', peers: new Map(), speakingTimer: null });
+  return bots.get(botId);
+};
+const closePeers = (state) => { state.peers.forEach(({ pc }) => pc.close()); state.peers.clear(); };
+function makePeer(state, id, name, initiator) {
+  if (state.peers.has(id)) return state.peers.get(id);
   const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] });
-  const peer = { id, name, pc, pending: [] }; peers.set(id, peer);
-  const audioTrack = destination?.stream.getAudioTracks()[0]; if (audioTrack) pc.addTrack(audioTrack, destination.stream);
+  const peer = { id, name, pc, pending: [], channel: null }; state.peers.set(id, peer);
+  const audioTrack = state.destination?.stream.getAudioTracks()[0]; if (audioTrack) pc.addTrack(audioTrack, state.destination.stream);
   pc.addTransceiver('video', { direction: 'recvonly' });
-  pc.onicecandidate = ({ candidate }) => { if (candidate) socket?.emit('signal', { target: id, data: { candidate: candidate.toJSON() } }); };
-  pc.ondatachannel = ({ channel }) => { channel.onopen = () => channel.send(JSON.stringify({ type: 'intro', name: 'Music Bot', color: '#47a7f5', avatar: '' })); };
+  pc.onicecandidate = ({ candidate }) => { if (candidate) state.socket?.emit('signal', { target: id, data: { candidate: candidate.toJSON() } }); };
+  const intro = (channel) => { peer.channel = channel; channel.onopen = () => { channel.send(JSON.stringify({ type: 'intro', name: state.botName, color: '#47a7f5', avatar: state.avatar })); if (state.source) channel.send(JSON.stringify({ type: 'voice-state', description: true })); }; };
+  pc.ondatachannel = ({ channel }) => intro(channel);
   if (initiator) {
-    const channel = pc.createDataChannel('voiceup-chat');
-    channel.onopen = () => channel.send(JSON.stringify({ type: 'intro', name: 'Music Bot', color: '#47a7f5', avatar: '' }));
-    pc.createOffer().then((offer) => pc.setLocalDescription(offer)).then(() => socket.emit('signal', { target: id, data: { description: pc.localDescription } })).catch(() => {});
+    const channel = pc.createDataChannel('voiceup-chat'); intro(channel);
+    pc.createOffer().then((offer) => pc.setLocalDescription(offer)).then(() => state.socket.emit('signal', { target: id, data: { description: pc.localDescription } })).catch(() => {});
   }
   return peer;
 }
-async function receiveSignal({ from, name, data }) {
-  const peer = makePeer(from, name, false);
+async function receiveSignal(state, { from, name, data }) {
+  const peer = makePeer(state, from, name, false);
   if (data.description) {
     await peer.pc.setRemoteDescription(data.description);
     for (const candidate of peer.pending.splice(0)) await peer.pc.addIceCandidate(candidate);
-    if (data.description.type === 'offer') { await peer.pc.setLocalDescription(await peer.pc.createAnswer()); socket.emit('signal', { target: from, data: { description: peer.pc.localDescription } }); }
+    if (data.description.type === 'offer') { await peer.pc.setLocalDescription(await peer.pc.createAnswer()); state.socket.emit('signal', { target: from, data: { description: peer.pc.localDescription } }); }
   }
   if (data.candidate) { if (peer.pc.remoteDescription) await peer.pc.addIceCandidate(data.candidate); else peer.pending.push(data.candidate); }
 }
-async function join(room, voiceChannel) {
-  if (socket && activeRoom === room && activeChannel === voiceChannel) return;
-  socket?.disconnect(); closePeers(); await loadSocket(); socket = window.io(serverUrl, { transports: ['websocket', 'polling'] }); activeRoom = room; activeChannel = voiceChannel;
-  socket.on('connect', () => socket.emit('join-room', { roomId: room, voiceChannel, name: 'Music Bot', color: '#47a7f5', avatar: '', bot: true }));
-  socket.on('room-joined', ({ peers: items }) => items.forEach((item) => makePeer(item.id, item.name, true)));
-  socket.on('peer-joined', (item) => makePeer(item.id, item.name, false));
-  socket.on('peer-left', ({ id }) => { peers.get(id)?.pc.close(); peers.delete(id); });
-  socket.on('signal', (data) => receiveSignal(data).catch(() => {}));
+async function join(state, room, voiceChannel) {
+  if (state.socket && state.activeRoom === room && state.activeChannel === voiceChannel) return;
+  state.socket?.disconnect(); closePeers(state); await loadSocket(); state.socket = window.io(serverUrl, { transports: ['websocket', 'polling'] }); state.activeRoom = room; state.activeChannel = voiceChannel;
+  state.socket.on('connect', () => state.socket.emit('join-room', { roomId: room, voiceChannel, name: state.botName, color: '#47a7f5', avatar: state.avatar, bot: true, clientId: `music-bot-${state.botId}` }));
+  state.socket.on('room-joined', ({ peers: items }) => items.forEach((item) => makePeer(state, item.id, item.name, true)));
+  state.socket.on('peer-joined', (item) => makePeer(state, item.id, item.name, false));
+  state.socket.on('peer-left', ({ id }) => { state.peers.get(id)?.pc.close(); state.peers.delete(id); });
+  state.socket.on('signal', (data) => receiveSignal(state, data).catch(() => {}));
+}
+function announceSpeaking(state, speaking) {
+  clearInterval(state.speakingTimer); state.speakingTimer = null;
+  const send = () => {
+    state.peers.forEach((peer) => { if (peer.channel?.readyState === 'open') { try { peer.channel.send(JSON.stringify({ type: 'voice-state', description: speaking })); } catch {} } });
+    if (state.socket?.connected) state.peers.forEach((peer) => state.socket.emit('signal', { target: peer.id, data: { voiceState: speaking } }));
+  };
+  send();
+  if (speaking) state.speakingTimer = setInterval(send, 900);
 }
 async function play(command) {
-  if (!audioContext) { audioContext = new AudioContext(); destination = audioContext.createMediaStreamDestination(); }
-  await audioContext.resume().catch(() => {}); await join(command.room, command.voiceChannel || 'Geral');
+  const state = botState(Number(command.botId) || 1); const nextName = command.botName || `Music Bot ${state.botId}`; const nextAvatar = command.avatar || ''; const profileChanged = state.botName !== nextName || state.avatar !== nextAvatar; state.botName = nextName; state.avatar = nextAvatar;
+  if (profileChanged && state.socket) { announceSpeaking(state, false); state.socket.disconnect(); state.socket = null; closePeers(state); state.activeRoom = ''; state.activeChannel = ''; }
+  if (!state.audioContext) { state.audioContext = new AudioContext(); state.destination = state.audioContext.createMediaStreamDestination(); state.gain = state.audioContext.createGain(); state.gain.connect(state.destination); }
+  state.gain.gain.value = Math.max(0, Math.min(1, Number(command.volume ?? .72)));
+  await state.audioContext.resume().catch(() => {}); await join(state, command.room, command.voiceChannel || 'Geral');
   const bytes = await window.voiceupMusicBot.readTrack(command.fileName);
-  const buffer = await audioContext.decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-  source?.stop(); source = audioContext.createBufferSource(); source.buffer = buffer; source.connect(destination); source.start(); source.onended = () => { source = null; };
+  const buffer = await state.audioContext.decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  try { state.source?.stop(); } catch {} const source = state.audioContext.createBufferSource(); state.source = source; source.buffer = buffer; source.connect(state.gain); source.start(); announceSpeaking(state, true); source.onended = () => { if (state.source !== source) return; state.source = null; announceSpeaking(state, false); };
 }
-window.voiceupMusicBot.onCommand((command) => { if (command.action === 'stop') { source?.stop(); source = null; return; } if (command.action === 'play') play(command).catch(() => {}); });
+function stop(command) {
+  const state = bots.get(Number(command.botId) || 1); if (!state) return;
+  announceSpeaking(state, false); try { state.source?.stop(); } catch {} state.source = null;
+  if (command.disconnect !== false) { state.socket?.disconnect(); state.socket = null; closePeers(state); state.activeRoom = ''; state.activeChannel = ''; }
+}
+window.voiceupMusicBot.onCommand((command) => { if (command.action === 'stop') return stop(command); if (command.action === 'stop-all') { bots.forEach((state) => stop({ botId: state.botId, disconnect: true })); return; } if (command.action === 'play') play(command).catch(() => {}); });
 window.voiceupMusicBot.ready();
 </script>
 </html>

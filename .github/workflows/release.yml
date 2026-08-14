@@ -38,6 +38,12 @@ jobs:
           CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
 
+      - name: Gerar pacote do servidor Cloud
+        shell: powershell
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          Compress-Archive -Path deploy/shardcloud/* -DestinationPath "deploy/VoiceUP-Server-Cloud-$version.zip" -CompressionLevel Optimal
+
       - name: Criar Release no GitHub
         uses: softprops/action-gh-release@v2
         with:
@@ -45,3 +51,4 @@ jobs:
           files: |
             release/*.exe
             release-server/*.exe
+            deploy/VoiceUP-Server-Cloud-*.zip

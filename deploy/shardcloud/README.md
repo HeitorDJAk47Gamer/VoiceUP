@@ -1,6 +1,8 @@
-# VoiceUP Server Cloud - ShardCloud
+# VoiceUP Server Cloud 1.1.0
 
 Este pacote hospeda apenas a sinalizacao das chamadas. Audio, video, tela e chat seguem diretamente entre os clientes apos a conexao P2P.
+
+O pacote e independente da plataforma: qualquer hospedagem Node.js que aceite WebSocket/Socket.IO e exponha a porta definida em `PORT` pode executa-lo.
 
 ## Como publicar
 
@@ -15,6 +17,12 @@ Se quiser escolher seu proprio subdominio antes do upload, acrescente ao arquivo
 ## Recursos
 
 512 MB sao configurados no arquivo `.shardcloud`; 1 GB e mais que suficiente para esta funcao. A ShardCloud instala as dependencias definidas em `package.json`.
+
+Use `/status` para a pagina publica de disponibilidade, `/health` para o diagnostico tecnico completo e `/api/status` para os numeros publicos agregados. Politica de Privacidade e Termos de Uso ficam em `/privacidade` e `/termos`.
+
+O catalogo de plugins fica em `/plugins`. Os downloads oficiais ficam em
+`/downloads/plugins/dados`, `/downloads/plugins/musica` e
+`/downloads/plugins/xp-chat`.
 
 ## Limite importante
 

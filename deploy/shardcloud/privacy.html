@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#07141c">
+  <meta name="description" content="Política de Privacidade do VoiceUP.">
+  <title>Política de Privacidade — VoiceUP</title>
+  <link rel="icon" href="/assets/voiceup-logo.png">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="container nav-wrap"><a class="brand" href="/"><img src="/assets/voiceup-logo.png" alt=""><span>VoiceUP</span></a><nav class="desktop-nav"><a href="/">Início</a><a href="/status">Status</a><a href="/privacidade">Privacidade</a><a href="/termos">Termos</a></nav><a class="nav-download" href="/">Voltar ao site</a></div></header>
+  <main class="inner-main container legal-layout">
+    <aside class="legal-nav"><a href="#resumo">Resumo</a><a href="#dados-locais">Dados no dispositivo</a><a href="#cloud">Dados no Cloud</a><a href="#midia">Voz, vídeo e tela</a><a href="#terceiros">Serviços de terceiros</a><a href="#retencao">Retenção e segurança</a><a href="#direitos">Seus direitos</a><a href="#menores">Menores de idade</a><a href="#alteracoes">Alterações</a><a href="#contato">Contato</a></aside>
+    <article class="legal-content">
+      <p class="eyebrow">DOCUMENTO LEGAL</p><h1>Política de Privacidade</h1>
+      <div class="legal-meta"><span>VoiceUP</span><span>Goat Gank</span><span>Vigência: 13 de agosto de 2026</span></div>
+      <div class="mobile-links"><a href="#resumo">Resumo</a><a href="#dados-locais">Dados locais</a><a href="#cloud">Cloud</a><a href="#direitos">Direitos</a></div>
+      <p class="legal-note">Esta política descreve o funcionamento atual do VoiceUP. Ela deve ser revisada antes de qualquer mudança que adicione contas, pagamentos, publicidade, análise de comportamento ou armazenamento permanente de mensagens no Cloud.</p>
+
+      <h2 id="resumo">1. Resumo</h2>
+      <p>O VoiceUP é um aplicativo desktop de comunicação por voz, vídeo, compartilhamento de tela e texto. Ele pode funcionar por conexão direta manual, por um ServerHost controlado pelo usuário ou pelo VoiceUP Cloud. A maior parte das preferências e informações de perfil é armazenada localmente no computador do usuário.</p>
+
+      <h2 id="dados-locais">2. Informações armazenadas no dispositivo</h2>
+      <p>O Cliente pode salvar localmente dados necessários para melhorar a experiência entre sessões, como:</p>
+      <ul><li>nome de exibição e foto de perfil escolhidos pelo usuário;</li><li>tema, idioma, estilo do chat e preferências de interface;</li><li>dispositivos selecionados de entrada e saída de áudio;</li><li>preferências de câmera, compartilhamento de tela, notificações e fechamento do aplicativo;</li><li>último endereço de servidor, último código de sala e canais utilizados;</li><li>um identificador local usado pelo ServerHost para banimentos persistentes.</li></ul>
+      <p>Esses dados permanecem no computador e podem ser removidos ao limpar os dados do aplicativo ou desinstalá-lo, dependendo das opções do Windows.</p>
+
+      <h2 id="cloud">3. Informações processadas pelo VoiceUP Cloud</h2>
+      <p>Enquanto uma conexão está ativa, o Cloud processa temporariamente os dados necessários para coordenar a sala: identificador da conexão Socket.IO, nome de exibição, cor do perfil, foto enviada pelo Cliente, código de sala, canal de voz ou texto, mensagens de texto, eventos de presença, latência e sinais técnicos do WebRTC.</p>
+      <p>O servidor mantém esses dados principalmente em memória durante a conexão. O funcionamento atual não inclui banco de dados de contas nem histórico permanente de mensagens. Logs operacionais da plataforma de hospedagem podem registrar data, hora, falhas técnicas, endereço IP e informações de rede conforme as políticas da empresa de hospedagem.</p>
+      <p>A página pública de Status mostra somente números agregados, como total de conexões, salas, canais de voz, versão, memória e tempo online. Ela não publica nomes, fotos, mensagens, IPs ou códigos de sala.</p>
+
+      <h2 id="midia">4. Voz, vídeo e compartilhamento de tela</h2>
+      <p>Voz, câmera e tela utilizam WebRTC. Sempre que a rede permite, a mídia é transmitida diretamente entre os participantes e não é gravada pelo VoiceUP Cloud. O Cloud atua na negociação inicial da conexão. Dependendo da rede e de futuras configurações de TURN, servidores auxiliares poderão retransmitir pacotes de mídia sem que isso signifique gravação do conteúdo.</p>
+      <p>O acesso ao microfone, à câmera e à captura de tela depende da autorização do usuário e dos controles do Windows. Outros participantes recebem a mídia somente quando o usuário ativa o recurso correspondente.</p>
+
+      <h2 id="terceiros">5. Serviços de terceiros</h2>
+      <p>O projeto pode utilizar:</p>
+      <ul><li>GitHub, para código-fonte, releases, downloads e verificação de atualizações;</li><li>Microsoft Store e serviços Microsoft, para distribuição, certificação e atualização quando o aplicativo for instalado pela Store;</li><li>ShardCloud ou outro provedor configurado, para hospedar o site e o servidor Cloud;</li><li>infraestrutura de rede e servidores STUN/TURN necessários ao WebRTC.</li></ul>
+      <p>Cada serviço trata informações conforme seus próprios termos e políticas. O VoiceUP não controla práticas independentes desses provedores.</p>
+
+      <h2 id="retencao">6. Retenção, segurança e compartilhamento</h2>
+      <p>Dados de sala mantidos em memória são descartados quando as conexões terminam ou o processo Cloud é reiniciado. O VoiceUP não vende informações pessoais. Dados podem ser divulgados quando exigido por lei, para proteger a segurança do serviço ou para investigar abuso e falhas técnicas.</p>
+      <p>São utilizadas medidas razoáveis de segurança, como HTTPS/WSS quando disponibilizado pela hospedagem e restrição de sinalização aos participantes da mesma sala. Nenhuma transmissão pela internet pode ser garantida como totalmente livre de riscos.</p>
+
+      <h2 id="direitos">7. Escolhas e direitos do usuário</h2>
+      <p>O usuário pode alterar ou remover sua foto, nome e preferências no aplicativo; deixar salas e interromper transmissões a qualquer momento; solicitar informações sobre dados tratados; e pedir correção ou exclusão de dados que estejam sob controle do projeto. Como o Cloud atual não mantém contas nem histórico permanente, muitos dados deixam de existir quando a conexão termina.</p>
+
+      <h2 id="menores">8. Menores de idade</h2>
+      <p>O VoiceUP não é direcionado especificamente a crianças e não busca coletar intencionalmente dados de menores. Usuários menores de idade devem utilizar o serviço com autorização e supervisão de responsável legal, conforme a legislação aplicável.</p>
+
+      <h2 id="alteracoes">9. Alterações desta política</h2>
+      <p>Esta política poderá ser atualizada para refletir mudanças técnicas, legais ou operacionais. A data de vigência será atualizada nesta página. Alterações relevantes poderão ser comunicadas pelo site, pelo aplicativo ou pelas notas de versão.</p>
+
+      <h2 id="contato">10. Contato</h2>
+      <p>Solicitações relacionadas à privacidade podem ser abertas no repositório oficial do VoiceUP no GitHub: <a href="https://github.com/HeitorDJAk47Gamer/VoiceUP" target="_blank" rel="noreferrer">github.com/HeitorDJAk47Gamer/VoiceUP</a>. Não publique dados pessoais ou informações sensíveis em uma issue pública; solicite um canal privado quando necessário.</p>
+    </article>
+  </main>
+  <footer class="site-footer"><div class="container footer-bottom"><span>© 2026 Goat Gank · VoiceUP</span><span><a href="/status">Status</a> · <a href="/termos">Termos de Uso</a></span></div></footer>
+</body>
+</html>

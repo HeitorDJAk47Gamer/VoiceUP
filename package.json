@@ -1,6 +1,6 @@
 {
   "name": "voiceup",
-  "version": "1.0.25",
+  "version": "1.1.0",
   "private": true,
   "author": "Goat Gank",
   "description": "Comunicação P2P simples por voz e texto",
@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "express": "^4.21.2",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1"
   },
   "devDependencies": {
     "electron": "^37.2.6",

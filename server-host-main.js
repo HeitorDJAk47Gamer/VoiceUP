@@ -1,8 +1,9 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, shell } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const { startSignalingServer } = require('./signaling-server');
+const crypto = require('crypto');
+const { startSignalingServer, normalizeRoomLayout } = require('./signaling-server');
 const { registerUpdateHandlers } = require('./update-helper');
 
 let signaling;
@@ -12,17 +13,31 @@ let musicBotWindow;
 let musicBotReady = false;
 const pendingMusicCommands = [];
 let isQuitting = false;
+let closePromptOpen = false;
 let lastCpu = process.cpuUsage();
 let lastCpuAt = process.hrtime.bigint();
 let pluginFolder = '';
 let portablePluginFolder = '';
 let musicFolder = '';
-let hostSettings = { closeBehavior: 'tray' };
+let pluginStateFile = '';
+let hostSettings = { closeBehavior: 'tray', theme: 'ocean', rooms: [], cluster: { enabled: false, role: 'primary', primaryUrl: '', secret: '', nodeId: '' } };
 
 const settingsPath = () => path.join(app.getPath('userData'), 'server-settings.json');
-function loadSettings() { try { hostSettings = { ...hostSettings, ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) }; } catch { /* first run */ } }
+function loadSettings() {
+  try { hostSettings = { ...hostSettings, ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) }; } catch { /* first run */ }
+  hostSettings.rooms = (Array.isArray(hostSettings.rooms) ? hostSettings.rooms : []).map((room) => normalizeRoomLayout(room)).filter((room) => room.id);
+  hostSettings.cluster = { enabled: false, role: 'primary', primaryUrl: '', secret: '', nodeId: '', ...(hostSettings.cluster || {}) };
+  if (!hostSettings.cluster.nodeId) hostSettings.cluster.nodeId = `host-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+  if (!hostSettings.cluster.secret) hostSettings.cluster.secret = crypto.randomBytes(18).toString('hex');
+  saveSettings();
+}
 function saveSettings() { try { fs.writeFileSync(settingsPath(), JSON.stringify(hostSettings, null, 2), 'utf8'); } catch { /* optional preference */ } }
 function addresses() { return Object.values(os.networkInterfaces()).flat().filter((item) => item && item.family === 'IPv4' && !item.internal).map((item) => `http://${item.address}:3000`); }
+function revealMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show(); mainWindow.focus();
+}
 
 async function sendMusicBotCommand(command) {
   if (!musicBotWindow || musicBotWindow.isDestroyed()) {
@@ -39,7 +54,10 @@ async function startHostedSignaling() {
   signaling = await startSignalingServer(3000, {
     pluginDirectories: [pluginFolder, portablePluginFolder, path.join(__dirname, 'plugins')],
     musicDirectory: musicFolder,
+    pluginStateFile,
     bansFile: path.join(app.getPath('userData'), 'bans.json'),
+    roomLayouts: hostSettings.rooms,
+    cluster: hostSettings.cluster,
     onPluginEvent: (event) => { if (event?.event === 'music-bot') sendMusicBotCommand(event.payload).catch(() => {}); }
   });
   return { ok: true, message: 'Servidor iniciado na porta 3000.' };
@@ -47,9 +65,10 @@ async function startHostedSignaling() {
 async function stopHostedSignaling() {
   if (!signaling) return { ok: true, message: 'Servidor já está desligado.' };
   const current = signaling; signaling = null;
+  current.closeFederation?.();
   current.io.close();
   await new Promise((resolve) => current.server.close(() => resolve()));
-  musicBotWindow?.webContents.send('music-bot:command', { action: 'stop' });
+  if (musicBotWindow && !musicBotWindow.isDestroyed()) musicBotWindow.webContents.send('music-bot:command', { action: 'stop-all' });
   return { ok: true, message: 'Servidor desligado. O painel permanece aberto.' };
 }
 async function restartHostedSignaling() { await stopHostedSignaling(); return startHostedSignaling(); }
@@ -59,42 +78,47 @@ async function openWindow() {
   pluginFolder = path.join(app.getPath('userData'), 'plugins');
   portablePluginFolder = path.join(path.dirname(process.execPath), 'plugins');
   musicFolder = path.join(app.getPath('userData'), 'music');
+  pluginStateFile = path.join(app.getPath('userData'), 'plugin-settings.json');
   fs.mkdirSync(pluginFolder, { recursive: true }); fs.mkdirSync(musicFolder, { recursive: true });
   const bundledPluginFolder = path.join(__dirname, 'plugins');
   if (fs.existsSync(bundledPluginFolder)) for (const file of fs.readdirSync(bundledPluginFolder).filter((name) => name.endsWith('.js'))) {
     const destination = path.join(pluginFolder, file);
-    if (!fs.existsSync(destination) || file === 'musica.js') fs.copyFileSync(path.join(bundledPluginFolder, file), destination);
+    if (!fs.existsSync(destination) || ['musica.js', 'dados.js', 'xp-chat.js'].includes(file)) fs.copyFileSync(path.join(bundledPluginFolder, file), destination);
   }
   const bundledMusicReadme = path.join(__dirname, 'music', 'README.md');
   if (fs.existsSync(bundledMusicReadme)) fs.copyFileSync(bundledMusicReadme, path.join(musicFolder, 'README.md'));
   await startHostedSignaling();
   mainWindow = new BrowserWindow({ width: 960, height: 800, minWidth: 680, minHeight: 600, title: 'VoiceUp Server', icon: path.join(__dirname, 'assets', 'voiceup-icon.ico'), backgroundColor: '#101522', autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'host-preload.js'), contextIsolation: true, nodeIntegration: false } });
   mainWindow.on('close', (event) => {
-    if (isQuitting || hostSettings.closeBehavior === 'quit') return;
+    if (isQuitting) return;
+    if (hostSettings.closeBehavior === 'quit') { event.preventDefault(); isQuitting = true; app.quit(); return; }
     event.preventDefault();
     if (hostSettings.closeBehavior === 'ask') {
-      const choice = dialog.showMessageBoxSync(mainWindow, { type: 'question', title: 'VoiceUp Server', message: 'O que deseja fazer com o servidor?', detail: 'Manter ativo deixa o servidor funcionando na bandeja do Windows.', buttons: ['Manter ativo na bandeja', 'Encerrar programa', 'Cancelar'], defaultId: 0, cancelId: 2 });
-      if (choice === 1) { isQuitting = true; app.quit(); } else if (choice === 0) mainWindow.hide();
+      if (!closePromptOpen) {
+        closePromptOpen = true;
+        mainWindow.webContents.send('window:confirm-close', { app: 'server' });
+      }
       return;
     }
     mainWindow.hide();
   });
+  mainWindow.on('closed', () => { mainWindow = null; closePromptOpen = false; });
   await mainWindow.loadFile(path.join(__dirname, 'host', 'index.html'));
   tray = new Tray(path.join(__dirname, 'assets', 'voiceup-icon.ico'));
   tray.setToolTip('VoiceUp Server - ativo');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Abrir painel', click: () => { mainWindow.show(); mainWindow.focus(); } },
+    { label: 'Abrir painel', click: revealMainWindow },
     { label: 'Iniciar servidor', click: () => startHostedSignaling().catch(() => {}) },
     { label: 'Desligar servidor', click: () => stopHostedSignaling().catch(() => {}) },
     { type: 'separator' },
     { label: 'Encerrar programa', click: () => { isQuitting = true; app.quit(); } }
   ]));
-  tray.on('double-click', () => { mainWindow.show(); mainWindow.focus(); });
+  tray.on('double-click', revealMainWindow);
 }
 
 ipcMain.handle('server-info', () => {
   const urls = addresses(); const host = urls[0] || 'http://localhost:3000';
-  return { port: 3000, urls, connectionCode: `VU1:${Buffer.from(JSON.stringify({ host })).toString('base64')}`, pluginFolder, portablePluginFolder, musicFolder, online: Boolean(signaling) };
+  return { port: 3000, urls, connectionCode: `VU1:${Buffer.from(JSON.stringify({ host })).toString('base64')}`, pluginFolder, portablePluginFolder, musicFolder, online: Boolean(signaling), version: app.getVersion() };
 });
 ipcMain.handle('server-stats', () => {
   const now = process.hrtime.bigint(); const usage = process.cpuUsage(lastCpu); const elapsedMicros = Number(now - lastCpuAt) / 1000;
@@ -121,7 +145,70 @@ ipcMain.handle('server:control', async (_event, action) => {
   } catch (error) { return { ok: false, message: error.message || 'Não foi possível alterar o servidor.' }; }
 });
 ipcMain.handle('server:settings', () => hostSettings);
-ipcMain.handle('server:save-settings', (_event, next = {}) => { const allowed = ['tray', 'ask', 'quit']; hostSettings.closeBehavior = allowed.includes(next.closeBehavior) ? next.closeBehavior : 'tray'; saveSettings(); return hostSettings; });
+ipcMain.handle('server:rooms', () => hostSettings.rooms);
+ipcMain.handle('server:cluster-settings', () => hostSettings.cluster);
+ipcMain.handle('server:save-cluster', async (_event, next = {}) => {
+  const role = next.role === 'secondary' ? 'secondary' : 'primary';
+  const enabled = next.enabled === true;
+  const primaryUrl = String(next.primaryUrl || '').trim().replace(/\/$/, '').slice(0, 300);
+  const secret = String(next.secret || '').trim().slice(0, 128);
+  if (enabled && secret.length < 12) return { ok: false, message: 'Use uma chave de pareamento com pelo menos 12 caracteres.' };
+  if (enabled && role === 'secondary' && !/^https?:\/\//i.test(primaryUrl)) return { ok: false, message: 'Informe o endereço completo do host primário.' };
+  hostSettings.cluster = { ...hostSettings.cluster, enabled, role, primaryUrl, secret };
+  saveSettings();
+  await restartHostedSignaling();
+  return { ok: true, message: enabled ? `Cluster ${role === 'primary' ? 'primário' : 'secundário'} ativado.` : 'Cluster desativado.', cluster: hostSettings.cluster };
+});
+ipcMain.handle('server:save-room', (_event, next = {}) => {
+  const room = normalizeRoomLayout(next);
+  if (!room.id) return { ok: false, message: 'Informe um código válido para a sala.' };
+  const previousId = String(next.previousId || room.id).toLowerCase();
+  const duplicate = hostSettings.rooms.find((item) => item.id.toLowerCase() === room.id.toLowerCase() && item.id.toLowerCase() !== previousId);
+  if (duplicate) return { ok: false, message: 'Já existe uma sala com esse código.' };
+  const index = hostSettings.rooms.findIndex((item) => item.id.toLowerCase() === previousId);
+  if (index >= 0) hostSettings.rooms[index] = room; else hostSettings.rooms.push(room);
+  saveSettings();
+  signaling?.updateRoomLayouts?.(hostSettings.rooms);
+  return { ok: true, message: index >= 0 ? 'Sala atualizada.' : 'Sala criada.', rooms: hostSettings.rooms };
+});
+ipcMain.handle('server:delete-room', (_event, roomId) => {
+  const id = String(roomId || '').toLowerCase();
+  const before = hostSettings.rooms.length;
+  hostSettings.rooms = hostSettings.rooms.filter((room) => room.id.toLowerCase() !== id);
+  if (hostSettings.rooms.length === before) return { ok: false, message: 'Sala não encontrada.' };
+  saveSettings();
+  signaling?.updateRoomLayouts?.(hostSettings.rooms);
+  return { ok: true, message: 'Sala removida. O código continua aceitando os canais padrão por compatibilidade.', rooms: hostSettings.rooms };
+});
+ipcMain.handle('server:save-settings', (_event, next = {}) => {
+  const closeBehaviors = ['tray', 'ask', 'quit'];
+  const themes = ['ocean', 'violet', 'forest', 'graphite'];
+  hostSettings.closeBehavior = closeBehaviors.includes(next.closeBehavior) ? next.closeBehavior : hostSettings.closeBehavior;
+  hostSettings.theme = themes.includes(next.theme) ? next.theme : hostSettings.theme;
+  saveSettings();
+  return hostSettings;
+});
+ipcMain.handle('window:close-choice', (_event, choice) => {
+  if (!closePromptOpen) return false;
+  closePromptOpen = false;
+  if (choice === 'tray') { mainWindow?.hide(); return true; }
+  if (choice === 'quit') { isQuitting = true; app.quit(); return true; }
+  return true;
+});
+ipcMain.handle('server:configure-plugin', async (_event, { id, enabled, settings } = {}) => {
+  if (!signaling?.configurePlugin) return { ok: false, message: 'O servidor está desligado.' };
+  return signaling.configurePlugin(String(id || ''), { enabled, settings });
+});
+ipcMain.handle('server:plugin-action', async (_event, { id, action, payload } = {}) => {
+  if (!signaling?.pluginAction) return { ok: false, message: 'O servidor está desligado.' };
+  return signaling.pluginAction(String(id || ''), String(action || ''), payload || {});
+});
+ipcMain.handle('server:open-path', async (_event, target) => {
+  const folder = ({ plugins: pluginFolder, music: musicFolder })[target];
+  if (!folder) return { ok: false, message: 'Pasta inválida.' };
+  const error = await shell.openPath(folder);
+  return error ? { ok: false, message: error } : { ok: true };
+});
 ipcMain.handle('music-bot:read-track', (_event, fileName) => {
   const safeName = path.basename(String(fileName || ''));
   if (!/\.(mp3|ogg|wav|m4a|aac)$/i.test(safeName)) throw new Error('Formato de música inválido.');
@@ -131,5 +218,6 @@ ipcMain.handle('music-bot:read-track', (_event, fileName) => {
 ipcMain.on('music-bot:ready', () => { musicBotReady = true; while (pendingMusicCommands.length) musicBotWindow?.webContents.send('music-bot:command', pendingMusicCommands.shift()); });
 registerUpdateHandlers(ipcMain, 'VoiceUPServer Setup ');
 app.whenReady().then(openWindow).catch((error) => { console.error(error); app.quit(); });
-app.on('activate', () => { mainWindow?.show(); });
+app.on('activate', revealMainWindow);
+app.on('window-all-closed', () => { if (process.platform !== 'darwin' && (isQuitting || hostSettings.closeBehavior === 'quit')) app.quit(); });
 app.on('before-quit', () => { musicBotWindow?.destroy(); signaling?.io.close(); signaling?.server.close(); });

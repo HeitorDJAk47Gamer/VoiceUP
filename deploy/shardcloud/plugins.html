@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#07141c">
+  <meta name="description" content="Guia da API beta de plugins do VoiceUP ServerHost e Cloud.">
+  <title>Plugins e API — VoiceUP</title>
+  <link rel="icon" href="/assets/voiceup-logo.png">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="container nav-wrap"><a class="brand" href="/"><img src="/assets/voiceup-logo.png" alt=""><span>VoiceUP</span></a><nav class="desktop-nav"><a href="/#recursos">Recursos</a><a href="/#plugins">Plugins</a><a href="/#downloads">Downloads</a><a href="/status">Status</a></nav><a class="nav-download" href="/#plugins">Baixar plugins</a></div></header>
+  <main class="inner-main container api-layout">
+    <nav class="api-nav" aria-label="Conteúdo"><a href="#instalar">Instalar</a><a href="#criar">Criar plugin</a><a href="#contrato">Contrato</a><a href="#api">API disponível</a><a href="#config">Configurações</a><a href="#seguranca">Segurança</a></nav>
+    <article class="api-content">
+      <p class="eyebrow">VOICEUP PLUGIN API · BETA V1</p>
+      <h1>Seu servidor,<br>sua lógica.</h1>
+      <p>Plugins são módulos JavaScript executados pelo ServerHost ou Cloud. Eles recebem eventos de chat, respondem como bots, guardam dados persistentes e expõem opções no painel. Participantes não precisam instalar o plugin.</p>
+      <div class="api-downloads"><a class="button secondary" href="/downloads/plugins/dados" download>Dados RPG</a><a class="button secondary" href="/downloads/plugins/musica" download>Music Bot</a><a class="button secondary" href="/downloads/plugins/xp-chat" download>XP de Chat</a></div>
+      <div class="api-note"><strong>Atenção:</strong> um plugin é código de servidor e usa as permissões do processo. Instale somente arquivos confiáveis e teste primeiro em um ServerHost separado.</div>
+
+      <h2 id="instalar">Como instalar no ServerHost</h2>
+      <ol><li>Baixe o arquivo <code>.js</code>.</li><li>Abra o VoiceUP ServerHost e acesse <strong>Plugins</strong>.</li><li>Clique em <strong>Abrir pasta de plugins</strong>.</li><li>Copie o arquivo diretamente para essa pasta.</li><li>Clique em <strong>Recarregar plugins</strong> ou reinicie o servidor.</li><li>Habilite o Toggle Switch e abra <strong>Editar opções</strong>.</li></ol>
+      <h3>Em uma hospedagem Cloud</h3><p>Inclua o arquivo na pasta <code>plugins</code> do projeto enviado à plataforma e faça um novo deploy. As opções usam <code>PLUGIN_STATE_FILE</code>; dados persistentes exigem que a hospedagem preserve esse arquivo entre reinicializações.</p>
+
+      <h2 id="criar">Crie o primeiro plugin</h2>
+      <p>Crie um arquivo <code>boas-vindas.js</code> diretamente na pasta de plugins:</p>
+      <pre><code>module.exports = {
+  id: 'boas-vindas',
+  name: 'Boas-vindas',
+  version: '1.0.0',
+  description: 'Responde ao comando !oi.',
+
+  onTextMessage({ text, room, textChannel, user, api }) {
+    if (text.trim().toLowerCase() !== '!oi') return;
+    api.systemMessage(room, textChannel, `Olá, ${user.name}!`, {
+      name: 'Bot de boas-vindas',
+      color: '#56e2cf'
+    });
+  }
+};</code></pre>
+
+      <h2 id="contrato">Contrato exportado</h2>
+      <p><code>id</code>, <code>name</code> e <code>onTextMessage</code> são obrigatórios. Também podem ser usados <code>version</code>, <code>description</code>, <code>icon</code>, <code>settings</code>, <code>onEnable</code>, <code>onDisable</code>, <code>getAdminState</code> e <code>onAdminAction</code>.</p>
+      <p>O contexto de mensagem inclui <code>text</code>, <code>room</code>, <code>textChannel</code>, <code>voiceChannel</code>, <code>user</code>, <code>serverIsCloud</code>, <code>plugin</code> e <code>api</code>.</p>
+
+      <h2 id="api">API disponível</h2>
+      <ul><li><code>api.systemMessage(...)</code> responde no canal de texto.</li><li><code>api.settings</code> contém as opções salvas pelo host.</li><li><code>api.storage.get/set/delete</code> guarda JSON isolado pelo ID do plugin.</li><li><code>api.media.list()</code> lista músicas reconhecidas pelo ServerHost.</li><li><code>api.botCommand(...)</code> integra bots de voz compatíveis com o host.</li><li><code>api.log(...)</code> escreve no painel de logs.</li></ul>
+
+      <h2 id="config">Opções no painel</h2>
+      <p>O array <code>settings</code> cria controles automaticamente. Tipos disponíveis: <code>text</code>, <code>number</code>, <code>range</code>, <code>boolean</code>, <code>select</code> e <code>image</code>.</p>
+      <pre><code>settings: [
+  { key: 'points', label: 'Pontos', type: 'number',
+    default: 5, min: 0, max: 100 },
+  { key: 'reply', label: 'Responder no chat', type: 'boolean',
+    default: true }
+]</code></pre>
+
+      <h2 id="seguranca">Compatibilidade e segurança</h2>
+      <ul><li>Erros são isolados e registrados sem interromper os outros plugins.</li><li>IDs duplicados são ignorados.</li><li>Clientes antigos recebem respostas como mensagens normais.</li><li>Não use <code>eval</code> nem execute comandos enviados pelo chat.</li><li>Não armazene senhas, tokens ou arquivos grandes em <code>api.storage</code>.</li><li>A API é beta; mantenha a versão do plugin e valide antes de distribuir.</li></ul>
+    </article>
+  </main>
+  <footer class="site-footer"><div class="container footer-grid"><div class="brand-column"><a class="brand" href="/"><img src="/assets/voiceup-logo.png" alt=""><span>VoiceUP</span></a><p>Um projeto Goat Gank.</p></div><div><strong>Produto</strong><a href="/#recursos">Recursos</a><a href="/#plugins">Plugins</a><a href="/#downloads">Downloads</a></div><div><strong>Legal</strong><a href="/privacidade">Privacidade</a><a href="/termos">Termos</a></div><div><strong>Serviço</strong><a href="/status">Status</a><a href="/health">Health JSON</a></div></div><div class="container footer-bottom"><span>© 2026 Goat Gank · VoiceUP</span><span>Plugin API beta v1.</span></div></footer>
+</body>
+</html>

@@ -1,26 +1,153 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VoiceUP Server</title>
-  <style>
-    :root{--bg:#101522;--panel:#192238;--line:#34415b;--text:#e8edf8;--muted:#99a6bc;--cyan:#56e2cf;--danger:#ff8b72}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}.wrap{padding:26px;max-width:1040px;margin:auto}.top,.toolbar,.member{display:flex;align-items:center;gap:12px}.logo{width:46px;height:46px;border-radius:13px;background:url('../assets/voiceup-logo.png') center/cover}.eyebrow{color:var(--cyan);font-size:10px;font-weight:700;letter-spacing:1.8px;margin:0 0 4px}h1{font-size:24px;margin:0}.status{margin-left:auto;color:#b9f4e9;font-size:13px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--cyan);box-shadow:0 0 9px var(--cyan);margin-right:7px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin:22px 0}.metric,.section{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:15px}.metric label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.8px}.metric strong{display:block;font-size:25px;margin-top:5px}.section{margin-top:12px}.section h2{font-size:13px;margin:0 0 11px;color:#cdd6e6}.urls,.controls{display:flex;gap:8px;flex-wrap:wrap}.url{font:12px Consolas,monospace;color:var(--cyan);background:#101625;border:1px solid #36415a;border-radius:8px;padding:10px;user-select:all;overflow-wrap:anywhere}.toolbar select,.section select{margin-left:auto;background:#101625;color:var(--text);border:1px solid #40506c;border-radius:7px;padding:7px}.chart{height:135px;width:100%;display:block;background:#111827;border-radius:8px}.logs{max-height:230px;overflow:auto;display:grid;gap:5px;font:12px Consolas,monospace;color:#a9b6c9}.log{display:flex;gap:9px}.log time{color:#697790}.log b{font-weight:600;color:var(--cyan)}.note{font-size:11px;color:#9ba9bf;margin:13px 0 0;line-height:1.4}.member{padding:9px 0;border-bottom:1px solid #29354a}.member:last-child{border:0}.member-info{flex:1;min-width:0}.member-info small{color:#8fa0b7}.color-dot{width:10px;height:10px;border-radius:50%;flex:none}.button{border:0;border-radius:8px;padding:8px 11px;font-weight:700;cursor:pointer}.button:disabled{opacity:.55;cursor:wait}.primary{background:var(--cyan);color:#102026}.restart{background:#6676ea;color:#fff}.danger{background:#563343;color:#ffd5dd}.ban{background:#803447;color:#fff}.unban{background:#275c62;color:#d9fff8}.admin-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.plugin-error{color:#ffb5a7;margin-top:6px}@media(max-width:760px){.grid{grid-template-columns:repeat(2,1fr)}.status{display:none}.admin-grid{grid-template-columns:1fr}.wrap{padding:16px}}
-  </style>
+  <link rel="stylesheet" href="./style.css">
 </head>
-<body>
-  <main class="wrap">
-    <header class="top"><div class="logo"></div><div><p class="eyebrow">SERVIDOR DE SINALIZAÇÃO</p><h1>VoiceUP Server</h1></div><div id="host-state" class="status"><span class="dot"></span>Carregando</div></header>
-    <section class="grid"><div class="metric"><label>Participantes</label><strong id="participants">0</strong></div><div class="metric"><label>Salas</label><strong id="rooms">0</strong></div><div class="metric"><label>Ping médio</label><strong id="ping">—</strong></div><div class="metric"><label>CPU</label><strong id="cpu">0%</strong></div><div class="metric"><label>Memória</label><strong id="memory">0 MB</strong></div><div class="metric"><label>Heap Node</label><strong id="heap">0 MB</strong></div><div class="metric"><label>Sinais</label><strong id="signals">0</strong></div><div class="metric"><label>Uptime</label><strong id="uptime">0s</strong></div></section>
-    <section class="section"><h2>Endereços para conectar</h2><div id="urls" class="urls"></div><p class="note">O host somente coordena a sala; áudio, vídeo, tela e mensagens seguem diretamente entre os clientes.</p></section>
-    <section class="section"><h2>Código de conexão</h2><div id="connection-code" class="url"></div></section>
-    <section class="section"><div class="toolbar"><h2>Controle do servidor</h2><span id="host-control-message" class="note" style="margin:0"></span></div><div class="controls"><button class="button primary" data-server-control="start">Iniciar</button><button class="button restart" data-server-control="restart">Reiniciar</button><button class="button danger" data-server-control="stop">Desligar sem fechar painel</button><button id="reload-plugins" class="button restart">Recarregar plugins</button></div><label class="note" style="display:grid;gap:6px;max-width:360px">Ao clicar no X do programa<select id="host-close-behavior"><option value="tray">Manter ativo na bandeja do Windows</option><option value="ask">Perguntar o que fazer</option><option value="quit">Encerrar o programa</option></select></label></section>
-    <section class="section"><div class="toolbar"><h2>Administração da sala</h2><span id="member-count" class="note" style="margin:0 0 0 auto">0 conectados</span></div><div class="admin-grid"><div><h2>Participantes conectados</h2><div id="member-list" class="logs">Carregando participantes...</div></div><div><h2>Banimentos</h2><div id="ban-list" class="logs">Nenhum banimento.</div></div></div><p class="note">Expulsar remove a pessoa da sala atual. Banir bloqueia o identificador salvo no Client até você remover o banimento.</p></section>
-    <section class="section"><h2>Plugins e músicas (beta)</h2><div id="plugin-list" class="logs">Carregando plugins...</div><div id="plugin-errors" class="note plugin-error"></div><div id="plugin-folder" class="url" style="margin-top:10px"></div><div id="music-folder" class="url" style="margin-top:8px"></div><p class="note">Plugins do servidor são arquivos .js na pasta acima. Músicas MP3/OGG/WAV/M4A/AAC ficam em music. Use “Recarregar plugins” após alterar arquivos.</p></section>
-    <section class="section"><div class="toolbar"><h2>Gráfico ao vivo</h2><select id="metric-select"><option value="participants">Participantes</option><option value="cpuPercent">CPU (%)</option><option value="memoryMb">Memória (MB)</option><option value="averagePing">Ping (ms)</option><option value="signals">Sinais enviados</option></select></div><canvas id="chart" class="chart"></canvas></section>
-    <section class="section"><h2>Logs recentes</h2><div id="logs" class="logs"></div></section>
-    <section class="section"><div class="toolbar"><h2>Atualizações</h2><button id="check-update" class="button restart" style="margin-left:auto">Procurar atualizações</button></div><div id="update-status" class="note">Consulte as Releases oficiais do GitHub.</div></section>
-  </main>
+<body data-theme="ocean">
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <img src="../assets/voiceup-logo.png" alt="">
+        <div><strong>VoiceUP</strong><span>ServerHost</span></div>
+      </div>
+
+      <div class="server-card">
+        <span class="status-light" id="sidebar-light"></span>
+        <div><strong id="sidebar-state">Iniciando servidor</strong><small id="sidebar-detail">Porta 3000</small></div>
+      </div>
+
+      <nav class="nav" aria-label="Painel do servidor">
+        <button class="nav-item active" type="button" data-view="overview"><span class="nav-icon">⌂</span><span>Visão geral</span></button>
+        <button class="nav-item" type="button" data-view="people"><span class="nav-icon">◎</span><span>Pessoas</span><b id="nav-member-count">0</b></button>
+        <button class="nav-item" type="button" data-view="rooms"><span class="nav-icon">▦</span><span>Salas e canais</span><b id="nav-room-count">0</b></button>
+        <button class="nav-item" type="button" data-view="extensions"><span class="nav-icon">◇</span><span>Plugins</span></button>
+        <button class="nav-item" type="button" data-view="activity"><span class="nav-icon">⌁</span><span>Atividade</span></button>
+        <button class="nav-item" type="button" data-view="settings"><span class="nav-icon">⚙</span><span>Configurações</span></button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <span>VoiceUP Server</span><strong id="app-version">1.1.0</strong>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button id="mobile-menu" class="icon-button mobile-menu" type="button" aria-label="Abrir menu">☰</button>
+        <div><p class="eyebrow">PAINEL DO SERVIDOR</p><h1 id="page-title">Visão geral</h1></div>
+        <div id="host-state" class="top-status"><span class="status-light"></span><span>Carregando</span></div>
+      </header>
+
+      <div id="notice" class="notice hidden" role="status"></div>
+
+      <div id="app-dialog" class="app-dialog hidden" role="alertdialog" aria-modal="true" aria-labelledby="app-dialog-title" aria-describedby="app-dialog-message">
+        <section class="app-dialog-card">
+          <div class="app-dialog-icon" aria-hidden="true">?</div>
+          <div class="app-dialog-copy"><p class="eyebrow">VOICEUP SERVER</p><h2 id="app-dialog-title">Confirmar ação</h2><p id="app-dialog-message"></p><small id="app-dialog-detail"></small></div>
+          <div id="app-dialog-actions" class="app-dialog-actions"></div>
+        </section>
+      </div>
+
+      <section class="view active" data-page="overview">
+        <div class="hero-card">
+          <div><p class="eyebrow">SERVIDOR LOCAL</p><h2 id="hero-title">Preparando o ServerHost</h2><p id="hero-copy">O painel continuará disponível mesmo quando o servidor estiver desligado.</p></div>
+          <div class="hero-actions">
+            <button class="button primary" type="button" data-server-control="start">Iniciar</button>
+            <button class="button secondary" type="button" data-server-control="restart">Reiniciar</button>
+            <button class="button danger" type="button" data-server-control="stop">Desligar</button>
+          </div>
+        </div>
+
+        <div class="metric-grid">
+          <article class="metric"><span>Participantes</span><strong id="participants">0</strong><small>conexões ativas</small></article>
+          <article class="metric"><span>Salas de voz</span><strong id="rooms">0</strong><small>canais em uso</small></article>
+          <article class="metric"><span>Ping médio</span><strong id="ping">—</strong><small>latência do host</small></article>
+          <article class="metric"><span>CPU</span><strong id="cpu">0%</strong><small>processo do servidor</small></article>
+          <article class="metric"><span>Memória</span><strong id="memory">0 MB</strong><small>memória total</small></article>
+          <article class="metric"><span>Tempo online</span><strong id="uptime">0s</strong><small>desde a inicialização</small></article>
+        </div>
+
+        <div class="two-columns">
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">CONEXÃO</p><h2>Endereços do host</h2></div></div>
+            <div id="urls" class="copy-list"></div>
+            <p class="helper">Compartilhe um endereço acessível pela mesma rede, Radmin VPN ou encaminhamento de porta configurado.</p>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">CONVITE RÁPIDO</p><h2>Código de conexão</h2></div></div>
+            <div class="copy-row"><code id="connection-code">Gerando código…</code><button class="icon-button copy-button" type="button" data-copy-target="connection-code" title="Copiar código">⧉</button></div>
+            <p class="helper">O ServerHost coordena a sala; voz, vídeo e tela continuam em WebRTC entre os participantes.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="view" data-page="people">
+        <div class="section-intro"><div><p class="eyebrow">MODERAÇÃO</p><h2>Pessoas e banimentos</h2><p>Gerencie quem está conectado sem precisar reiniciar o servidor.</p></div><span id="member-count" class="pill">0 conectados</span></div>
+        <div class="two-columns moderation-grid">
+          <article class="panel"><div class="panel-heading"><h2>Participantes conectados</h2></div><div id="member-list" class="item-list"><div class="empty">Carregando participantes…</div></div></article>
+          <article class="panel"><div class="panel-heading"><h2>Lista de banimentos</h2></div><div id="ban-list" class="item-list"><div class="empty">Nenhum banimento.</div></div></article>
+        </div>
+      </section>
+
+      <section class="view" data-page="rooms">
+        <div class="section-intro"><div><p class="eyebrow">ESTRUTURA DO SERVIDOR</p><h2>Salas e canais</h2><p>Crie códigos de sala e escolha os canais que aparecerão nos Clients novos.</p></div><span id="managed-room-count" class="pill">0 salas</span></div>
+        <div class="room-manager-grid">
+          <article class="panel room-editor">
+            <div class="panel-heading"><div><p class="eyebrow">EDITOR</p><h2 id="room-editor-title">Criar sala</h2></div><button id="clear-room-form" class="button secondary" type="button">Nova</button></div>
+            <input id="room-previous-id" type="hidden">
+            <label><span>Nome da sala</span><small>Nome visível no painel e nos Clients compatíveis.</small><input id="room-name" maxlength="48" placeholder="Ex.: Goat Gank"></label>
+            <label><span>Código para entrar</span><small>Use letras, números, hífen ou underline.</small><input id="room-id" maxlength="48" placeholder="Ex.: ggk"></label>
+            <label><span>Canais de voz</span><small>Um nome por linha.</small><textarea id="room-voice-channels" rows="5" placeholder="Geral&#10;Jogando&#10;Ausente"></textarea></label>
+            <label><span>Canais de texto</span><small>Um nome por linha.</small><textarea id="room-text-channels" rows="5" placeholder="geral&#10;conversa&#10;avisos"></textarea></label>
+            <div class="room-editor-actions"><button id="save-room" class="button primary" type="button">Salvar sala</button></div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">CADASTRADAS</p><h2>Salas gerenciadas</h2></div></div>
+            <div id="room-list" class="room-list"><div class="empty">Carregando salas…</div></div>
+            <p class="helper">Códigos não cadastrados continuam funcionando com Geral, Jogando, Ausente, #geral, #conversa e #avisos para manter compatibilidade com versões antigas.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="view" data-page="extensions">
+        <div class="section-intro"><div><p class="eyebrow">EXTENSÕES DO SERVIDOR</p><h2>Plugins e músicas</h2><p>Os plugins são carregados apenas pelo servidor e valem para todas as pessoas da sala.</p></div><button id="reload-plugins" class="button primary" type="button">Recarregar plugins</button></div>
+        <article class="panel"><div class="panel-heading"><h2>Plugins carregados</h2><span id="plugin-count" class="pill">0 ativos</span></div><div id="plugin-list" class="plugin-grid"><div class="empty">Carregando plugins…</div></div><div id="plugin-errors" class="error-box hidden"></div></article>
+        <div class="two-columns">
+          <article class="panel compact"><h2>Pasta de plugins</h2><code id="plugin-folder">Carregando…</code><button class="button secondary path-button" type="button" data-open-path="plugins">Abrir pasta</button></article>
+          <article class="panel compact"><h2>Pasta de músicas</h2><code id="music-folder">Carregando…</code><button class="button secondary path-button" type="button" data-open-path="music">Abrir pasta</button></article>
+        </div>
+      </section>
+
+      <section class="view" data-page="activity">
+        <div class="section-intro"><div><p class="eyebrow">DIAGNÓSTICO</p><h2>Atividade do servidor</h2><p>Acompanhe desempenho, sinais WebRTC e eventos recentes.</p></div><label class="select-label">Exibir<select id="metric-select"><option value="participants">Participantes</option><option value="cpuPercent">CPU (%)</option><option value="memoryMb">Memória (MB)</option><option value="averagePing">Ping (ms)</option><option value="signals">Sinais enviados</option></select></label></div>
+        <article class="panel chart-panel"><canvas id="chart" class="chart"></canvas><div class="chart-footer"><span>60 amostras recentes</span><span id="chart-current">0</span></div></article>
+        <article class="panel"><div class="panel-heading"><h2>Logs recentes</h2><span id="signals-summary" class="pill">0 sinais</span></div><div id="logs" class="log-list"><div class="empty">Nenhum evento ainda.</div></div></article>
+      </section>
+
+      <section class="view" data-page="settings">
+        <div class="section-intro"><div><p class="eyebrow">PREFERÊNCIAS</p><h2>Configurações do ServerHost</h2><p>Estas opções ficam salvas somente neste computador.</p></div></div>
+        <article class="panel settings-panel">
+          <label><span>Tema do painel</span><small>Altera apenas a aparência do ServerHost.</small><select id="host-theme"><option value="ocean">Oceano</option><option value="violet">Violeta</option><option value="forest">Floresta</option><option value="graphite">Grafite</option></select></label>
+          <label><span>Ao clicar no X</span><small>Defina se o servidor continua ativo na bandeja.</small><select id="host-close-behavior"><option value="tray">Manter ativo na bandeja</option><option value="ask">Perguntar o que fazer</option><option value="quit">Encerrar o programa</option></select></label>
+          <div class="settings-action"><span class="autosave-status">● Salvamento automático</span><button id="save-settings" class="button primary" type="button">Salvar configurações</button></div>
+        </article>
+        <article class="panel cluster-panel">
+          <div class="panel-heading"><div><p class="eyebrow">CLUSTER EXPERIMENTAL</p><h2>Dois ServerHosts</h2></div><span id="cluster-status" class="pill">Desativado</span></div>
+          <p class="helper cluster-explanation">O primário e o secundário sincronizam membros, canais, chat e sinais WebRTC. Cada pessoa pode usar o host mais próximo; a mídia continua P2P entre os participantes.</p>
+          <div class="cluster-form">
+            <label><span>Modo</span><small>Escolha um primário e um secundário.</small><select id="cluster-mode"><option value="off">Desativado</option><option value="primary">Host primário</option><option value="secondary">Host secundário</option></select></label>
+            <label id="cluster-primary-row"><span>Endereço do primário</span><small>Usado somente pelo host secundário.</small><input id="cluster-primary-url" type="url" placeholder="http://10.0.0.2:3000"></label>
+            <label><span>Chave de pareamento</span><small>Deve ser exatamente igual nos dois hosts. Não compartilhe publicamente.</small><span class="cluster-secret-field"><input id="cluster-secret" type="password" maxlength="128"><button id="toggle-cluster-secret" class="icon-button" type="button" title="Mostrar ou ocultar chave">◉</button><button class="icon-button" type="button" data-copy-target="cluster-secret" title="Copiar chave">⧉</button></span></label>
+            <label><span>ID deste host</span><small>Gerado automaticamente e salvo neste computador.</small><input id="cluster-node-id" readonly></label>
+          </div>
+          <div class="cluster-actions"><small>Aplicar reinicia a sinalização e desconecta temporariamente os participantes deste host.</small><button id="apply-cluster" class="button primary" type="button">Aplicar e reiniciar</button></div>
+        </article>
+        <article class="panel update-panel"><div><h2>Atualizações</h2><p id="update-status" class="helper">Consulte as versões oficiais publicadas no GitHub.</p></div><div class="update-actions"><button id="server-release-notes" class="button secondary" type="button">Ver novidades desta versão</button><button id="check-update" class="button secondary" type="button">Procurar atualizações</button></div></article>
+      </section>
+    </main>
+  </div>
   <script src="./renderer.js"></script>
 </body>
 </html>

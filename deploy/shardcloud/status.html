@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#07141c">
+  <meta name="description" content="Status público do VoiceUP Cloud.">
+  <title>Status — VoiceUP</title>
+  <link rel="icon" href="/assets/voiceup-logo.png">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="container nav-wrap"><a class="brand" href="/"><img src="/assets/voiceup-logo.png" alt=""><span>VoiceUP</span></a><nav class="desktop-nav"><a href="/">Início</a><a href="/status">Status</a><a href="/privacidade">Privacidade</a><a href="/termos">Termos</a></nav><a class="nav-download" href="/">Voltar ao site</a></div></header>
+  <main class="inner-main container">
+    <section class="inner-hero"><p class="eyebrow">STATUS DO SERVIÇO</p><h1>VoiceUP Cloud</h1><p>Informações públicas e agregadas do servidor de sinalização. Nenhum nome, endereço IP, mensagem ou código de sala é exibido nesta página.</p></section>
+    <section class="status-summary"><span class="live-dot offline" data-dynamic></span><div><strong data-status-state>Verificando o Cloud…</strong><small>Atualizado automaticamente a cada 10 segundos</small></div></section>
+    <section class="status-grid">
+      <article class="status-card"><span>Usuários conectados</span><strong data-status-field="connections">—</strong></article>
+      <article class="status-card"><span>Salas ativas</span><strong data-status-field="rooms">—</strong></article>
+      <article class="status-card"><span>Canais de voz</span><strong data-status-field="voiceChannels">—</strong></article>
+      <article class="status-card"><span>Tempo online</span><strong data-status-field="uptimeSeconds">—</strong></article>
+      <article class="status-card"><span>Versão Cloud</span><strong data-status-field="version">—</strong></article>
+      <article class="status-card"><span>Memória utilizada</span><strong><span data-status-field="memoryMb">—</span> MB</strong></article>
+      <article class="status-card"><span>Entradas processadas</span><strong data-status-field="joins">—</strong></article>
+      <article class="status-card"><span>Sinais WebRTC</span><strong data-status-field="signals">—</strong></article>
+    </section>
+    <section class="system-list">
+      <div class="system-row"><div><strong>Site oficial</strong><small>Página inicial, downloads e documentos públicos</small></div><b data-status-state>Verificando</b></div>
+      <div class="system-row"><div><strong>Servidor de sinalização</strong><small>Presença, salas, chat e negociação WebRTC</small></div><b data-status-state>Verificando</b></div>
+      <div class="system-row"><div><strong>API pública de status</strong><small>Dados agregados disponíveis em /api/status</small></div><b data-status-state>Verificando</b></div>
+    </section>
+    <p class="refresh-note">A contagem representa conexões Socket.IO abertas neste processo Cloud. Uma mesma pessoa pode aparecer mais de uma vez se abrir várias instâncias do aplicativo.</p>
+  </main>
+  <footer class="site-footer"><div class="container footer-bottom"><span>© 2026 Goat Gank · VoiceUP</span><span><a href="/privacidade">Privacidade</a> · <a href="/termos">Termos</a></span></div></footer>
+  <script src="/site.js" defer></script>
+</body>
+</html>

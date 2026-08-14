@@ -1,31 +1,100 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#101522" />
-  <meta name="description" content="VoiceUP é uma comunicação por voz, vídeo, tela e texto com salas P2P via servidor de sinalização." />
-  <title>VoiceUP — Comunicação sem assinatura</title>
-  <style>
-    :root{--ink:#edf3ff;--muted:#9ba8c0;--night:#101522;--night2:#171f34;--panel:rgba(27,36,59,.82);--line:#344260;--cyan:#56e2cf;--coral:#ff8b72;--violet:#8d85ff}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;min-width:300px;background:radial-gradient(circle at 15% -10%,#23445e 0,transparent 30%),radial-gradient(circle at 90% 6%,#412a57 0,transparent 26%),var(--night);color:var(--ink);font-family:Inter,Segoe UI,Arial,sans-serif}a{color:inherit;text-decoration:none}.shell{width:min(1120px,calc(100% - 40px));margin:auto}.nav{height:82px;display:flex;align-items:center;justify-content:space-between;gap:18px}.brand{display:flex;align-items:center;gap:11px;font:bold 25px Outfit,Inter,sans-serif;letter-spacing:-1px}.brand svg{width:39px;height:39px;padding:8px;border-radius:13px;background:linear-gradient(135deg,#58e4cf,#7188ff);box-shadow:0 10px 30px rgba(86,226,207,.18)}.nav-links{display:flex;gap:20px;color:var(--muted);font-size:14px}.nav-links a:hover{color:var(--cyan)}.hero{padding:90px 0 74px;display:grid;grid-template-columns:1.15fr .85fr;align-items:center;gap:42px}.eyebrow{margin:0 0 16px;color:var(--cyan);letter-spacing:2px;font-size:11px;font-weight:800}.hero h1{margin:0;font:800 clamp(42px,6.2vw,72px)/.98 Outfit,Inter,sans-serif;letter-spacing:-3px}.hero h1 em{font-style:normal;color:var(--coral)}.hero p{max-width:590px;margin:25px 0;color:var(--muted);font-size:17px;line-height:1.65}.actions{display:flex;flex-wrap:wrap;gap:11px;margin-top:30px}.button{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:13px 17px;border:1px solid transparent;border-radius:11px;background:var(--cyan);color:#102026;font-weight:800;font-size:14px;transition:.2s}.button:hover{transform:translateY(-2px);filter:brightness(1.06)}.button.alt{background:rgba(25,35,57,.7);border-color:var(--line);color:#dbe6fa}.trust{display:flex;flex-wrap:wrap;gap:18px;margin-top:27px;color:#b9c5d8;font-size:13px}.trust b{color:var(--cyan)}.card{position:relative;overflow:hidden;min-height:355px;border:1px solid var(--line);border-radius:24px;background:linear-gradient(145deg,rgba(42,55,86,.88),rgba(19,25,43,.92));box-shadow:0 26px 90px rgba(0,0,0,.25);padding:25px}.card:before{content:'';position:absolute;width:240px;height:240px;border-radius:50%;background:radial-gradient(circle,rgba(86,226,207,.21),transparent 66%);top:-105px;right:-80px}.preview-top{position:relative;display:flex;align-items:center;gap:9px;color:#cbd8ea;font-size:13px}.online{width:9px;height:9px;border-radius:50%;background:var(--cyan);box-shadow:0 0 12px var(--cyan)}.preview{position:relative;margin-top:32px;background:#101625;border:1px solid #35415c;border-radius:16px;padding:17px}.preview small{color:#7f90ae;letter-spacing:1.2px;font-weight:700}.preview h3{margin:8px 0 19px;font-size:21px}.members{display:flex;align-items:center;gap:9px}.member{display:grid;place-items:center;width:39px;height:39px;border-radius:50%;background:linear-gradient(135deg,#ff9a7f,#e45b78);font-weight:800}.member:nth-child(2){background:linear-gradient(135deg,#6f82e9,#8671d8)}.member:nth-child(3){background:linear-gradient(135deg,#50d7c2,#448abc)}.wave{height:50px;margin-top:21px;display:flex;align-items:center;gap:4px}.wave i{width:4px;border-radius:10px;background:var(--cyan);animation:pulse 1.1s ease-in-out infinite}.wave i:nth-child(1){height:15px}.wave i:nth-child(2){height:34px;animation-delay:.15s}.wave i:nth-child(3){height:25px;animation-delay:.3s}.wave i:nth-child(4){height:42px;animation-delay:.45s}.wave i:nth-child(5){height:20px;animation-delay:.6s}.wave i:nth-child(6){height:31px;animation-delay:.75s}@keyframes pulse{50%{transform:scaleY(.38);opacity:.55}}.server-chip{position:relative;display:flex;align-items:center;gap:9px;margin-top:20px;padding:12px;border-radius:10px;background:rgba(86,226,207,.08);border:1px solid rgba(86,226,207,.22);font-size:12px;color:#c8f7ef}.server-chip span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.section{padding:72px 0;border-top:1px solid rgba(68,82,111,.55)}.section-head{max-width:610px}.section h2{margin:0;font:750 clamp(28px,3vw,41px)/1.08 Outfit,Inter,sans-serif;letter-spacing:-1.4px}.section-head p{color:var(--muted);line-height:1.6}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:30px}.feature{padding:22px;border:1px solid var(--line);border-radius:16px;background:var(--panel)}.feature .icon{display:grid;place-items:center;width:39px;height:39px;border-radius:11px;background:#28354f;color:var(--cyan);font-size:20px}.feature h3{margin:17px 0 8px;font-size:16px}.feature p{margin:0;color:var(--muted);line-height:1.55;font-size:14px}.download{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:28px}.download-card{border:1px solid var(--line);border-radius:16px;padding:22px;background:linear-gradient(145deg,#202d49,#172036)}.download-card h3{margin:0 0 7px}.download-card p{min-height:43px;margin:0 0 18px;color:var(--muted);font-size:14px;line-height:1.45}.tiny{margin:20px 0 0;color:#8491a8;font-size:12px;line-height:1.55}.status-box{display:flex;align-items:center;gap:10px;margin-top:25px;padding:13px 15px;border:1px solid var(--line);border-radius:11px;background:rgba(14,20,35,.72);font-size:13px;color:#b8c6db}.status-box strong{color:#dfe9f7}.status-box .offline{background:var(--coral);box-shadow:none}.footer{padding:30px 0 45px;color:#8491a8;font-size:13px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}.footer a{color:#b9c8df}.footer a:hover{color:var(--cyan)}@media(max-width:760px){.shell{width:min(100% - 30px,580px)}.nav{height:70px}.nav-links{display:none}.hero{grid-template-columns:1fr;padding:54px 0}.hero h1{letter-spacing:-2px}.card{min-height:310px}.grid,.download{grid-template-columns:1fr}.section{padding:54px 0}}
-  </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#07141c">
+  <meta name="description" content="VoiceUP reúne voz, vídeo, compartilhamento de tela e texto em salas privadas, sem assinatura.">
+  <title>VoiceUP — Sua call, do seu jeito</title>
+  <link rel="icon" href="/assets/voiceup-logo.png">
+  <link rel="stylesheet" href="/site.css">
 </head>
 <body>
-  <div class="shell">
-    <nav class="nav"><a class="brand" href="#inicio" aria-label="VoiceUP início"><svg viewBox="0 0 24 24" fill="none" stroke="#112034" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-3a8 8 0 0 1 16 0v3"/><path d="M4 14h3v4H5a1 1 0 0 1-1-1zM20 14h-3v4h2a1 1 0 0 0 1-1zM12 12v5M10 17h4"/></svg>VoiceUP</a><div class="nav-links"><a href="#recursos">Recursos</a><a href="#downloads">Downloads</a><a href="https://github.com/HeitorDJAk47Gamer/VoiceUP" target="_blank" rel="noreferrer">GitHub ↗</a></div></nav>
-    <main id="inicio">
-      <section class="hero"><div><p class="eyebrow">GOAT GANK · COMUNICAÇÃO DIRETA</p><h1>Converse, jogue e compartilhe.<br><em>Sem assinatura.</em></h1><p>VoiceUP reúne voz, vídeo, compartilhamento de tela e texto em salas privadas. Este endereço também mantém o servidor de sinalização Cloud que conecta sua sala de qualquer rede.</p><div class="actions"><a id="download-client" class="button" href="https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest" target="_blank" rel="noreferrer">Baixar Cliente Windows</a><a class="button alt" href="#como-usar">Como entrar em uma sala</a></div><div class="trust"><span><b>✓</b> Salas P2P via Cloud</span><span><b>✓</b> Temas e perfil</span><span><b>✓</b> Plugins beta</span></div></div><aside class="card" aria-label="Prévia de uma chamada VoiceUP"><div class="preview-top"><i class="online"></i><span>Servidor Cloud online</span></div><div class="preview"><small># CANAL DE VOZ</small><h3>🔊 Geral</h3><div class="members"><span class="member">H</span><span class="member">R</span><span class="member">+</span><span style="color:#a6b2c9;font-size:13px">3 pessoas na chamada</span></div><div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i></div></div><div class="server-chip"><i id="health-dot" class="online"></i><span id="server-status">Verificando servidor de sinalização…</span></div></aside></section>
-      <section id="recursos" class="section"><div class="section-head"><p class="eyebrow">FEITO PARA O SEU GRUPO</p><h2>Tudo que uma sala precisa, em um app leve.</h2><p>O Cloud só coordena a entrada. Voz, vídeo e tela seguem diretamente entre participantes sempre que a rede permitir.</p></div><div class="grid"><article class="feature"><div class="icon">◉</div><h3>Voz, vídeo e live</h3><p>Mute, câmera, qualidade de vídeo, tela cheia e compartilhamento de tela.</p></article><article class="feature"><div class="icon">#</div><h3>Canais e mensagens</h3><p>Entre em canais de voz e texto, receba avisos de mensagens novas e salve suas preferências.</p></article><article class="feature"><div class="icon">⌘</div><h3>Plugins beta</h3><p>O servidor pode carregar dados RPG, XP de chat e fila de música por arquivos JavaScript.</p></article></div></section>
-      <section id="downloads" class="section"><div class="section-head"><p class="eyebrow">COMECE AGORA</p><h2>Baixe o VoiceUP para Windows.</h2><p>Escolha o Cliente para entrar em salas ou o Server Host para hospedar na sua rede. Para salas públicas entre redes, use este Cloud como endereço do servidor.</p></div><div class="download"><article class="download-card"><h3>VoiceUP Cliente</h3><p>Voz, vídeo, tela, chat, temas, perfis e salas.</p><a id="download-client-card" class="button" href="https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest" target="_blank" rel="noreferrer">Download no GitHub</a></article><article class="download-card"><h3>VoiceUP Server Host</h3><p>Hospede localmente, veja painel, métricas, logs e plugins.</p><a id="download-server" class="button alt" href="https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest" target="_blank" rel="noreferrer">Download no GitHub</a></article></div><p class="tiny">Os botões procuram automaticamente os instaladores da Release mais recente. Caso o GitHub esteja temporariamente indisponível, eles abrem a página oficial de Releases.</p></section>
-      <section id="como-usar" class="section"><div class="section-head"><p class="eyebrow">SALAS CLOUD</p><h2>Use este endereço dentro do Cliente.</h2><p>Em “Servidor host”, deixe <strong>https://voiceup.shardweb.app</strong> e escolha um código de sala. Seus amigos usam o mesmo endereço e o mesmo código para entrar.</p></div><div class="status-box"><i id="health-dot-2" class="online"></i><span><strong>Endereço do Cloud:</strong> https://voiceup.shardweb.app</span></div></section>
-    </main>
-    <footer class="footer"><span>© Goat Gank · VoiceUP</span><span><a href="https://github.com/HeitorDJAk47Gamer/VoiceUP/releases" target="_blank" rel="noreferrer">Releases</a> · <a href="/health" target="_blank" rel="noreferrer">Status técnico</a></span></footer>
-  </div>
-  <script>
-    const repo='HeitorDJAk47Gamer/VoiceUP', fallback='https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest';
-    const normalized=(value)=>String(value||'').toLowerCase().replace(/[._-]+/g,' ');
-    fetch('https://api.github.com/repos/'+repo+'/releases/latest').then(r=>r.ok?r.json():Promise.reject()).then(release=>{const find=(prefix)=>release.assets.find(a=>normalized(a.name).startsWith(prefix));const client=find('voiceup setup'),server=find('voiceupserver setup');if(client){document.querySelectorAll('#download-client,#download-client-card').forEach(a=>a.href=client.browser_download_url)}if(server)document.querySelector('#download-server').href=server.browser_download_url}).catch(()=>{});
-    fetch('/health').then(r=>r.ok?r.json():Promise.reject()).then(data=>{const names=(data.plugins||[]).map(p=>p.name||p.id).join(', ');document.querySelector('#server-status').textContent='Servidor Cloud online'+(names?' · Plugins: '+names:'');}).catch(()=>{document.querySelectorAll('#health-dot,#health-dot-2').forEach(i=>i.classList.add('offline'));document.querySelector('#server-status').textContent='Servidor de sinalização indisponível no momento.'});
-  </script>
+  <header class="site-header">
+    <div class="container nav-wrap">
+      <a class="brand" href="/" aria-label="Página inicial do VoiceUP"><img src="/assets/voiceup-logo.png" alt=""><span>VoiceUP</span></a>
+      <nav class="desktop-nav" aria-label="Navegação principal"><a href="#recursos">Recursos</a><a href="#plugins">Plugins</a><a href="#downloads">Downloads</a><a href="/status">Status</a><a href="/privacidade">Privacidade</a></nav>
+      <a class="nav-download" data-download="client" href="https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest">Baixar para Windows</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero container">
+      <div class="hero-copy">
+        <div class="release-badge"><span class="live-dot"></span><span>Versão pública</span><strong data-latest-version>consultando…</strong></div>
+        <p class="eyebrow">COMUNICAÇÃO SEM BARREIRAS</p>
+        <h1>Sua call.<br>Seu grupo.<br><em>Do seu jeito.</em></h1>
+        <p class="lead">Voz, vídeo, compartilhamento de tela, mensagens e salas privadas em um aplicativo leve. Sem assinatura e com um ServerHost que você pode controlar.</p>
+        <div class="actions">
+          <a class="button store-button" href="https://apps.microsoft.com/detail/9NSTDRJGWK60?hl=neutral&amp;gl=BR&amp;ocid=pdpshare" target="_blank" rel="noopener noreferrer" aria-label="Baixar o VoiceUP pela Microsoft Store">
+            <svg class="microsoft-logo" viewBox="0 0 28 28" aria-hidden="true"><path fill="currentColor" d="M7.2 7.4V6.2a6.8 6.8 0 0 1 13.6 0v1.2h2.3a2.4 2.4 0 0 1 2.4 2.4v14.8a2.4 2.4 0 0 1-2.4 2.4H4.9a2.4 2.4 0 0 1-2.4-2.4V9.8a2.4 2.4 0 0 1 2.4-2.4h2.3Zm2.2 0h9.2V6.2a4.6 4.6 0 0 0-9.2 0v1.2Zm-4.7 2.2v15.2h18.6V9.6H4.7Z"/><path fill="#f25022" d="M8.2 12.2h5v5h-5z"/><path fill="#7fba00" d="M14.8 12.2h5v5h-5z"/><path fill="#00a4ef" d="M8.2 18.8h5v5h-5z"/><path fill="#ffb900" d="M14.8 18.8h5v5h-5z"/></svg>
+            <span>Obter na Microsoft Store</span>
+          </a>
+          <a class="button secondary" data-download="client" href="https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest">Baixar instalador</a>
+          <a class="button secondary" href="/status">Ver status do Cloud</a>
+        </div>
+        <div class="hero-notes"><span><b>✓</b> Windows 10 e 11</span><span><b>✓</b> Cloud público</span><span><b>✓</b> ServerHost próprio</span></div>
+      </div>
+
+      <aside class="app-preview" aria-label="Prévia do VoiceUP">
+        <div class="preview-rail"><img src="/assets/voiceup-logo.png" alt=""><i></i><i></i><i></i></div>
+        <div class="preview-sidebar"><strong>VoiceUP</strong><small>CANAIS DE VOZ</small><span class="channel active"><b>◖</b> Geral <i>2</i></span><span class="channel"><b>◖</b> Jogando</span><span class="channel"><b>◖</b> Ausente</span><small>CANAIS DE TEXTO</small><span class="channel"><b>#</b> geral</span><span class="channel"><b>#</b> conversa</span></div>
+        <div class="preview-call"><div class="preview-top"><strong>Sala P2P em grupo</strong><span><i class="live-dot"></i> Cloud online</span></div><div class="preview-people"><div class="preview-person coral">H</div><div class="preview-person blue">R</div></div><strong>Conversa conectada</strong><small>Voz e vídeo seguem diretamente entre participantes.</small><div class="preview-controls"><i>⌁</i><i>◉</i><i>▣</i><i class="hangup">⌕</i></div></div>
+      </aside>
+    </section>
+
+    <section class="live-strip">
+      <div class="container live-grid">
+        <div><span id="cloud-dot" class="live-dot"></span><p><strong id="cloud-state">Verificando o Cloud</strong><small>Atualização automática</small></p></div>
+        <div><strong data-status-field="connections">—</strong><span>usuários conectados agora</span></div>
+        <div><strong data-status-field="rooms">—</strong><span>salas ativas</span></div>
+        <div><strong data-status-field="version">—</strong><span>versão do Cloud</span></div>
+      </div>
+    </section>
+
+    <section id="recursos" class="section container">
+      <div class="section-heading"><p class="eyebrow">FEITO PARA CONVERSAR</p><h2>Os recursos importantes,<br>sem limitar quem não paga.</h2><p>O VoiceUP foi pensado para grupos de amigos, jogos, estudos e comunidades pequenas.</p></div>
+      <div class="feature-grid">
+        <article class="feature"><span class="feature-icon">◉</span><h3>Voz com controle</h3><p>Mute, saída de áudio, supressão de ruído, dispositivos configuráveis e indicador de quem está falando.</p></article>
+        <article class="feature"><span class="feature-icon">▣</span><h3>Vídeo e transmissão</h3><p>Câmera e compartilhamento de telas ou janelas, com qualidades selecionáveis e visualização em tela cheia.</p></article>
+        <article class="feature"><span class="feature-icon">#</span><h3>Canais e mensagens</h3><p>Canais de voz e texto, mensagens não lidas, digitação, edição, perfis e preferências locais.</p></article>
+        <article class="feature"><span class="feature-icon">⌁</span><h3>Cloud ou ServerHost</h3><p>Use o Cloud público entre redes ou execute seu próprio host, com painel, moderação, métricas e plugins.</p></article>
+        <article class="feature"><span class="feature-icon">◇</span><h3>Temas completos</h3><p>Escolha temas claros e escuros que alteram de forma consistente toda a interface do aplicativo.</p></article>
+        <article class="feature"><span class="feature-icon">◎</span><h3>Conexão P2P</h3><p>O servidor coordena os participantes; a mídia utiliza WebRTC diretamente sempre que a rede permite.</p></article>
+      </div>
+    </section>
+
+    <section id="plugins" class="section plugins-section">
+      <div class="container">
+        <div class="section-heading"><p class="eyebrow">EXTENDA SEU SERVERHOST</p><h2>Plugins no servidor,<br>controle nas mãos do host.</h2><p>Baixe os três plugins oficiais ou use a API beta para criar comandos, bots e sistemas próprios. Participantes não precisam instalar nada.</p></div>
+        <div class="plugin-grid">
+          <article class="plugin-card"><span class="plugin-symbol dice">D20</span><div><small>JOGOS E RPG</small><h3>Dados RPG</h3><p>Rola <code>d20</code>, <code>2d6+3</code> e outras expressões diretamente no chat, com limites definidos pelo host.</p></div><a class="button secondary" href="/downloads/plugins/dados" download>Baixar dados.js</a></article>
+          <article class="plugin-card"><span class="plugin-symbol music">♪</span><div><small>ÁUDIO LOCAL</small><h3>Music Bot</h3><p>Reproduz músicas da pasta <code>music</code>, gerencia filas e mantém até três bots em calls diferentes.</p></div><a class="button secondary" href="/downloads/plugins/musica" download>Baixar musica.js</a></article>
+          <article class="plugin-card"><span class="plugin-symbol xp">XP</span><div><small>COMUNIDADE</small><h3>XP de Chat</h3><p>Contabiliza pontos persistentes, níveis e um ranking Top 5 configurável pelo painel do ServerHost.</p></div><a class="button secondary" href="/downloads/plugins/xp-chat" download>Baixar xp-chat.js</a></article>
+        </div>
+        <div class="plugin-install">
+          <div><p class="eyebrow">INSTALAÇÃO EM CINCO PASSOS</p><h3>Do download ao primeiro comando.</h3><p>Plugins rodam no servidor. Instale apenas arquivos confiáveis e teste antes em um ServerHost separado.</p><a class="button primary" href="/plugins">Abrir guia da API de Plugins</a></div>
+          <ol><li><b>1</b><span>Baixe o arquivo <code>.js</code>.</span></li><li><b>2</b><span>No ServerHost, abra <strong>Plugins</strong>.</span></li><li><b>3</b><span>Clique em <strong>Abrir pasta de plugins</strong>.</span></li><li><b>4</b><span>Copie o arquivo diretamente para a pasta.</span></li><li><b>5</b><span>Use <strong>Recarregar plugins</strong> e configure o Toggle Switch.</span></li></ol>
+        </div>
+      </div>
+    </section>
+
+    <section id="downloads" class="section downloads-section">
+      <div class="container"><div class="section-heading"><p class="eyebrow">ESCOLHA SUA VERSÃO</p><h2>Cliente para conversar.<br>ServerHost para controlar.</h2></div>
+        <div class="download-grid">
+          <article class="download-card featured"><span>PARA TODOS</span><h3>VoiceUP Cliente</h3><p>Entre no Cloud público, em ServerHosts ou faça conexões diretas. Inclui voz, vídeo, tela, chat, temas e perfil.</p><ul><li>Windows 10/11</li><li>Atualização pelo aplicativo</li><li>Sem mensalidade</li></ul><div class="download-actions"><a class="button store-button" href="https://apps.microsoft.com/detail/9NSTDRJGWK60?hl=neutral&amp;gl=BR&amp;ocid=pdpshare" target="_blank" rel="noopener noreferrer" aria-label="Baixar o VoiceUP pela Microsoft Store"><svg class="microsoft-logo" viewBox="0 0 28 28" aria-hidden="true"><path fill="currentColor" d="M7.2 7.4V6.2a6.8 6.8 0 0 1 13.6 0v1.2h2.3a2.4 2.4 0 0 1 2.4 2.4v14.8a2.4 2.4 0 0 1-2.4 2.4H4.9a2.4 2.4 0 0 1-2.4-2.4V9.8a2.4 2.4 0 0 1 2.4-2.4h2.3Zm2.2 0h9.2V6.2a4.6 4.6 0 0 0-9.2 0v1.2Zm-4.7 2.2v15.2h18.6V9.6H4.7Z"/><path fill="#f25022" d="M8.2 12.2h5v5h-5z"/><path fill="#7fba00" d="M14.8 12.2h5v5h-5z"/><path fill="#00a4ef" d="M8.2 18.8h5v5h-5z"/><path fill="#ffb900" d="M14.8 18.8h5v5h-5z"/></svg><span>Obter na Microsoft Store</span></a><a class="button secondary" data-download="client" href="https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest">Baixar instalador <b data-latest-version>mais recente</b></a></div></article>
+          <article class="download-card"><span>PARA ADMINISTRADORES</span><h3>VoiceUP ServerHost</h3><p>Hospede salas em seu computador e gerencie participantes, banimentos, plugins, logs e desempenho.</p><ul><li>Painel responsivo</li><li>Controle pela bandeja</li><li>Plugins no servidor</li></ul><a class="button secondary" data-download="server" href="https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest">Baixar ServerHost</a></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section container cloud-guide">
+      <div><p class="eyebrow">ENTRE DE QUALQUER REDE</p><h2>O Cloud já vem configurado.</h2><p>No Cliente, use <code>https://voiceup.shardweb.app</code>, escolha um código de sala e compartilhe o mesmo código com seus amigos.</p><div class="actions"><button id="copy-cloud" class="button primary" type="button">Copiar endereço</button><a class="button secondary" href="/status">Abrir status</a></div></div>
+      <div class="steps"><span><b>1</b><i>Abra o Cliente</i></span><span><b>2</b><i>Escolha um código</i></span><span><b>3</b><i>Entre em um canal</i></span></div>
+    </section>
+  </main>
+
+  <footer class="site-footer"><div class="container footer-grid"><div class="brand-column"><a class="brand" href="/"><img src="/assets/voiceup-logo.png" alt=""><span>VoiceUP</span></a><p>Um projeto Goat Gank.</p></div><div><strong>Produto</strong><a href="#recursos">Recursos</a><a href="#plugins">Plugins</a><a href="#downloads">Downloads</a><a href="/status">Status</a></div><div><strong>Legal</strong><a href="/privacidade">Política de Privacidade</a><a href="/termos">Termos de Uso</a></div><div><strong>Projeto</strong><a href="/plugins">API de Plugins</a><a href="https://github.com/HeitorDJAk47Gamer/VoiceUP" target="_blank" rel="noreferrer">GitHub</a><a href="https://github.com/HeitorDJAk47Gamer/VoiceUP/releases" target="_blank" rel="noreferrer">Releases</a></div></div><div class="container footer-bottom"><span>© 2026 Goat Gank · VoiceUP</span><span>Comunicação direta, sem assinatura.</span></div></footer>
+  <script src="/site.js" defer></script>
 </body>
 </html>

@@ -1,8 +1,8 @@
 {
   "name": "voiceup-server-cloud",
-  "version": "1.0.25",
+  "version": "1.1.0",
   "private": true,
-  "description": "Servidor de sinalização VoiceUP para ShardCloud",
+  "description": "Servidor de sinalização VoiceUP para hospedagem Cloud",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"

@@ -3,4 +3,5 @@ DESCRIPTION=Servidor de sinalização para salas VoiceUP
 MAIN=index.js
 LANGUAGE=node
 MEMORY=512
+SUBDOMAIN=voiceup
 VERSION=recommended
