@@ -9,6 +9,7 @@
     "start": "electron .",
     "dev": "electron .",
     "dist": "electron-builder --win nsis",
+    "dist:store": "electron-builder --win appx --publish never",
     "dist:server": "electron-builder --win nsis --config.appId=com.goatgank.voiceup.server --config.extraMetadata.main=server-host-main.js --config.productName=VoiceUPServer --config.directories.output=release-server"
   },
   "dependencies": {
@@ -46,6 +47,14 @@
       "target": "nsis",
       "icon": "assets/voiceup-icon.ico",
       "executableName": "VoiceUP"
+    },
+    "appx": {
+      "identityName": "HeitorDJAk47.VoiceUP",
+      "publisher": "CN=B428B5E2-45D4-4626-A717-5C3180001375",
+      "publisherDisplayName": "HeitorDJAk47",
+      "applicationId": "VoiceUP",
+      "displayName": "VoiceUP",
+      "backgroundColor": "transparent"
     },
     "nsis": {
       "oneClick": false,
