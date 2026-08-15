@@ -10,8 +10,8 @@ const botFor = (key, maxBots) => {
 };
 
 module.exports = {
-  id: 'musica', name: 'Music Bot local', version: 'beta.5', icon: ICON,
-  description: 'Até três bots independentes transmitem arquivos da pasta music em calls diferentes.',
+  id: 'musica', name: 'Music Bot local', version: 'beta.6', icon: ICON,
+  description: 'Até três bots independentes transmitem arquivos da pasta music em calls diferentes com !m.',
   settings: [
     { key: 'avatar1', label: 'Foto do Music Bot 1', description: 'Avatar individual do primeiro bot.', type: 'image', default: '' },
     { key: 'avatar2', label: 'Foto do Music Bot 2', description: 'Avatar individual do segundo bot.', type: 'image', default: '' },
@@ -22,7 +22,7 @@ module.exports = {
 
   onTextMessage({ text, room, textChannel, voiceChannel, user, api, plugin, serverIsCloud }) {
     const command = String(text).trim();
-    if (!/^!music\b/i.test(command)) return;
+    if (!/^!(?:m|music)\b/i.test(command)) return;
     const [, action = 'help', ...parts] = command.split(/\s+/); const requested = parts.join(' ').trim();
     const key = keyFor(room, voiceChannel); const queue = queues.get(key) || [];
     const configuredAvatar = (botId = 1) => api.settings[`avatar${botId}`] || api.settings.botAvatar || ICON;
@@ -37,7 +37,7 @@ module.exports = {
       say(`Music Bot ${botId} entrou em ${voiceChannel || 'Geral'} e iniciou: ${track}`, botId);
     };
     const commandName = action.toLowerCase();
-    if (commandName === 'help') return say('Use: !music list, !music play <nome>, !music queue, !music skip ou !music stop. Há até 3 bots para calls diferentes.');
+    if (commandName === 'help') return say('Use: !m list, !m play <nome>, !m queue, !m skip ou !m stop. O comando !music continua como atalho compatível. Há até 3 bots para calls diferentes.');
     if (commandName === 'list') return say(tracks.length ? `Músicas: ${tracks.join(' | ')}` : 'A pasta music está vazia. Adicione áudio no Server Host e reinicie o servidor.');
     if (commandName === 'queue') return say(queue.length ? `Fila (${queue.length}): ${queue.map((track, index) => `${index + 1}. ${track}`).join(' | ')}` : 'A fila está vazia.');
     if (commandName === 'stop') {
@@ -50,9 +50,9 @@ module.exports = {
       if (!next) { const botId = assignments.get(key); assignments.delete(key); if (!serverIsCloud && botId) api.botCommand(room, { action: 'stop', botId, room, voiceChannel, disconnect: true }); return say('Não há outra música na fila. O bot saiu da call.'); }
       play(next); return;
     }
-    if (commandName !== 'play' || !requested) return say('Use: !music play <parte do nome do arquivo>. Veja os nomes com !music list.');
+    if (commandName !== 'play' || !requested) return say('Use: !m play <parte do nome do arquivo>. Veja os nomes com !m list.');
     if (!voiceChannel || voiceChannel === '__lobby__') return say('Entre em uma call antes de chamar o Music Bot.');
-    const track = findTrack(); if (!track) return say('Não encontrei essa música. Use !music list para ver os arquivos disponíveis.');
+    const track = findTrack(); if (!track) return say('Não encontrei essa música. Use !m list para ver os arquivos disponíveis.');
     queue.push(track); queues.set(key, queue); if (queue.length === 1) play(track); else say(`${track} foi adicionada à fila (${queue.length} itens).`);
   },
 

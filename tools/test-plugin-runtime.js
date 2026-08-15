@@ -18,12 +18,12 @@ const { loadPlugins } = require('../plugin-runtime');
   assert(list.every((plugin) => plugin.schema.some((field) => field.key === 'botAvatar' && field.type === 'image')));
 
   const send = (text, room = 'sala', voiceChannel = 'Geral', id = 'u1', name = 'Heitor') => runtime.onTextMessage({ text, room, voiceChannel, textChannel: 'geral', user: { id, clientId: id, name }, serverIsCloud: false });
-  await send('2d6 + 2');
-  assert(messages.some((message) => message.pluginId === 'dados' && /rolou 2d6/.test(message.text)));
+  await send('2d6 + d20');
+  assert(messages.some((message) => message.pluginId === 'dados' && /rolou 2d6 \+ d20/.test(message.text) && /d20 \[/.test(message.text)));
 
   await send('uma mensagem que vale xp');
   await send('!xp');
-  await send('!rank');
+  await send('!xp ranking');
   assert(messages.some((message) => message.pluginId === 'xp-chat' && /total \d+/.test(message.text)));
   assert(messages.some((message) => message.pluginId === 'xp-chat' && /🥇/.test(message.text)));
   let xpPlugin = runtime.list().find((plugin) => plugin.id === 'xp-chat');
@@ -33,10 +33,18 @@ const { loadPlugins } = require('../plugin-runtime');
   xpPlugin = runtime.list().find((plugin) => plugin.id === 'xp-chat');
   assert.equal(xpPlugin.adminState.users[0].totalXp, 450);
 
+  result = await runtime.configure('xp-chat', { settings: { minGain: 12, maxGain: 12, cooldownSeconds: 0 } });
+  assert(result.ok);
+  await send('mensagem com ganho fixo', 'sala', 'Geral', 'programa-unico-42', 'Rotieh');
+  xpPlugin = runtime.list().find((plugin) => plugin.id === 'xp-chat');
+  const persistedProfile = xpPlugin.adminState.users.find((entry) => entry.id === 'programa-unico-42');
+  assert.equal(persistedProfile.totalXp, 12);
+  assert.equal(persistedProfile.programId, 'programa-unico-42');
+
   const customBotAvatar = list.find((plugin) => plugin.id === 'musica').icon;
   result = await runtime.configure('musica', { settings: { avatar1: customBotAvatar } });
   assert(result.ok);
-  await send('!music play alpha', 'sala1', 'Geral');
+  await send('!m play alpha', 'sala1', 'Geral');
   await send('!music play alpha', 'sala2', 'Jogando');
   await send('!music play alpha', 'sala3', 'Ausente');
   assert.deepEqual(events.filter((event) => event.payload.action === 'play').map((event) => event.payload.botId), [1, 2, 3]);

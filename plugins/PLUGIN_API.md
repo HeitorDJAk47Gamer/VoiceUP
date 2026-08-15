@@ -27,7 +27,7 @@ async onTextMessage({
   room,          // código da sala/servidor
   textChannel,   // canal de texto atual
   voiceChannel,  // call atual ou vazio
-  user,          // { id, clientId, name, color }
+  user,          // { id, clientId, name, color }; clientId é o ID persistente do programa
   serverIsCloud, // true no projeto Cloud
   plugin,        // { id, name, icon }
   api

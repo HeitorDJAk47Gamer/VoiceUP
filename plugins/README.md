@@ -25,13 +25,15 @@ persistente antes de depender desses dados.
 
 ## Plugins oficiais incluídos
 
-- **Dados RPG (`dados.js`)** — reconhece `d20`, `2d6+3` e expressões
-  semelhantes. O host define limites de dados e faces.
+- **Dados RPG (`dados.js`)** — reconhece equações como `d20`, `2d6 + d20`,
+  `2d6+3` e `4d8 - 1`. O host define limites de dados, faces e modificadores.
 - **Music Bot (`musica.js`)** — reproduz arquivos da pasta `music` no
-  ServerHost. Comandos: `!music list`, `!music play <nome>`, `!music queue`,
-  `!music skip` e `!music stop`. Suporta três calls simultâneas.
+  ServerHost. Comandos: `!m list`, `!m play <nome>`, `!m queue`, `!m skip` e
+  `!m stop`. O antigo `!music` continua compatível. Suporta três calls simultâneas.
 - **XP de Chat (`xp-chat.js`)** — concede XP persistente, responde a `!xp` e
-  exibe o Top 5 com `!rank`, `!ranking` ou `!top`.
+  exibe o Top 5 com `!rank`, `!ranking`, `!top` ou `!xp ranking`. O host
+  escolhe o XP mínimo e máximo por mensagem; a pontuação é associada ao ID
+  persistente do programa, e não ao apelido do usuário.
 
 ## Criando seu plugin
 
