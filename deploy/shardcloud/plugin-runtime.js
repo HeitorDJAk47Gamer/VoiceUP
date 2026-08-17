@@ -31,17 +31,21 @@ function loadPlugins({ directories = [], addLog = () => {}, emitSystemMessage, e
     if (!record.data || typeof record.data !== 'object') record.data = {};
     return record;
   };
-  const normalizeSchema = (plugin) => (Array.isArray(plugin.settings) ? plugin.settings : []).filter((field) => field && /^[a-z][a-z0-9_-]{1,39}$/i.test(field.key)).slice(0, 24).map((field) => ({
+  const normalizeSchema = (plugin) => {
+    const declared = Array.isArray(plugin.settings) ? [...plugin.settings] : [];
+    if (!declared.some((field) => field?.key === 'botAvatar')) declared.unshift({ key: 'botAvatar', label: 'Foto do bot', description: 'Imagem usada pelo bot nas mensagens e, quando aplicável, na call.', type: 'image', default: '' });
+    return declared.filter((field) => field && /^[a-z][a-z0-9_-]{1,39}$/i.test(field.key)).slice(0, 24).map((field) => ({
     key: field.key,
     label: safeText(field.label || field.key, 56),
     description: safeText(field.description || '', 120),
-    type: ['number', 'range', 'boolean', 'select', 'text'].includes(field.type) ? field.type : 'text',
+    type: ['number', 'range', 'boolean', 'select', 'text', 'image'].includes(field.type) ? field.type : 'text',
     default: field.default,
     min: Number.isFinite(Number(field.min)) ? Number(field.min) : undefined,
     max: Number.isFinite(Number(field.max)) ? Number(field.max) : undefined,
     step: Number.isFinite(Number(field.step)) ? Number(field.step) : undefined,
     options: Array.isArray(field.options) ? field.options.slice(0, 20).map((option) => typeof option === 'object' ? { value: safeText(option.value, 40), label: safeText(option.label || option.value, 50) } : { value: safeText(option, 40), label: safeText(option, 50) }) : []
-  }));
+    }));
+  };
   const settingValue = (field, value) => {
     const candidate = value === undefined ? field.default : value;
     if (field.type === 'boolean') return candidate === true || candidate === 'true';
@@ -56,6 +60,7 @@ function loadPlugins({ directories = [], addLog = () => {}, emitSystemMessage, e
       const valueText = safeText(candidate, 40);
       return field.options.some((option) => option.value === valueText) ? valueText : safeText(field.default ?? field.options[0]?.value, 40);
     }
+    if (field.type === 'image') return safeIcon(candidate);
     return safeText(candidate, 120);
   };
 
@@ -92,10 +97,10 @@ function loadPlugins({ directories = [], addLog = () => {}, emitSystemMessage, e
         text: safeText(text),
         name: safeText(options.name || entry.name || 'VoiceUP Bot', 24) || 'VoiceUP Bot',
         color: options.color || '#a879ff',
-        avatar: safeIcon(options.avatar || entry.icon),
+        avatar: safeIcon(options.avatarSetting || record.settings.botAvatar || options.avatar || entry.icon),
         pluginId: entry.id
       }),
-      botCommand: (room, payload = {}) => emitPluginEvent({ room, event: 'music-bot', payload: { ...payload, pluginId: entry.id }, pluginId: entry.id }),
+      botCommand: (room, payload = {}) => emitPluginEvent({ room, event: 'music-bot', payload: { ...payload, avatar: safeIcon(payload.avatar || record.settings.botAvatar || entry.icon), pluginId: entry.id }, pluginId: entry.id }),
       media: { list: () => (typeof media.list === 'function' ? media.list() : []), url: (name) => (typeof media.url === 'function' ? media.url(name) : '') },
       settings: clone(record.settings, {}),
       storage: {

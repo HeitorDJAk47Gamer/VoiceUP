@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, desktopCapturer, ipcMain, Tray, Menu, net: electronNet } = require('electron');
+const { app, BrowserWindow, shell, desktopCapturer, ipcMain, Tray, Menu, globalShortcut, net: electronNet } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const dns = require('node:dns').promises;
@@ -12,6 +12,7 @@ let closePromptOpen = false;
 let youtubeHeadersConfigured = false;
 let selectedCapture = { id: '', includeAudio: false };
 let windowSettings = { closeBehavior: 'tray' };
+const registeredShortcuts = new Map();
 const APP_WEB_IDENTITY = 'https://voiceup.shardweb.app/';
 const LINK_PREVIEW_LIMIT = 640 * 1024;
 const BACKGROUND_CAPTURE_TITLES = new Set([
@@ -123,6 +124,28 @@ function revealWindow() {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show(); mainWindow.focus();
 }
+function clearGlobalShortcuts() {
+  for (const accelerator of registeredShortcuts.values()) {
+    try { globalShortcut.unregister(accelerator); } catch { /* already released */ }
+  }
+  registeredShortcuts.clear();
+}
+function configureGlobalShortcuts(shortcuts = {}) {
+  clearGlobalShortcuts();
+  const accepted = {};
+  for (const [action, rawAccelerator] of Object.entries(shortcuts || {})) {
+    const accelerator = String(rawAccelerator || '').trim();
+    if (!accelerator || accelerator.length > 64 || !/^[\w+\- ]+$/i.test(accelerator)) continue;
+    try {
+      const registered = globalShortcut.register(accelerator, () => {
+        if (['settings', 'screen'].includes(action)) revealWindow();
+        mainWindow?.webContents?.send('shortcut:action', action);
+      });
+      if (registered) { registeredShortcuts.set(action, accelerator); accepted[action] = accelerator; }
+    } catch { /* invalid or reserved by Windows */ }
+  }
+  return accepted;
+}
 function createTray() {
   if (tray) return;
   tray = new Tray(path.join(__dirname, 'assets', 'voiceup-icon.ico'));
@@ -174,6 +197,8 @@ ipcMain.handle('link:preview', async (_event, raw) => { try { return await fetch
 ipcMain.handle('window:set-video-fullscreen', (_event, enabled) => { mainWindow?.setFullScreen(Boolean(enabled)); return Boolean(enabled); });
 ipcMain.handle('window:settings', () => windowSettings);
 ipcMain.handle('window:save-settings', (_event, next = {}) => { const allowed = ['tray', 'ask', 'quit']; windowSettings.closeBehavior = allowed.includes(next.closeBehavior) ? next.closeBehavior : 'tray'; saveSettings(); return windowSettings; });
+ipcMain.handle('shortcuts:configure', (_event, shortcuts = {}) => configureGlobalShortcuts(shortcuts));
+ipcMain.handle('shortcuts:clear', () => { clearGlobalShortcuts(); return true; });
 ipcMain.handle('window:close-choice', (_event, choice) => {
   if (!closePromptOpen) return false;
   closePromptOpen = false;
@@ -184,4 +209,4 @@ ipcMain.handle('window:close-choice', (_event, choice) => {
 app.whenReady().then(createWindow);
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' && (isQuitting || windowSettings.closeBehavior === 'quit')) app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); else revealWindow(); });
-app.on('before-quit', () => { isQuitting = true; });
+app.on('before-quit', () => { isQuitting = true; clearGlobalShortcuts(); });

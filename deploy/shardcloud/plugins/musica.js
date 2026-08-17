@@ -13,6 +13,9 @@ module.exports = {
   id: 'musica', name: 'Music Bot local', version: 'beta.6', icon: ICON,
   description: 'Até três bots independentes transmitem arquivos da pasta music em calls diferentes com !m.',
   settings: [
+    { key: 'avatar1', label: 'Foto do Music Bot 1', description: 'Avatar individual do primeiro bot.', type: 'image', default: '' },
+    { key: 'avatar2', label: 'Foto do Music Bot 2', description: 'Avatar individual do segundo bot.', type: 'image', default: '' },
+    { key: 'avatar3', label: 'Foto do Music Bot 3', description: 'Avatar individual do terceiro bot.', type: 'image', default: '' },
     { key: 'maxBots', label: 'Quantidade de Music Bots', description: 'Instâncias simultâneas disponíveis para calls diferentes.', type: 'range', default: 3, min: 1, max: 3, step: 1 },
     { key: 'volume', label: 'Volume padrão dos bots', description: 'Volume usado na reprodução local do arquivo.', type: 'range', default: 72, min: 0, max: 100, step: 1 }
   ],
@@ -22,15 +25,16 @@ module.exports = {
     if (!/^!(?:m|music)\b/i.test(command)) return;
     const [, action = 'help', ...parts] = command.split(/\s+/); const requested = parts.join(' ').trim();
     const key = keyFor(room, voiceChannel); const queue = queues.get(key) || [];
-    const say = (message) => api.systemMessage(room, textChannel, message, { name: 'Music Bot', color: '#47a7f5', avatar: ICON, pluginId: plugin.id });
+    const configuredAvatar = (botId = 1) => api.settings[`avatar${botId}`] || api.settings.botAvatar || ICON;
+    const say = (message, botId = 0) => api.systemMessage(room, textChannel, message, { name: botId ? `Music Bot ${botId}` : 'Music Bot', color: '#47a7f5', avatarSetting: configuredAvatar(botId || 1), pluginId: plugin.id });
     const tracks = api.media.list(); const lowered = requested.toLocaleLowerCase('pt-BR');
     const findTrack = () => tracks.find((track) => track.toLocaleLowerCase('pt-BR') === lowered) || tracks.find((track) => track.toLocaleLowerCase('pt-BR').includes(lowered));
     const play = (track) => {
       if (serverIsCloud) return say('O Music Bot de voz precisa de um processo de áudio separado nesta hospedagem Cloud.');
       const botId = botFor(key, api.settings.maxBots);
       if (!botId) return say(`Os ${api.settings.maxBots} Music Bots já estão ocupados em outras calls.`);
-      api.botCommand(room, { action: 'play', botId, botName: `Music Bot ${botId}`, avatar: ICON, fileName: track, room, voiceChannel, title: track, volume: api.settings.volume / 100 });
-      say(`Music Bot ${botId} entrou em ${voiceChannel || 'Geral'} e iniciou: ${track}`);
+      api.botCommand(room, { action: 'play', botId, botName: `Music Bot ${botId}`, avatar: configuredAvatar(botId), fileName: track, room, voiceChannel, title: track, volume: api.settings.volume / 100 });
+      say(`Music Bot ${botId} entrou em ${voiceChannel || 'Geral'} e iniciou: ${track}`, botId);
     };
     const commandName = action.toLowerCase();
     if (commandName === 'help') return say('Use: !m list, !m play <nome>, !m queue, !m skip ou !m stop. O comando !music continua como atalho compatível. Há até 3 bots para calls diferentes.');

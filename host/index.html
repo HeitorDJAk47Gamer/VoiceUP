@@ -29,7 +29,7 @@
       </nav>
 
       <div class="sidebar-footer">
-        <span>VoiceUP Server</span><strong id="app-version">1.1.0</strong>
+        <span>VoiceUP Server</span><strong id="app-version">1.1.1</strong>
       </div>
     </aside>
 
@@ -45,7 +45,7 @@
       <div id="app-dialog" class="app-dialog hidden" role="alertdialog" aria-modal="true" aria-labelledby="app-dialog-title" aria-describedby="app-dialog-message">
         <section class="app-dialog-card">
           <div class="app-dialog-icon" aria-hidden="true">?</div>
-          <div class="app-dialog-copy"><p class="eyebrow">VOICEUP SERVER</p><h2 id="app-dialog-title">Confirmar ação</h2><p id="app-dialog-message"></p><small id="app-dialog-detail"></small></div>
+          <div class="app-dialog-copy"><p class="eyebrow">VOICEUP SERVER</p><h2 id="app-dialog-title">Confirmar ação</h2><p id="app-dialog-message"></p><small id="app-dialog-detail"></small><div id="app-dialog-fields" class="app-dialog-fields hidden"></div></div>
           <div id="app-dialog-actions" class="app-dialog-actions"></div>
         </section>
       </div>
@@ -96,11 +96,17 @@
         <div class="room-manager-grid">
           <article class="panel room-editor">
             <div class="panel-heading"><div><p class="eyebrow">EDITOR</p><h2 id="room-editor-title">Criar sala</h2></div><button id="clear-room-form" class="button secondary" type="button">Nova</button></div>
+            <div class="template-tools">
+              <div><p class="eyebrow">MODELOS</p><strong>Comece com uma estrutura pronta</strong><small>Os modelos apenas preenchem o editor; nada é salvo até clicar em Salvar sala.</small></div>
+              <span><select id="room-template"><option value="community">Comunidade</option><option value="gaming">Jogos</option><option value="rpg">RPG</option><option value="study">Estudo e trabalho</option></select><button id="apply-room-template" class="button secondary" type="button">Aplicar</button></span>
+              <label class="discord-template"><span>Modelo Discord</span><small>Cole código, link discord.new ou JSON exportado.</small><textarea id="discord-template-source" rows="2" placeholder="discord.new/codigo ou JSON"></textarea><button id="import-discord-template" class="button secondary" type="button">Importar</button><button id="export-discord-template" class="button secondary" type="button">Copiar JSON</button></label>
+            </div>
             <input id="room-previous-id" type="hidden">
             <label><span>Nome da sala</span><small>Nome visível no painel e nos Clients compatíveis.</small><input id="room-name" maxlength="48" placeholder="Ex.: Goat Gank"></label>
             <label><span>Código para entrar</span><small>Use letras, números, hífen ou underline.</small><input id="room-id" maxlength="48" placeholder="Ex.: ggk"></label>
-            <label><span>Canais de voz</span><small>Um nome por linha.</small><textarea id="room-voice-channels" rows="5" placeholder="Geral&#10;Jogando&#10;Ausente"></textarea></label>
-            <label><span>Canais de texto</span><small>Um nome por linha.</small><textarea id="room-text-channels" rows="5" placeholder="geral&#10;conversa&#10;avisos"></textarea></label>
+            <textarea id="room-voice-channels" class="hidden" aria-hidden="true"></textarea><textarea id="room-text-channels" class="hidden" aria-hidden="true"></textarea>
+            <section class="channel-designer"><header><span><b>Canais de voz</b><small>Limite, bitrate, região e acesso de cada call.</small></span><button class="button secondary" type="button" data-add-channel="voice">+ Canal de voz</button></header><div id="voice-channel-editor" class="channel-editor-list"></div></section>
+            <section class="channel-designer"><header><span><b>Canais de texto</b><small>Tópico, modo lento e permissão de escrita.</small></span><button class="button secondary" type="button" data-add-channel="text">+ Canal de texto</button></header><div id="text-channel-editor" class="channel-editor-list"></div></section>
             <div class="room-editor-actions"><button id="save-room" class="button primary" type="button">Salvar sala</button></div>
           </article>
           <article class="panel">
@@ -121,8 +127,10 @@
       </section>
 
       <section class="view" data-page="activity">
-        <div class="section-intro"><div><p class="eyebrow">DIAGNÓSTICO</p><h2>Atividade do servidor</h2><p>Acompanhe desempenho, sinais WebRTC e eventos recentes.</p></div><label class="select-label">Exibir<select id="metric-select"><option value="participants">Participantes</option><option value="cpuPercent">CPU (%)</option><option value="memoryMb">Memória (MB)</option><option value="averagePing">Ping (ms)</option><option value="signals">Sinais enviados</option></select></label></div>
+        <div class="section-intro"><div><p class="eyebrow">DIAGNÓSTICO</p><h2>Atividade do servidor</h2><p>Acompanhe desempenho, sinais WebRTC, topologia P2P e banda reportada pelos Clients.</p></div><label class="select-label">Exibir<select id="metric-select"><option value="participants">Participantes</option><option value="cpuPercent">CPU (%)</option><option value="memoryMb">Memória (MB)</option><option value="averagePing">Ping (ms)</option><option value="signals">Sinais enviados</option><option value="inboundKbps">Banda recebida (Kbps)</option><option value="outboundKbps">Banda enviada (Kbps)</option></select></label></div>
+        <div class="bandwidth-grid"><article class="metric"><span>Recebimento P2P</span><strong id="bandwidth-in">0 Kbps</strong><small>somatório reportado</small></article><article class="metric"><span>Envio P2P</span><strong id="bandwidth-out">0 Kbps</strong><small>somatório reportado</small></article><article class="metric"><span>Telemetria</span><strong id="telemetry-clients">0/0</strong><small>Clients compatíveis</small></article></div>
         <article class="panel chart-panel"><canvas id="chart" class="chart"></canvas><div class="chart-footer"><span>60 amostras recentes</span><span id="chart-current">0</span></div></article>
+        <div class="diagnostics-grid"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">TOPOLOGIA</p><h2>Mapa de conexões P2P</h2></div><span id="p2p-edge-count" class="pill">0 conexões</span></div><div id="p2p-map" class="p2p-map"><div class="empty">Aguardando telemetria WebRTC…</div></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">WEBRTC</p><h2>Conexões detalhadas</h2></div></div><div id="webrtc-table" class="webrtc-table"><div class="empty">Clients atuais enviarão métricas a cada poucos segundos.</div></div></article></div>
         <article class="panel"><div class="panel-heading"><h2>Logs recentes</h2><span id="signals-summary" class="pill">0 sinais</span></div><div id="logs" class="log-list"><div class="empty">Nenhum evento ainda.</div></div></article>
       </section>
 
@@ -134,14 +142,20 @@
           <div class="settings-action"><span class="autosave-status">● Salvamento automático</span><button id="save-settings" class="button primary" type="button">Salvar configurações</button></div>
         </article>
         <article class="panel cluster-panel">
-          <div class="panel-heading"><div><p class="eyebrow">CLUSTER EXPERIMENTAL</p><h2>Dois ServerHosts</h2></div><span id="cluster-status" class="pill">Desativado</span></div>
-          <p class="helper cluster-explanation">O primário e o secundário sincronizam membros, canais, chat e sinais WebRTC. Cada pessoa pode usar o host mais próximo; a mídia continua P2P entre os participantes.</p>
+          <div class="panel-heading"><div><p class="eyebrow">CLUSTER E FAILOVER</p><h2>Dois ServerHosts coordenados</h2></div><span id="cluster-status" class="pill">Desativado</span></div>
+          <p class="helper cluster-explanation">Os hosts sincronizam membros, canais, banimentos, chat, sinais e telemetria. Clients novos podem ser enviados ao nó menos carregado e reconectam no alternativo; a mídia continua P2P.</p>
           <div class="cluster-form">
             <label><span>Modo</span><small>Escolha um primário e um secundário.</small><select id="cluster-mode"><option value="off">Desativado</option><option value="primary">Host primário</option><option value="secondary">Host secundário</option></select></label>
             <label id="cluster-primary-row"><span>Endereço do primário</span><small>Usado somente pelo host secundário.</small><input id="cluster-primary-url" type="url" placeholder="http://10.0.0.2:3000"></label>
+            <label><span>Endereço público deste host</span><small>URL/IP que os Clients realmente conseguem acessar.</small><input id="cluster-public-url" type="url" placeholder="https://host-2.exemplo.com"></label>
             <label><span>Chave de pareamento</span><small>Deve ser exatamente igual nos dois hosts. Não compartilhe publicamente.</small><span class="cluster-secret-field"><input id="cluster-secret" type="password" maxlength="128"><button id="toggle-cluster-secret" class="icon-button" type="button" title="Mostrar ou ocultar chave">◉</button><button class="icon-button" type="button" data-copy-target="cluster-secret" title="Copiar chave">⧉</button></span></label>
             <label><span>ID deste host</span><small>Gerado automaticamente e salvo neste computador.</small><input id="cluster-node-id" readonly></label>
+            <label><span>Capacidade declarada</span><small>Referência usada pelo balanceador; não altera o limite das calls.</small><input id="cluster-capacity" type="number" min="2" max="5000" value="100"></label>
+            <label><span>Peso deste host</span><small>1 = normal; 2 recebe aproximadamente o dobro da preferência.</small><input id="cluster-weight" type="number" min="0.1" max="10" step="0.1" value="1"></label>
+            <label><span>Failover automático</span><small>O secundário segue aceitando conexões quando perde o primário.</small><span class="switch"><input id="cluster-failover" type="checkbox" checked><i></i></span></label>
+            <label><span>Distribuição inteligente</span><small>Direciona Clients compatíveis ao host saudável com menor carga.</small><span class="switch"><input id="cluster-smart-distribution" type="checkbox" checked><i></i></span></label>
           </div>
+          <div id="cluster-nodes" class="cluster-nodes"><div class="empty">Ative o cluster para acompanhar os nós.</div></div>
           <div class="cluster-actions"><small>Aplicar reinicia a sinalização e desconecta temporariamente os participantes deste host.</small><button id="apply-cluster" class="button primary" type="button">Aplicar e reiniciar</button></div>
         </article>
         <article class="panel update-panel"><div><h2>Atualizações</h2><p id="update-status" class="helper">Consulte as versões oficiais publicadas no GitHub.</p></div><div class="update-actions"><button id="server-release-notes" class="button secondary" type="button">Ver novidades desta versão</button><button id="check-update" class="button secondary" type="button">Procurar atualizações</button></div></article>

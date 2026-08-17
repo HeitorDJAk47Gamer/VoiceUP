@@ -5,7 +5,13 @@
     const show = (name) => {
       panels.forEach((button) => button.classList.toggle('active', button.dataset.panel === name));
       document.querySelectorAll('.side-panel').forEach((panel) => panel.classList.toggle('active', panel.id === `${name}-panel`));
-      if (name === 'chat') document.querySelector('#chat-unread')?.classList.add('hidden');
+      if (name === 'chat') {
+        unreadChannels.delete(activeTextChannel);
+        mentionChannels.delete(activeTextChannel);
+        document.querySelector('#chat-unread')?.classList.add('hidden');
+        renderRoomChannels();
+        refreshChatUnreadIndicator();
+      }
     };
     panels.forEach((button) => button.addEventListener('click', () => show(button.dataset.panel)));
     const source = document.querySelector('#participants'); const clone = document.querySelector('#members-clone');
@@ -31,13 +37,102 @@ function currentVideoKind() { return screenStream ? 'screen' : cameraStream ? 'c
 const betaVideoRevision = { camera: 0, screen: 0 };
 const betaActiveVideoTrack = (kind = currentVideoKind()) => (kind === 'screen' ? screenStream : cameraStream)?.getVideoTracks?.()[0] || null;
 const betaVideoSender = (p, kind) => p?.[`${kind}Sender`] || (kind === 'camera' ? p?.videoSender : null);
+const betaVideoSlotCount = (participant) => participant?.pc?.getTransceivers?.()
+  .filter((item) => item?.receiver?.track?.kind === 'video' || item?.sender?.track?.kind === 'video').length || 0;
+const betaUsesLegacyVideoSlot = (participant) => participant?.singleVideoTransport === true || betaVideoSlotCount(participant) === 1;
 
-async function syncHostedVideoForPeer(p, kind = 'camera', track = betaActiveVideoTrack(kind)) {
+// Chromium negotiates a far more reliable bidirectional video m-line when a
+// live track already exists in the first offer.  A transceiver created only
+// with the string "video" can remain muted forever after a later replaceTrack
+// on some Electron/Windows builds. Keep one low-cost neutral track in each
+// camera/screen slot and swap only the source behind that stable transport.
+const betaPlaceholderVideos = new Map();
+function betaPlaceholderVideoTrack(kind = 'camera') {
+  const existing = betaPlaceholderVideos.get(kind);
+  if (existing?.track?.readyState === 'live') return existing.track;
+  const canvas = document.createElement('canvas');
+  canvas.width = 640; canvas.height = 360;
+  const context = canvas.getContext('2d', { alpha: false });
+  let tick = 0;
+  const paint = () => {
+    context.fillStyle = '#05070d'; context.fillRect(0, 0, canvas.width, canvas.height);
+    // One changing, nearly black pixel keeps a real encoded frame flowing at
+    // 1 fps without exposing anything or consuming meaningful CPU/bandwidth.
+    context.fillStyle = tick++ % 2 ? '#06080e' : '#05070d'; context.fillRect(0, 0, 1, 1);
+  };
+  paint();
+  const timer = setInterval(paint, 1000);
+  const stream = canvas.captureStream(1);
+  const track = stream.getVideoTracks()[0];
+  track.contentHint = 'detail';
+  betaPlaceholderVideos.set(kind, { canvas, stream, track, timer });
+  return track;
+}
+const betaTransportVideoTrack = (kind, realTrack = betaActiveVideoTrack(kind)) => realTrack || betaPlaceholderVideoTrack(kind);
+
+async function betaEncodedVideoFrames(sender) {
+  if (!sender?.getStats) return null;
+  try {
+    const reports = await sender.getStats();
+    let frames = null;
+    reports.forEach((report) => {
+      if (report.type !== 'outbound-rtp' || report.isRemote) return;
+      if (report.kind && report.kind !== 'video') return;
+      if (report.mediaType && report.mediaType !== 'video') return;
+      const value = Number(report.framesEncoded);
+      if (Number.isFinite(value)) frames = Math.max(frames ?? 0, value);
+    });
+    return frames;
+  } catch { return null; }
+}
+
+// replaceTrack resolves before the encoder necessarily emits the first frame
+// from the new source. Announcing the live during that tiny interval lets a
+// slow receiver display one or two frames from the neutral placeholder. Wait
+// for two newly encoded frames when Chromium exposes that counter; unsupported
+// drivers simply continue immediately.
+async function betaWaitForEncodedVideo(sender, minimumFrames = 2, timeoutMs = 650) {
+  const initial = await betaEncodedVideoFrames(sender);
+  if (initial === null) return false;
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    const current = await betaEncodedVideoFrames(sender);
+    if (current === null) return false;
+    if (current >= initial + minimumFrames) return true;
+  }
+  return false;
+}
+
+function setHostedOutgoingVideoTrack(p, kind, track) {
+  const stream = p?.[`${kind}OutgoingStream`];
+  if (!stream) return;
+  for (const current of stream.getVideoTracks()) stream.removeTrack(current);
+  if (track) stream.addTrack(track);
+}
+
+// Calls to replaceTrack on the same sender must be serialized.  Starting a
+// live, receiving a late data-channel open, and clicking "Assistir live" can
+// otherwise overlap and Chromium occasionally leaves the receiver muted.
+// This was especially visible when two people began a screen share in quick
+// succession: each side had a valid sender, but one of the concurrent swaps
+// won only halfway through.
+async function syncHostedVideoForPeerNow(p, kind = 'camera', track = betaActiveVideoTrack(kind), forceRefresh = false) {
   const sender = betaVideoSender(p, kind);
   if (!sender) return false;
   try {
-    await sender.replaceTrack(track);
-    if (track) await tuneVideoSender(sender, kind);
+    // Retrying a live must re-announce its state, but must *not* detach and
+    // reattach the exact same track. Electron/Chromium can briefly mute that
+    // receiver every time replaceTrack receives the same object, producing
+    // the visible flashing reported when two people stream at once.
+    const transportTrack = betaTransportVideoTrack(kind, track);
+    const needsTrackSwap = sender.track !== transportTrack;
+    if (needsTrackSwap) {
+      setHostedOutgoingVideoTrack(p, kind, transportTrack);
+      await sender.replaceTrack(transportTrack);
+      if (track) await tuneVideoSender(sender, kind);
+      if (track) await betaWaitForEncodedVideo(sender);
+    }
     if (p.channel?.readyState === 'open') {
       p.channel.send(JSON.stringify(track
         ? { type: 'video-on', description: kind, revision: betaVideoRevision[kind] }
@@ -48,6 +143,18 @@ async function syncHostedVideoForPeer(p, kind = 'camera', track = betaActiveVide
     if (hostedSocket?.connected) hostedSocket.emit('signal', { target: p.id, data: { videoState: { active: Boolean(track), description: kind, kind, revision: betaVideoRevision[kind] } } });
     return true;
   } catch { return false; }
+}
+
+function syncHostedVideoForPeer(p, kind = 'camera', track = betaActiveVideoTrack(kind), forceRefresh = false) {
+  if (!p || p.left) return Promise.resolve(false);
+  p.videoSyncQueues ||= {};
+  const previous = p.videoSyncQueues[kind] || Promise.resolve();
+  const queued = previous.catch(() => {}).then(() => syncHostedVideoForPeerNow(p, kind, track, forceRefresh));
+  p.videoSyncQueues[kind] = queued;
+  queued.finally(() => {
+    if (p.videoSyncQueues?.[kind] === queued) delete p.videoSyncQueues[kind];
+  }).catch(() => {});
+  return queued;
 }
 
 const scheduleHostedVideoSync = (p, kind = 'camera') => {
@@ -99,29 +206,124 @@ function attachHostedTrack(p, track, streams) {
   setTimeout(reveal, 900);
 }
 
-function makeHostedConnection(p) {
-  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }], iceCandidatePoolSize: 2 });
-  p.pc = pc;
+const hostedIncomingVideoKind = (p, transceiver, track) => {
+  if (transceiver === p?.screenTransceiver
+    || transceiver?.receiver === p?.screenReceiver
+    || track === p?.screenReceiver?.track) return 'screen';
+  if (transceiver === p?.cameraTransceiver
+    || transceiver?.receiver === p?.cameraReceiver
+    || track === p?.cameraReceiver?.track) return 'camera';
+  // The responder receives these m-lines before its sender/receiver fields are
+  // assigned. VoiceUP always offers camera first and screen second.
+  const negotiatedVideos = p?.pc?.getTransceivers?.().filter((item) => item.receiver?.track?.kind === 'video') || [];
+  const negotiatedIndex = negotiatedVideos.indexOf(transceiver);
+  if (negotiatedIndex === 1) return 'screen';
+  if (negotiatedIndex === 0) return 'camera';
+  // This fallback only applies to Chromium builds that omit the transceiver
+  // from ontrack. It uses the stream state announced by the broadcaster.
+  if (p?.videoExpectedKinds?.screen && !p?.videoStreams?.screen) return 'screen';
+  return 'camera';
+};
+
+function addHostedOfferMedia(p, pc) {
   const audioTrack = outgoingAudioTrack();
-  // Match the stream-associated sender used by 1.0.25 whenever the microphone
-  // is ready. The empty transceiver remains only as a timeout fallback.
   p.audioStream = new MediaStream(audioTrack ? [audioTrack] : []);
-  p.audioSender = audioTrack
-    ? pc.addTrack(audioTrack, p.audioStream)
-    : pc.addTransceiver('audio', { direction: 'sendrecv', streams: [p.audioStream] }).sender;
-  const cameraTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
-  const screenTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
+  const audioTransceiver = audioTrack
+    ? pc.addTransceiver(audioTrack, { direction: 'sendrecv', streams: [p.audioStream] })
+    : pc.addTransceiver('audio', { direction: 'sendrecv', streams: [p.audioStream] });
+  p.audioTransceiver = audioTransceiver; p.audioSender = audioTransceiver.sender; p.audioReceiver = audioTransceiver.receiver;
+
+  const cameraTrack = betaTransportVideoTrack('camera');
+  const screenTrack = betaTransportVideoTrack('screen');
+  p.cameraOutgoingStream = new MediaStream([cameraTrack]);
+  p.screenOutgoingStream = new MediaStream([screenTrack]);
+  const cameraTransceiver = pc.addTransceiver(cameraTrack, { direction: 'sendrecv', streams: [p.cameraOutgoingStream] });
+  const screenTransceiver = pc.addTransceiver(screenTrack, { direction: 'sendrecv', streams: [p.screenOutgoingStream] });
+  p.cameraTransceiver = cameraTransceiver; p.screenTransceiver = screenTransceiver;
   p.cameraSender = cameraTransceiver.sender; p.cameraReceiver = cameraTransceiver.receiver;
   p.screenSender = screenTransceiver.sender; p.screenReceiver = screenTransceiver.receiver;
   p.videoSender = p.cameraSender;
-  if (betaActiveVideoTrack('camera')) p.cameraSender.replaceTrack(betaActiveVideoTrack('camera')).catch(() => {});
-  if (betaActiveVideoTrack('screen')) p.screenSender.replaceTrack(betaActiveVideoTrack('screen')).catch(() => {});
-  pc.ontrack = ({ track, streams, transceiver }) => attachHostedTrack(p, track, streams, transceiver?.receiver === p.screenReceiver ? 'screen' : 'camera');
+}
+
+async function bindHostedAnswerMedia(p) {
+  const pc = p?.pc;
+  if (!pc) return;
+  const transceivers = pc.getTransceivers();
+  const audioTransceiver = transceivers.find((item) => item.receiver?.track?.kind === 'audio');
+  const videoTransceivers = transceivers.filter((item) => item.receiver?.track?.kind === 'video');
+  const cameraTransceiver = videoTransceivers[0];
+  const screenTransceiver = videoTransceivers[1];
+  const replacements = [];
+
+  if (audioTransceiver) {
+    const audioTrack = outgoingAudioTrack();
+    p.audioStream = new MediaStream(audioTrack ? [audioTrack] : []);
+    p.audioTransceiver = audioTransceiver; p.audioSender = audioTransceiver.sender; p.audioReceiver = audioTransceiver.receiver;
+    if (audioTransceiver.direction !== 'stopped') audioTransceiver.direction = 'sendrecv';
+    if (typeof audioTransceiver.sender.setStreams === 'function') audioTransceiver.sender.setStreams(p.audioStream);
+    replacements.push(audioTransceiver.sender.replaceTrack(audioTrack || null));
+  }
+
+  if (cameraTransceiver) {
+    const cameraTrack = betaTransportVideoTrack('camera');
+    p.cameraOutgoingStream = new MediaStream([cameraTrack]);
+    p.cameraTransceiver = cameraTransceiver; p.cameraSender = cameraTransceiver.sender; p.cameraReceiver = cameraTransceiver.receiver; p.videoSender = cameraTransceiver.sender;
+    if (cameraTransceiver.direction !== 'stopped') cameraTransceiver.direction = 'sendrecv';
+    if (typeof cameraTransceiver.sender.setStreams === 'function') cameraTransceiver.sender.setStreams(p.cameraOutgoingStream);
+    replacements.push(cameraTransceiver.sender.replaceTrack(cameraTrack));
+  }
+
+  if (screenTransceiver) {
+    const screenTrack = betaTransportVideoTrack('screen');
+    p.screenOutgoingStream = new MediaStream([screenTrack]);
+    p.screenTransceiver = screenTransceiver; p.screenSender = screenTransceiver.sender; p.screenReceiver = screenTransceiver.receiver;
+    if (screenTransceiver.direction !== 'stopped') screenTransceiver.direction = 'sendrecv';
+    if (typeof screenTransceiver.sender.setStreams === 'function') screenTransceiver.sender.setStreams(p.screenOutgoingStream);
+    replacements.push(screenTransceiver.sender.replaceTrack(screenTrack));
+  } else if (cameraTransceiver) {
+    // Older releases only offered one video transport. They retain camera OR
+    // screen compatibility; current releases use both independent slots.
+    p.singleVideoTransport = true;
+    p.screenSender = p.cameraSender; p.screenReceiver = p.cameraReceiver;
+  }
+
+  await Promise.allSettled(replacements);
+  if (betaActiveVideoTrack('camera') && p.cameraSender) await tuneVideoSender(p.cameraSender, 'camera').catch(() => {});
+  if (betaActiveVideoTrack('screen') && p.screenSender && p.screenSender !== p.cameraSender) await tuneVideoSender(p.screenSender, 'screen').catch(() => {});
+}
+
+function makeHostedConnection(p, initiator = false) {
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }], iceCandidatePoolSize: 2 });
+  p.pc = pc;
+  // Only the offerer creates media m-lines. The answerer binds its tracks to
+  // those exact transceivers after receiving the offer. Creating a second set
+  // here was the root cause of unnegotiated senders and black remote video.
+  if (initiator) addHostedOfferMedia(p, pc);
+  if (initiator && betaActiveVideoTrack('camera')) tuneVideoSender(p.cameraSender, 'camera').catch(() => {});
+  if (initiator && betaActiveVideoTrack('screen')) tuneVideoSender(p.screenSender, 'screen').catch(() => {});
+  pc.ontrack = ({ track, streams, transceiver }) => attachHostedTrack(p, track, streams, hostedIncomingVideoKind(p, transceiver, track));
   pc.ondatachannel = ({ channel }) => bindHostedChannel(p, channel);
   pc.onicecandidate = ({ candidate }) => { if (candidate) hostedSocket?.emit('signal', { target: p.id, data: { candidate: candidate.toJSON() } }); };
   pc.oniceconnectionstatechange = () => { if (pc.iceConnectionState === 'failed') { p.connected = false; renderHostedParticipants(); } };
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'connected' && p.channel?.readyState === 'open') markHostedConnected(p);
+    if (pc.connectionState === 'connected') {
+      if (p.channel?.readyState === 'open') markHostedConnected(p);
+      // Each direction owns independent senders. Reannounce both tracks after
+      // the connection settles, without creating another SDP offer: the two
+      // video m-lines were negotiated before the call started.
+      scheduleHostedVideoSync(p, 'camera');
+      scheduleHostedVideoSync(p, 'screen');
+      // On some Electron/Windows combinations a pre-created recvonly slot
+      // does not fire ontrack after the initial offer. Its receiver still
+      // exists, though; register it here so a later video-state can reveal
+      // the live instead of leaving one side permanently without a stream.
+      for (const transceiver of pc.getTransceivers()) {
+        const receiverTrack = transceiver.receiver?.track;
+        if (receiverTrack?.kind !== 'video') continue;
+        const receivedKind = hostedIncomingVideoKind(p, transceiver, receiverTrack);
+        if (!p.videoStreams?.[receivedKind]) attachHostedTrack(p, receiverTrack, [], receivedKind);
+      }
+    }
     if (['failed', 'disconnected', 'closed'].includes(pc.connectionState) && !p.left && pc.connectionState !== 'closed') { p.connected = false; renderHostedParticipants(); }
   };
   pc.onnegotiationneeded = async () => {
@@ -154,8 +356,10 @@ publishVideo = async function publishVideoBeta(track, kind) {
   if (currentMode !== 'hosted') {
     const sender = peer?.[`${kind}Sender`] || (kind === 'camera' ? peer?.videoSender : null);
     if (!sender) return true;
-    await sender.replaceTrack(track);
+    const needsTrackSwap = sender.track !== track;
+    if (needsTrackSwap) await sender.replaceTrack(track);
     if (track) await tuneVideoSender(sender, kind);
+    if (track && needsTrackSwap) await betaWaitForEncodedVideo(sender);
     if (peer?.channel?.readyState === 'open') peer.channel.send(JSON.stringify({ type: 'video-on', description: kind, revision: betaVideoRevision[kind] }));
     return true;
   }
@@ -170,6 +374,12 @@ stopVideo = async function stopVideoBeta() {
   betaVideoRevision.camera += 1; betaVideoRevision.screen += 1;
   const result = await betaStopVideo();
   if (currentMode === 'hosted') [...hostedPeers.values()].filter((participant) => !participant.left).forEach((participant) => { scheduleHostedVideoSync(participant, 'camera'); scheduleHostedVideoSync(participant, 'screen'); });
+  else {
+    await Promise.allSettled([
+      peer?.cameraSender?.replaceTrack(betaPlaceholderVideoTrack('camera')),
+      peer?.screenSender?.replaceTrack(betaPlaceholderVideoTrack('screen'))
+    ].filter(Boolean));
+  }
   return result;
 };
 
@@ -192,7 +402,7 @@ async function stopCamera() {
     await Promise.allSettled(peers.map((participant) => syncHostedVideoForPeer(participant, 'camera', null)));
     peers.forEach((participant) => scheduleHostedVideoSync(participant, 'camera'));
   } else {
-    await peer?.cameraSender?.replaceTrack(null).catch(() => {});
+    await peer?.cameraSender?.replaceTrack(betaPlaceholderVideoTrack('camera')).catch(() => {});
     if (peer?.channel?.readyState === 'open') peer.channel.send(JSON.stringify({ type: 'video-off', description: 'camera', revision: betaVideoRevision.camera }));
   }
   document.querySelector('#cam-button')?.classList.remove('on'); refreshLocalVideoPreview(); refreshVideoButtons();
@@ -209,7 +419,7 @@ async function stopScreenShare() {
     await Promise.allSettled(peers.map((participant) => syncHostedVideoForPeer(participant, 'screen', null)));
     peers.forEach((participant) => scheduleHostedVideoSync(participant, 'screen'));
   } else {
-    await peer?.screenSender?.replaceTrack(null).catch(() => {});
+    await peer?.screenSender?.replaceTrack(betaPlaceholderVideoTrack('screen')).catch(() => {});
     if (peer?.channel?.readyState === 'open') peer.channel.send(JSON.stringify({ type: 'video-off', description: 'screen', revision: betaVideoRevision.screen }));
   }
   document.querySelector('#screen-button')?.classList.remove('share-on'); refreshLocalVideoPreview(); refreshVideoButtons();
@@ -218,28 +428,35 @@ async function stopScreenShare() {
 // Reserve an audio sender for manual P2P too. The offer can be created while
 // Windows still displays the microphone permission prompt.
 const betaMakePeer = makePeer;
-makePeer = function makePeerBeta() {
-  const pc = betaMakePeer();
-  if (!peer.audioSender) {
-    const existing = pc.getSenders().find((sender) => sender.track?.kind === 'audio');
-    peer.audioSender = existing || pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
+makePeer = function makePeerBeta(role = 'offerer') {
+  const pc = betaMakePeer(role);
+  peer.videoStreams = {}; peer.videoExpectedKinds = {}; peer.mediaViewKinds = { camera: true, screen: false };
+  if (role !== 'answerer') {
+    if (!peer.audioSender) {
+      const existing = pc.getSenders().find((sender) => sender.track?.kind === 'audio');
+      peer.audioSender = existing || pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
+    }
+    const cameraTransceiver = pc.getTransceivers().find((transceiver) => transceiver.receiver.track.kind === 'video');
+    const initialCameraTrack = betaTransportVideoTrack('camera');
+    const initialScreenTrack = betaTransportVideoTrack('screen');
+    peer.cameraOutgoingStream = new MediaStream([initialCameraTrack]);
+    peer.screenOutgoingStream = new MediaStream([initialScreenTrack]);
+    const screenTransceiver = pc.addTransceiver(initialScreenTrack, { direction: 'sendrecv', streams: [peer.screenOutgoingStream] });
+    peer.cameraSender = cameraTransceiver?.sender; peer.cameraReceiver = cameraTransceiver?.receiver; peer.videoSender = peer.cameraSender;
+    peer.screenSender = screenTransceiver.sender; peer.screenReceiver = screenTransceiver.receiver;
+    if (peer.cameraSender) peer.cameraSender.replaceTrack(initialCameraTrack).catch(() => {});
+    if (betaActiveVideoTrack('camera') && peer.cameraSender) tuneVideoSender(peer.cameraSender, 'camera').catch(() => {});
+    if (betaActiveVideoTrack('screen')) tuneVideoSender(peer.screenSender, 'screen').catch(() => {});
   }
-  const cameraTransceiver = pc.getTransceivers().find((transceiver) => transceiver.receiver.track.kind === 'video');
-  const screenTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
-  peer.cameraSender = cameraTransceiver?.sender; peer.cameraReceiver = cameraTransceiver?.receiver; peer.videoSender = peer.cameraSender;
-  peer.screenSender = screenTransceiver.sender; peer.screenReceiver = screenTransceiver.receiver; peer.videoStreams = {};
-  if (betaActiveVideoTrack('camera') && peer.cameraSender) peer.cameraSender.replaceTrack(betaActiveVideoTrack('camera')).catch(() => {});
-  if (betaActiveVideoTrack('screen')) peer.screenSender.replaceTrack(betaActiveVideoTrack('screen')).catch(() => {});
   const originalTrackHandler = pc.ontrack;
   pc.ontrack = (event) => {
     if (event.track.kind === 'audio') { originalTrackHandler?.(event); setupManualAudioGain(event.streams?.[0] || new MediaStream([event.track])); setTimeout(applyOutputMute, 0); setTimeout(applyOutputMute, 250); return; }
-    const kind = event.transceiver?.receiver === peer.screenReceiver ? 'screen' : 'camera';
+    const videoTransceivers = pc.getTransceivers().filter((transceiver) => transceiver.receiver?.track?.kind === 'video');
+    const videoIndex = videoTransceivers.indexOf(event.transceiver);
+    const kind = event.transceiver?.receiver === peer.screenReceiver || videoIndex === 1 ? 'screen' : 'camera';
     const stream = new MediaStream([event.track]); peer.videoStreams[kind] = stream; peer.videoExpectedKinds ||= {}; peer.mediaViewKinds ||= { camera: true, screen: false };
     const reveal = () => {
-      if (event.track.readyState !== 'live') return;
-      // Older clients may not send the explicit kind notification. A live
-      // video track is enough to expose the local viewing choice safely.
-      peer.videoExpectedKinds[kind] = true;
+      if (event.track.readyState !== 'live' || !peer.videoExpectedKinds[kind]) return;
       if (kind === 'screen') renderIncomingMediaOffers(); else showManualMedia('camera');
     };
     event.track.onunmute = reveal;
@@ -249,6 +466,10 @@ makePeer = function makePeerBeta() {
       hideVideoTile(`manual-${kind}`); renderIncomingMediaOffers();
     };
     reveal();
+  };
+  window.voiceupBindManualAnswerMedia = async () => {
+    if (peer?.pc !== pc) return;
+    await bindHostedAnswerMedia(peer);
   };
   return pc;
 };
@@ -261,7 +482,12 @@ bindChannel = function bindChannelBeta(channel) {
     originalOpen?.apply(channel, args);
     for (const kind of ['camera', 'screen']) {
       const track = betaActiveVideoTrack(kind); const sender = peer?.[`${kind}Sender`];
-      if (track && sender) { await sender.replaceTrack(track).catch(() => {}); if (channel.readyState === 'open') channel.send(JSON.stringify({ type: 'video-on', description: kind, revision: betaVideoRevision[kind] })); }
+      if (track && sender) {
+        if (sender.track !== track) await sender.replaceTrack(track).catch(() => {});
+        await tuneVideoSender(sender, kind).catch(() => {});
+        await betaWaitForEncodedVideo(sender).catch(() => {});
+        if (channel.readyState === 'open') channel.send(JSON.stringify({ type: 'video-on', description: kind, revision: betaVideoRevision[kind] }));
+      }
     }
   };
 };
@@ -270,7 +496,7 @@ async function createHostedPeer(id, name, initiator, color, avatarPhoto = '') {
   if (hostedPeers.has(id)) return hostedPeers.get(id);
   const p = { id, name: name || 'Visitante', color: safeColor(color), avatar: safeAvatar(avatarPhoto), channel: null, pc: null, pendingCandidates: [], connected: false, muted: false, speaking: false, left: false, videoStream: null, videoLabel: 'Video recebido', makingOffer: false, ignoreOffer: false, isPolite: String(hostedSocket?.id || '').localeCompare(String(id)) > 0 };
   hostedPeers.set(id, p);
-  makeHostedConnection(p);
+  makeHostedConnection(p, initiator);
   renderHostedParticipants();
   showHostedStage(p, false);
   if (initiator) {
@@ -508,6 +734,17 @@ receiveData = async function receiveDataBetaTyping(raw) {
   try {
     const msg = JSON.parse(raw);
     if (msg.type === 'typing-state') { applyRemoteTyping('manual-peer', msg, peer || {}); return; }
+    if (msg.type === 'media-view-request' && ['camera', 'screen'].includes(msg.kind)) {
+      const track = betaActiveVideoTrack(msg.kind);
+      const sender = peer?.[`${msg.kind}Sender`] || (msg.kind === 'camera' ? peer?.videoSender : null);
+      if (track && sender) {
+        if (sender.track !== track) await sender.replaceTrack(track).catch(() => {});
+        await tuneVideoSender(sender, msg.kind).catch(() => {});
+        await betaWaitForEncodedVideo(sender).catch(() => {});
+        if (peer?.channel?.readyState === 'open') peer.channel.send(JSON.stringify({ type: 'video-on', description: msg.kind, revision: betaVideoRevision[msg.kind] }));
+      }
+      return;
+    }
     if (msg.type === 'video-on' && ['camera', 'screen'].includes(msg.description)) {
       const kind = msg.description;
       peer.videoExpectedKinds ||= {}; peer.mediaViewKinds ||= { camera: true, screen: false };
@@ -532,7 +769,11 @@ const mediaViewState = (participant) => {
 };
 
 const mediaStreamFor = (participant, kind) => participant?.videoStreams?.[kind]
-  || (kind === 'camera' ? participant?.videoStream : null);
+  || (kind === 'camera'
+    ? participant?.videoStream
+    : (betaUsesLegacyVideoSlot(participant) && !participant?.videoExpectedKinds?.camera
+      ? (participant?.videoStreams?.camera || participant?.videoStream)
+      : null));
 
 function setMediaParticipantVolume(participant, value) {
   const safe = Math.max(0, Math.min(200, Number(value) || 0));
@@ -561,7 +802,7 @@ function showManualMedia(kind = 'camera') {
   if ((kind === 'screen' && !view.screen) || (kind === 'camera' && view.camera === false)) { renderIncomingMediaOffers(); return false; }
   const stream = mediaStreamFor(peer, kind);
   const track = stream?.getVideoTracks?.()[0];
-  if (!track || track.readyState !== 'live' || track.muted) return false;
+  if (!track || track.readyState === 'ended') return false;
   const id = `manual-${kind}`;
   const shown = displayRemoteVideo(stream, `${peer.name || 'Participante'} - ${kind === 'screen' ? 'Tela compartilhada' : 'Câmera'}`, id);
   if (shown) decorateRemoteMediaTile(id, kind, peer);
@@ -569,27 +810,12 @@ function showManualMedia(kind = 'camera') {
 }
 
 function renderIncomingMediaOffers() {
-  let offers = document.querySelector('#incoming-media-offers');
-  if (!offers) {
-    offers = document.createElement('aside'); offers.id = 'incoming-media-offers'; offers.className = 'incoming-media-offers hidden';
-    document.querySelector('.stage')?.append(offers);
-  }
-  const items = [];
-  const append = (participant, owner, kind, action) => items.push({ participant, owner, kind, action });
-  if (currentMode === 'hosted') {
-    for (const participant of hostedPeers.values()) {
-      if (participant.left) continue;
-      const view = mediaViewState(participant);
-      if (participant.videoExpectedKinds?.screen && !view.screen) append(participant, participant.id, 'screen', 'Assistir live');
-      if (participant.videoExpectedKinds?.camera && view.camera === false) append(participant, participant.id, 'camera', 'Mostrar câmera');
-    }
-  } else if (peer) {
-    const view = mediaViewState(peer);
-    if (peer.videoExpectedKinds?.screen && !view.screen) append(peer, 'manual-peer', 'screen', 'Assistir live');
-    if (peer.videoExpectedKinds?.camera && view.camera === false) append(peer, 'manual-peer', 'camera', 'Mostrar câmera');
-  }
-  offers.innerHTML = items.map(({ participant, owner, kind, action }) => `<button type="button" data-media-offer-owner="${escapeHtml(String(owner))}" data-media-offer-kind="${kind}">${betaMemberAvatar(participant)}<span><strong>${escapeHtml(participant.name || 'Participante')}</strong><small>${kind === 'screen' ? 'está transmitindo a tela' : 'câmera ocultada para você'}</small></span><b>${action}</b></button>`).join('');
-  offers.classList.toggle('hidden', items.length === 0);
+  // A live is discovered from the person who owns it. Re-rendering exposes a
+  // compact badge on their avatar rather than showing a floating alert.
+  document.querySelector('#incoming-media-offers')?.remove();
+  if (currentMode === 'hosted') renderRoomChannels();
+  renderBetaMembers();
+  renderCentralCallMembers();
 }
 
 function mediaParticipantByOwner(owner) {
@@ -599,6 +825,7 @@ function mediaParticipantByOwner(owner) {
 document.addEventListener('click', (event) => {
   const offer = event.target.closest?.('[data-media-offer-owner]');
   if (offer) {
+    event.preventDefault(); event.stopPropagation();
     const participant = mediaParticipantByOwner(offer.dataset.mediaOfferOwner); if (!participant) return;
     const kind = offer.dataset.mediaOfferKind; mediaViewState(participant)[kind] = true;
     if (participant === peer) showManualMedia(kind); else showHostedVideo(participant, kind === 'screen' ? 'Tela compartilhada' : 'Câmera', kind);
@@ -632,9 +859,34 @@ function applyHostedVideoState(p, active, description, revision) {
     if (kind === 'screen') p.mediaViewKinds.screen = false;
     clearTimeout(p.videoMuteTimers[kind]); hideVideoTile(`${p.id}-${kind}`); renderIncomingMediaOffers(); return;
   }
+  // Some Windows WebRTC builds dispatch the incoming video track before the
+  // corresponding video-state signal and omit its transceiver. If it landed in
+  // the other slot while that slot is inactive, recover it instead of leaving
+  // the viewer with a permanently unavailable "Assistir live" button.
+  const otherKind = kind === 'screen' ? 'camera' : 'screen';
+  if (betaUsesLegacyVideoSlot(p) && !p.videoStreams[kind] && p.videoStreams[otherKind] && !p.videoExpectedKinds[otherKind]) {
+    p.videoStreams[kind] = p.videoStreams[otherKind];
+    delete p.videoStreams[otherKind];
+  }
   p.videoLabels[kind] = kind === 'screen' ? 'Tela compartilhada' : 'Camera';
   const reveal = () => p.videoExpectedKinds[kind] && p.videoStreams[kind] && showHostedVideo(p, p.videoLabels[kind], kind);
   reveal(); renderIncomingMediaOffers(); setTimeout(reveal, 180); setTimeout(reveal, 700);
+  // State messages can beat the actual WebRTC track on Windows. Request one
+  // targeted re-announcement only when no usable receiver exists. A muted
+  // static receiver is normal while WebRTC starts; resetting it there causes
+  // a feedback loop and flickering when two people share simultaneously.
+  const videoTrack = p.videoStreams[kind]?.getVideoTracks?.()[0];
+  if (!videoTrack || videoTrack.readyState === 'ended') {
+    p.mediaRecoveryRevisions ||= {};
+    const recoveryKey = `${revision ?? 'current'}:${kind}`;
+    if (p.mediaRecoveryRevisions[kind] !== recoveryKey && hostedSocket?.connected && p.id) {
+      p.mediaRecoveryRevisions[kind] = recoveryKey;
+      setTimeout(() => {
+        if (p.left || !p.videoExpectedKinds?.[kind] || p.mediaRecoveryRevisions?.[kind] !== recoveryKey) return;
+        hostedSocket.emit('signal', { target: p.id, data: { mediaViewRequest: { kind, requestedAt: Date.now(), automatic: true } } });
+      }, 220);
+    }
+  }
 }
 
 async function receiveHostedSignal({ from, name, color, avatar, data }) {
@@ -644,6 +896,14 @@ async function receiveHostedSignal({ from, name, color, avatar, data }) {
       return;
     }
     const p = hostedPeers.get(from) || await createHostedPeer(from, name, false, color, avatar);
+    if (data?.mediaViewRequest && ['camera', 'screen'].includes(data.mediaViewRequest.kind)) {
+      const kind = data.mediaViewRequest.kind;
+      const resync = () => syncHostedVideoForPeer(p, kind, betaActiveVideoTrack(kind), true);
+      await resync();
+      setTimeout(resync, 260);
+      setTimeout(resync, 900);
+      return;
+    }
     if (Object.prototype.hasOwnProperty.call(data || {}, 'voiceState')) {
       applyHostedSpeaking(p, data.voiceState);
       return;
@@ -659,6 +919,7 @@ async function receiveHostedSignal({ from, name, color, avatar, data }) {
       if (p.ignoreOffer) return;
       if (offerCollision && p.pc.signalingState !== 'stable') await p.pc.setLocalDescription({ type: 'rollback' });
       await p.pc.setRemoteDescription(description);
+      if (description.type === 'offer') await bindHostedAnswerMedia(p);
       if (p.pendingCandidates.length) await Promise.all(p.pendingCandidates.splice(0).map((candidate) => p.pc.addIceCandidate(candidate)));
       if (description.type === 'offer') {
         await p.pc.setLocalDescription(await p.pc.createAnswer());
@@ -694,6 +955,52 @@ document.head.insertAdjacentHTML('beforeend', `<style id="voiceup-beta-final">
 #settings-button{display:grid!important;place-items:center;flex:0 0 37px!important;font-size:0!important;overflow:hidden;padding:0!important;line-height:1!important}#settings-button::before{content:none!important}#settings-button[aria-label]{margin:0!important}.sidebar-actions{align-items:center}.self-card{margin-bottom:0!important}
 .local-video:not(.visible){display:none!important}.local-video.visible{display:block!important;object-fit:cover}.round-control.muted,#output-button.muted{background:#542b34!important;color:#ffaaa0!important}
 </style>`);
+
+// Compact connection-quality display kept beside the local profile.  The
+// numeric sample still updates the legacy participant row when it exists.
+const betaLegacyUpdatePingBadge = updatePingBadge;
+let betaLatestPing = Number.NaN;
+const betaPingQuality = (value) => {
+  const ping = Number(value);
+  if (!Number.isFinite(ping) || ping < 0) return { level: 0, label: 'Medindo ping…' };
+  if (ping <= 60) return { level: 4, label: `Ping ${Math.round(ping)} ms · excelente` };
+  if (ping <= 120) return { level: 3, label: `Ping ${Math.round(ping)} ms · bom` };
+  if (ping <= 220) return { level: 2, label: `Ping ${Math.round(ping)} ms · moderado` };
+  return { level: 1, label: `Ping ${Math.round(ping)} ms · alto` };
+};
+const paintBetaProfilePing = () => {
+  const profileCopy = document.querySelector('.self-profile-copy');
+  const statusLabel = document.querySelector('#presence-status-label');
+  if (!profileCopy || !statusLabel) return;
+  const quality = betaPingQuality(betaLatestPing);
+  let statusRow = document.querySelector('#self-presence-row');
+  if (!statusRow) {
+    statusRow = document.createElement('span');
+    statusRow.id = 'self-presence-row';
+    statusRow.className = 'self-presence-row';
+    statusLabel.before(statusRow);
+    statusRow.append(statusLabel);
+  }
+  let indicator = document.querySelector('#self-ping-indicator');
+  if (!indicator) {
+    indicator = document.createElement('span');
+    indicator.id = 'self-ping-indicator';
+    indicator.className = 'self-ping-indicator';
+    indicator.innerHTML = '<i></i><i></i><i></i><i></i>';
+    statusRow.append(indicator);
+  }
+  indicator.dataset.level = String(quality.level);
+  indicator.dataset.tooltip = quality.label;
+  indicator.title = quality.label;
+  indicator.setAttribute('aria-label', quality.label);
+};
+updatePingBadge = function updatePingBadgeBeta(value) {
+  betaLatestPing = Number(value);
+  betaLegacyUpdatePingBadge(value);
+  paintBetaProfilePing();
+};
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', paintBetaProfilePing, { once: true });
+else paintBetaProfilePing();
 
 let betaOutputMuted = storedProfile.outputMuted === true;
 let betaInputVolume = Math.max(0, Math.min(200, Number(storedProfile.inputVolume ?? 100) || 0));
@@ -841,15 +1148,45 @@ toggleHostedMute = function toggleHostedMuteBeta(id) { const result = betaToggle
 // Static receive transceivers start with a muted video track. They must not create
 // a black tile until a participant actually enables camera or screen sharing.
 function showHostedVideo(p, label = 'Video recebido', kind = 'camera') {
-  const stream = p?.videoStreams?.[kind] || (kind === 'camera' ? p?.videoStream : null);
+  // Clients up to 1.1.0 used a single video transceiver and replaced its
+  // camera track with the screen track. Prefer the dedicated beta stream, but
+  // keep that legacy path whenever no separate camera is being announced.
+  const legacyScreenStream = kind === 'screen' && betaUsesLegacyVideoSlot(p) && !p?.videoExpectedKinds?.camera
+    ? (p?.videoStreams?.camera || p?.videoStream)
+    : null;
+  const stream = p?.videoStreams?.[kind] || (kind === 'camera' ? p?.videoStream : legacyScreenStream);
   const track = stream?.getVideoTracks?.()[0];
-  if (!p || !track || track.muted || track.readyState !== 'live') return;
+  if (!p || !track || track.readyState === 'ended') return false;
   const view = mediaViewState(p);
-  if ((kind === 'screen' && !view.screen) || (kind === 'camera' && view.camera === false)) { renderIncomingMediaOffers(); return; }
+  if ((kind === 'screen' && !view.screen) || (kind === 'camera' && view.camera === false)) { renderIncomingMediaOffers(); return false; }
   p.videoLabels ||= {}; p.videoLabels[kind] = label;
   activeRemoteId ||= p.id;
   const id = `${p.id}-${kind}`;
-  if (displayRemoteVideo(stream, `${p.name} - ${label}`, id)) decorateRemoteMediaTile(id, kind, p);
+  const shown = displayRemoteVideo(stream, `${p.name} - ${label}`, id);
+  if (shown) decorateRemoteMediaTile(id, kind, p);
+  return shown;
+}
+
+function requestParticipantMediaView(participant, kind = 'screen') {
+  if (!participant) return false;
+  mediaViewState(participant)[kind] = true;
+  // Ask the broadcaster to reattach this exact sender. This also recovers
+  // when both sides start a live at the same time or one side joined late.
+  if (participant === peer) {
+    if (peer?.channel?.readyState === 'open') peer.channel.send(JSON.stringify({ type: 'media-view-request', kind }));
+  } else if (hostedSocket?.connected && participant.id) {
+    hostedSocket.emit('signal', { target: participant.id, data: { mediaViewRequest: { kind, requestedAt: Date.now() } } });
+  }
+  const label = kind === 'screen' ? 'Tela compartilhada' : 'Câmera';
+  const startedAt = performance.now();
+  const reveal = () => {
+    const expected = participant.videoExpectedKinds?.[kind];
+    if (expected === false || participant.left) return;
+    const shown = participant === peer ? showManualMedia(kind) : showHostedVideo(participant, label, kind);
+    if (!shown && performance.now() - startedAt < 8000) setTimeout(reveal, 180);
+  };
+  reveal();
+  return true;
 }
 
 function stopRemoteVoiceDetection(p) {
@@ -1212,11 +1549,25 @@ enterApp = async function enterAppBeta(mode = 'manual') {
   }).catch(() => {});
 };
 const betaRenderRoomChannels = renderRoomChannels;
+const betaLiveIcon = (kind) => kind === 'screen'
+  ? '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg>'
+  : '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="12" height="12" rx="2"></rect><path d="m15 10 5-3v10l-5-3z"></path></svg>';
+function mediaOfferBadge(member) {
+  const owner = member?.id === 'manual-peer' ? 'manual-peer' : String(member?.id || '');
+  const participant = mediaParticipantByOwner(owner);
+  if (!owner || !participant || participant.left || owner === hostedSocket?.id || owner === 'self') return '';
+  const view = mediaViewState(participant);
+  const kind = participant.videoExpectedKinds?.screen && !view.screen ? 'screen'
+    : participant.videoExpectedKinds?.camera && view.camera === false ? 'camera' : '';
+  if (!kind) return '';
+  const label = kind === 'screen' ? `${participant.name || 'Participante'} está transmitindo. Clique para assistir.` : `Mostrar câmera de ${participant.name || 'participante'}`;
+  return `<span class="media-live-badge" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${betaLiveIcon(kind)}</span>`;
+}
 function channelAvatar(member) {
   const photo = safeAvatar(member.avatar);
   const nickname = escapeHtml(member.name || 'Visitante');
   const initialsText = initials(member.name);
-  return `<span class="channel-avatar" data-nickname="${nickname}" aria-label="${nickname}" style="background:${safeColor(member.color)}${photo ? `;background-image:url('${photo}');background-size:cover;background-position:center` : ''}">${photo ? '' : initialsText}</span>`;
+  return `<span class="channel-avatar" data-nickname="${nickname}" data-member-id="${escapeHtml(member.id)}" aria-label="${nickname}" style="background:${safeColor(member.color)}${photo ? `;background-image:url('${photo}');background-size:cover;background-position:center` : ''}">${photo ? '' : initialsText}${mediaOfferBadge(member)}</span>`;
 }
 const betaMemberAvatar = (member) => avatar(member.name, member.color, member.avatar);
 const betaT = (key, values = {}) => globalThis.voiceupI18n?.t(key, values);
@@ -1250,7 +1601,7 @@ const renderBetaMembers = () => {
     const inCall = Boolean(member.voiceChannel) && member.voiceChannel === activeVoiceChannel;
     const visibleChannel = member.voiceChannel ? betaChannelName(member.voiceChannel, 'voice') : (betaT('state.outside') || 'Fora da call');
     const status = normalizedPresenceStatus(member.status);
-    return `<div class="participant server-member${inCall ? ' in-active-call' : ''}${peerItem?.speaking ? ' speaking' : ''}" data-member-id="${escapeHtml(member.id)}"><span class="member-presence-avatar">${betaMemberAvatar(member)}<i class="presence-dot status-${status}" title="${escapeHtml(presenceText(status))}"></i></span><div style="min-width:0;flex:1"><strong>${escapeHtml(member.name)}${isSelf ? ` (${escapeHtml(betaT('state.self') || 'você')})` : ''}</strong><small class="member-status-line"><b class="status-${status}">${escapeHtml(presenceText(status))}</b><span>· ${escapeHtml(visibleChannel)}</span></small></div>${peerItem ? `<button class="hosted-mute" data-peer-id="${escapeHtml(member.id)}" type="button" title="Silenciar somente para você">${audioIcon(Boolean(peerItem.muted))}</button>` : ''}</div>`;
+    return `<div class="participant server-member${inCall ? ' in-active-call' : ''}${peerItem?.speaking ? ' speaking' : ''}" data-member-id="${escapeHtml(member.id)}"><span class="member-presence-avatar">${betaMemberAvatar(member)}<i class="presence-dot status-${status}" title="${escapeHtml(presenceText(status))}"></i>${mediaOfferBadge(member)}</span><div style="min-width:0;flex:1"><strong>${escapeHtml(member.name)}${isSelf ? ` (${escapeHtml(betaT('state.self') || 'você')})` : ''}</strong><small class="member-status-line"><b class="status-${status}">${escapeHtml(presenceText(status))}</b><span>· ${escapeHtml(visibleChannel)}</span></small></div>${peerItem ? `<button class="hosted-mute" data-peer-id="${escapeHtml(member.id)}" type="button" title="Silenciar somente para você">${audioIcon(Boolean(peerItem.muted))}</button>` : ''}</div>`;
   }).join('') : `<p class="system-message">${betaT('state.noMembers') || 'Nenhuma pessoa no servidor.'}</p>`;
   betaWritingMembers = true;
   if (!commitBetaMembersMarkup(target, markup)) {
@@ -1362,10 +1713,10 @@ const renderCentralCallMembers = () => {
   const participants = currentMode === 'hosted'
     ? [{ id: 'self', name: myName, color: myColor, avatar: myAvatar, speaking: localSpeaking, connected: true }, ...hostedMembers]
     : [{ id: 'self', name: myName, color: myColor, avatar: myAvatar, speaking: localSpeaking, connected: true }, ...(peer?.name ? [{ id: 'manual-peer', name: peer.name, color: peer.color, avatar: peer.avatar, connected: peer.channel?.readyState === 'open', speaking: document.querySelector('#peer-other')?.classList.contains('speaking') }] : [])];
-  const structureKey = participants.map((member) => [member.id, member.name, member.color, member.avatar?.length || 0, member.connected ? 1 : 0].join(':')).join('|');
+  const structureKey = participants.map((member) => { const media = mediaParticipantByOwner(member.id === 'self' ? '' : member.id); return [member.id, member.name, member.color, member.avatar?.length || 0, member.connected ? 1 : 0, media?.videoExpectedKinds?.screen ? 1 : 0, media?.videoExpectedKinds?.camera ? 1 : 0].join(':'); }).join('|');
   if (list.dataset.structureKey !== structureKey) {
     list.dataset.structureKey = structureKey;
-    list.innerHTML = participants.map((member) => `<article class="call-member" data-call-member="${escapeHtml(member.id)}"${member.id !== 'self' ? ' tabindex="0" role="button" aria-label="Ajustar volume deste participante"' : ''}>${betaMemberAvatar(member)}<strong>${escapeHtml(member.name || 'Você')}${member.id === 'self' ? ` (${escapeHtml(betaT('state.self') || 'você')})` : ''}</strong><small>${member.connected ? (betaT('state.inChannel') || 'No canal') : (betaT('state.connecting') || 'Conectando...')}</small></article>`).join('');
+    list.innerHTML = participants.map((member) => `<article class="call-member" data-call-member="${escapeHtml(member.id)}"${member.id !== 'self' ? ' tabindex="0" role="button" aria-label="Ajustar volume deste participante"' : ''}>${betaMemberAvatar(member)}${mediaOfferBadge(member)}<strong>${escapeHtml(member.name || 'Você')}${member.id === 'self' ? ` (${escapeHtml(betaT('state.self') || 'você')})` : ''}</strong><small>${member.connected ? (betaT('state.inChannel') || 'No canal') : (betaT('state.connecting') || 'Conectando...')}</small></article>`).join('');
   }
   // Toggle only the speaking state. Recreating the avatar would restart the
   // aura animation on every sample and make it look as if it never appeared.
@@ -1404,6 +1755,7 @@ setInterval(renderCentralCallMembers, 180);
 if (!document.querySelector('#participant-audio-popover')) {
   document.body.insertAdjacentHTML('beforeend', `<aside id="participant-audio-popover" class="participant-audio-popover hidden" role="dialog" aria-modal="false" aria-labelledby="participant-audio-name">
     <div class="participant-audio-header"><span id="participant-audio-avatar" class="avatar"></span><div><strong id="participant-audio-name">Participante</strong><small>Ajuste somente para você</small></div><button id="participant-audio-close" type="button" title="Fechar" aria-label="Fechar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="participant-media-actions"><button id="participant-watch-live" class="participant-watch-live hidden" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg><span>Assistir live</span></button><button id="participant-watch-camera" class="participant-watch-live hidden" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"></rect><path d="m16 10 5-3v10l-5-3z"></path></svg><span>Ver câmera</span></button></div>
     <label><span>Volume individual <b id="participant-volume-value">100%</b></span><input id="participant-volume-range" type="range" min="0" max="200" step="1" value="100"/></label>
     <button id="participant-mute-toggle" class="participant-audio-mute" type="button"></button>
   </aside>`);
@@ -1412,6 +1764,8 @@ const participantAudioPopover = document.querySelector('#participant-audio-popov
 const participantVolumeRange = document.querySelector('#participant-volume-range');
 const participantVolumeValue = document.querySelector('#participant-volume-value');
 const participantMuteToggle = document.querySelector('#participant-mute-toggle');
+const participantWatchLive = document.querySelector('#participant-watch-live');
+const participantWatchCamera = document.querySelector('#participant-watch-camera');
 let participantAudioTarget = null;
 const participantAudioState = (id) => {
   if (id === 'manual-peer') return peer?.name ? { id, name: peer.name, color: peer.color, avatar: peer.avatar, volume: manualParticipantVolume, muted: remoteMuted } : null;
@@ -1421,12 +1775,17 @@ const participantAudioState = (id) => {
 const closeParticipantAudio = () => { participantAudioTarget = null; participantAudioPopover?.classList.add('hidden'); };
 const refreshParticipantAudioPopover = () => {
   const state = participantAudioState(participantAudioTarget); if (!state) return closeParticipantAudio();
+  const participant = mediaParticipantByOwner(participantAudioTarget);
+  const hasScreen = Boolean(participant?.videoExpectedKinds?.screen);
+  const hasCamera = Boolean(participant?.videoExpectedKinds?.camera);
   paintAvatar(document.querySelector('#participant-audio-avatar'), state.name, state.color, state.avatar);
   document.querySelector('#participant-audio-name').textContent = state.name;
   participantVolumeRange.value = String(state.volume);
   participantVolumeValue.textContent = `${Math.round(state.volume)}%`;
   participantMuteToggle.classList.toggle('muted', state.muted);
   participantMuteToggle.innerHTML = `${outputIcon(state.muted)}<span>${state.muted ? 'Desmutar para mim' : 'Mutar para mim'}</span>`;
+  participantWatchLive?.classList.toggle('hidden', !hasScreen);
+  participantWatchCamera?.classList.toggle('hidden', !hasCamera);
 };
 const positionParticipantAudio = (anchor) => {
   const box = anchor.getBoundingClientRect();
@@ -1463,6 +1822,20 @@ participantMuteToggle?.addEventListener('click', () => {
   if (participantAudioTarget === 'manual-peer') remoteMuted = !remoteMuted;
   else { const participant = hostedPeers.get(participantAudioTarget); if (participant) participant.muted = !participant.muted; }
   applyOutputMute(); refreshParticipantAudioPopover(); renderHostedParticipants();
+});
+participantWatchLive?.addEventListener('click', () => {
+  const participant = mediaParticipantByOwner(participantAudioTarget);
+  if (!participant) return closeParticipantAudio();
+  requestParticipantMediaView(participant, 'screen');
+  closeParticipantAudio();
+  renderIncomingMediaOffers();
+});
+participantWatchCamera?.addEventListener('click', () => {
+  const participant = mediaParticipantByOwner(participantAudioTarget);
+  if (!participant) return closeParticipantAudio();
+  requestParticipantMediaView(participant, 'camera');
+  closeParticipantAudio();
+  renderIncomingMediaOffers();
 });
 window.addEventListener('resize', closeParticipantAudio);
 document.querySelector('#accept-offer').textContent = 'Entrar com convite';
@@ -1735,6 +2108,62 @@ if (localPreview) {
 // WebRTC is still looking for peers. Older cloud hosts may not answer the new
 // presence request, so we merge every valid presence event instead of wiping
 // people that were already announced by room-joined / peer-joined.
+const betaWebrtcPrevious = new WeakMap();
+const betaCollectPeerStats = async (peerId, participant) => {
+  const pc = participant?.pc;
+  if (!pc || pc.signalingState === 'closed' || typeof pc.getStats !== 'function') return null;
+  const report = await pc.getStats();
+  const items = new Map(); report.forEach((item) => items.set(item.id, item));
+  let selectedPair = null; let inboundBytes = 0; let outboundBytes = 0; let jitterMs = null; let packetsLost = 0; let codec = '';
+  for (const item of items.values()) {
+    if (item.type === 'transport' && item.selectedCandidatePairId) selectedPair = items.get(item.selectedCandidatePairId) || selectedPair;
+    if (item.type === 'candidate-pair' && (item.selected || (item.nominated && item.state === 'succeeded'))) selectedPair ||= item;
+    if (item.type === 'inbound-rtp' && !item.isRemote) {
+      inboundBytes += Number(item.bytesReceived || 0); packetsLost += Math.max(0, Number(item.packetsLost || 0));
+      if (Number.isFinite(Number(item.jitter))) jitterMs = Math.max(jitterMs || 0, Number(item.jitter) * 1000);
+      codec ||= items.get(item.codecId)?.mimeType || '';
+    }
+    if (item.type === 'outbound-rtp' && !item.isRemote) { outboundBytes += Number(item.bytesSent || 0); codec ||= items.get(item.codecId)?.mimeType || ''; }
+  }
+  const now = Date.now(); const previous = betaWebrtcPrevious.get(pc); const elapsed = previous ? Math.max(250, now - previous.sampledAt) : 0;
+  betaWebrtcPrevious.set(pc, { sampledAt: now, inboundBytes, outboundBytes });
+  const localCandidate = selectedPair ? items.get(selectedPair.localCandidateId) : null;
+  const remoteCandidate = selectedPair ? items.get(selectedPair.remoteCandidateId) : null;
+  return {
+    peerId: String(peerId), connectionState: pc.connectionState || 'unknown', iceConnectionState: pc.iceConnectionState || 'unknown',
+    rttMs: Number.isFinite(Number(selectedPair?.currentRoundTripTime)) ? Number(selectedPair.currentRoundTripTime) * 1000 : null,
+    jitterMs, packetsLost,
+    inboundKbps: elapsed ? Math.max(0, (inboundBytes - previous.inboundBytes) * 8 / elapsed) : 0,
+    outboundKbps: elapsed ? Math.max(0, (outboundBytes - previous.outboundBytes) * 8 / elapsed) : 0,
+    availableOutgoingKbps: Number.isFinite(Number(selectedPair?.availableOutgoingBitrate)) ? Number(selectedPair.availableOutgoingBitrate) / 1000 : null,
+    localCandidateType: localCandidate?.candidateType || '', remoteCandidateType: remoteCandidate?.candidateType || '',
+    protocol: localCandidate?.protocol || remoteCandidate?.protocol || '', codec
+  };
+};
+const betaReportWebrtcStats = async () => {
+  const socket = hostedSocket;
+  if (!socket?.connected || currentMode !== 'hosted') return;
+  const peers = (await Promise.all([...hostedPeers.entries()].map(([id, participant]) => betaCollectPeerStats(id, participant).catch(() => null)))).filter(Boolean);
+  socket.emit('webrtc-stats', { sampledAt: Date.now(), peers });
+};
+window.setInterval(() => void betaReportWebrtcStats(), 3000);
+
+let betaClusterAlternates = [];
+let betaClusterSwitching = false;
+let betaClusterFailures = 0;
+const betaClusterVisited = new Set();
+const betaSwitchClusterHost = (url, reason = 'Reconectando no host alternativo…') => {
+  const next = String(url || '').trim().replace(/\/$/, '');
+  const current = String(document.querySelector('#host-url')?.value || '').trim().replace(/\/$/, '');
+  if (betaClusterSwitching || !/^https?:\/\//i.test(next) || next === current || betaClusterVisited.has(next)) return false;
+  betaClusterSwitching = true; betaClusterVisited.add(current); betaClusterFailures = 0;
+  window.voiceupClusterResumeChannel = activeVoiceChannel || '';
+  const oldSocket = hostedSocket; hostedSocket = null; oldSocket?.disconnect?.(); clearHostedVoice();
+  const field = document.querySelector('#host-url'); if (field) field.value = next;
+  saveProfile(); setStatus(reason);
+  window.setTimeout(async () => { betaClusterSwitching = false; await joinHostedRoom(); }, 180);
+  return true;
+};
 const betaBoundHostedSockets = new WeakSet();
 const bindHostedStatusAndPresence = (socket) => {
   if (!socket || betaBoundHostedSockets.has(socket)) return;
@@ -1748,18 +2177,23 @@ const bindHostedStatusAndPresence = (socket) => {
     renderBetaMembers();
   };
   let connectedOnce = false;
+  let reconnectTimer = 0;
+  let failoverTimer = 0;
   socket.on('connect', () => {
     // Socket.IO reconnects automatically. A fresh signalling session needs
     // fresh peers as their old RTCPeerConnections belong to the prior socket.
     if (connectedOnce) {
       clearHostedVoice();
-      serverMembers.clear();
       renderRoomChannels();
     }
+    clearTimeout(reconnectTimer);
+    clearTimeout(failoverTimer);
+    document.body.classList.remove('hosted-reconnecting');
     connectedOnce = true;
     setStatus('Entrando na sala...', true);
   });
   socket.on('room-joined', ({ peers, voiceChannel }) => {
+    betaClusterFailures = 0; betaClusterVisited.clear();
     activeVoiceChannel = ROOM_CHANNELS.voice.includes(voiceChannel) ? voiceChannel : '';
     mergePresence(peers);
     setStatus(activeVoiceChannel ? `No canal ${activeVoiceChannel} · aguardando participantes` : 'No servidor · escolha um canal de voz', true);
@@ -1777,16 +2211,35 @@ const bindHostedStatusAndPresence = (socket) => {
   socket.on('disconnect', (reason) => {
     if (reason !== 'io client disconnect') {
       clearHostedVoice();
-      serverMembers.clear();
       renderRoomChannels();
       renderBetaMembers();
+      document.body.classList.add('hosted-reconnecting');
+      clearTimeout(reconnectTimer);
+      reconnectTimer = window.setTimeout(() => {
+        if (socket.connected) return;
+        serverMembers.clear();
+        rememberCurrentMember();
+        renderRoomChannels(); renderBetaMembers(); renderCentralCallMembers();
+      }, 20000);
+      clearTimeout(failoverTimer);
+      const alternate = betaClusterAlternates.find((node) => /^https?:\/\//i.test(node?.url || '') && !betaClusterVisited.has(String(node.url).replace(/\/$/, '')));
+      if (alternate) failoverTimer = window.setTimeout(() => {
+        if (!socket.connected) betaSwitchClusterHost(alternate.url, 'Host indisponível · ativando failover…');
+      }, 900);
     }
-    setStatus('Servidor host desconectado');
+    setStatus(reason === 'io client disconnect' ? 'Servidor desconectado' : 'Reconectando ao servidor…');
   });
   socket.on('connect_error', (error) => {
+    betaClusterFailures += 1;
     const reason = error?.message ? ` (${error.message})` : '';
     setStatus(`Não foi possível alcançar o host${reason}`);
+    if (betaClusterFailures >= 3) {
+      const alternate = betaClusterAlternates.find((node) => /^https?:\/\//i.test(node?.url || '') && !betaClusterVisited.has(String(node.url).replace(/\/$/, '')));
+      if (alternate) betaSwitchClusterHost(alternate.url, 'Host indisponível · ativando failover…');
+    }
   });
+  socket.on('cluster-route', ({ alternates, failover } = {}) => { betaClusterAlternates = failover === false ? [] : (Array.isArray(alternates) ? alternates : []); });
+  socket.on('cluster-redirect', ({ url, reason } = {}) => { betaSwitchClusterHost(url, reason || 'Distribuindo a conexão para o host menos carregado…'); });
   if (socket.connected) { setStatus(activeVoiceChannel ? `No canal ${activeVoiceChannel} · aguardando participantes` : 'No servidor · escolha um canal de voz', true); socket.emit('request-room-presence'); }
 };
 const betaJoinHostedRoom = joinHostedRoom;
@@ -1845,6 +2298,7 @@ if (settingsDialog && !document.querySelector('#settings-tabs')) {
   move(document.querySelector('#noise-select')?.closest('label'), panel('audio'));
   move(document.querySelector('#audio-input-select')?.closest('label'), panel('audio'));
   move(document.querySelector('#audio-output-select')?.closest('label'), panel('audio'));
+  move(document.querySelector('#camera-input-select')?.closest('label'), panel('video'));
   move(document.querySelector('#screen-source-select')?.closest('label'), panel('video'));
   move(document.querySelector('#screen-audio-toggle')?.closest('label'), panel('video'));
   move(document.querySelector('#carry-media-toggle')?.closest('label'), panel('video'));
@@ -1858,6 +2312,77 @@ if (settingsDialog && !document.querySelector('#settings-tabs')) {
   };
   tabs.querySelectorAll('.settings-tab').forEach((button) => button.addEventListener('click', () => selectTab(button.dataset.settingsTab)));
 }
+
+// Camera selection and preview live entirely inside Settings. The preview
+// never enters a peer connection; it only verifies the selected Windows
+// device before the user enables the camera in a call.
+const videoSettingsPanel = document.querySelector('[data-settings-panel="video"]');
+const cameraInputSelect = document.querySelector('#camera-input-select');
+if (videoSettingsPanel && cameraInputSelect && !document.querySelector('#camera-settings-preview-panel')) {
+  const cameraLabel = cameraInputSelect.closest('label');
+  const previewPanel = document.createElement('section');
+  previewPanel.id = 'camera-settings-preview-panel';
+  previewPanel.innerHTML = `<div class="camera-preview-heading"><div><strong>Prévia da câmera</strong><small>Somente você vê este teste.</small></div><button id="camera-preview-toggle" type="button">Iniciar prévia</button></div><div class="camera-preview-frame"><video id="camera-settings-preview" autoplay muted playsinline></video><div id="camera-preview-empty">Selecione uma câmera e inicie a prévia.</div></div><small id="camera-preview-status">A câmera escolhida será usada ao clicar em Ligar câmera.</small>`;
+  cameraLabel?.insertAdjacentElement('afterend', previewPanel);
+}
+let cameraSettingsPreviewStream = null;
+let cameraSettingsPreviewOwnsStream = false;
+const cameraSettingsPreview = document.querySelector('#camera-settings-preview');
+const cameraPreviewToggle = document.querySelector('#camera-preview-toggle');
+const cameraPreviewEmpty = document.querySelector('#camera-preview-empty');
+const cameraPreviewStatus = document.querySelector('#camera-preview-status');
+const stopCameraSettingsPreview = async () => {
+  if (cameraSettingsPreviewOwnsStream) cameraSettingsPreviewStream?.getTracks?.().forEach((track) => track.stop());
+  cameraSettingsPreviewStream = null; cameraSettingsPreviewOwnsStream = false;
+  if (cameraSettingsPreview) cameraSettingsPreview.srcObject = null;
+  cameraPreviewEmpty?.classList.remove('hidden');
+  if (cameraPreviewToggle) cameraPreviewToggle.textContent = 'Iniciar prévia';
+  if (cameraPreviewStatus) cameraPreviewStatus.textContent = 'A câmera escolhida será usada ao clicar em Ligar câmera.';
+};
+window.voiceupStopCameraSettingsPreview = stopCameraSettingsPreview;
+const startCameraSettingsPreview = async () => {
+  await stopCameraSettingsPreview();
+  const chosenDevice = cameraInputSelect?.value || '';
+  try {
+    if (cameraStream && chosenDevice === cameraInputId) {
+      cameraSettingsPreviewStream = cameraStream;
+      cameraSettingsPreviewOwnsStream = false;
+    } else {
+      const constraints = quality();
+      if (chosenDevice) constraints.deviceId = { exact: chosenDevice };
+      cameraSettingsPreviewStream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
+      cameraSettingsPreviewOwnsStream = true;
+    }
+    const track = cameraSettingsPreviewStream?.getVideoTracks?.()[0];
+    if (!track) throw new Error('A câmera não criou uma faixa de vídeo.');
+    cameraSettingsPreview.srcObject = cameraSettingsPreviewStream;
+    await cameraSettingsPreview.play().catch(() => {});
+    cameraPreviewEmpty?.classList.add('hidden');
+    if (cameraPreviewToggle) cameraPreviewToggle.textContent = 'Parar prévia';
+    const settings = track.getSettings?.() || {};
+    if (cameraPreviewStatus) cameraPreviewStatus.textContent = `${track.label || 'Câmera disponível'}${settings.width && settings.height ? ` · ${settings.width} × ${settings.height}` : ''}`;
+    const selectedValue = cameraInputSelect.value;
+    await refreshDeviceControls();
+    if ([...cameraInputSelect.options].some((option) => option.value === selectedValue)) cameraInputSelect.value = selectedValue;
+  } catch (error) {
+    await stopCameraSettingsPreview();
+    const detail = error?.name === 'NotAllowedError'
+      ? 'Permita o acesso em Configurações do Windows > Privacidade e segurança > Câmera.'
+      : error?.name === 'NotFoundError' || error?.name === 'OverconstrainedError'
+        ? 'A câmera selecionada não está conectada ou está indisponível.'
+        : error?.message || 'Feche outro programa que esteja usando a câmera e tente novamente.';
+    if (cameraPreviewStatus) cameraPreviewStatus.textContent = detail;
+  }
+};
+cameraPreviewToggle?.addEventListener('click', () => { if (cameraSettingsPreviewStream) void stopCameraSettingsPreview(); else void startCameraSettingsPreview(); });
+cameraInputSelect?.addEventListener('change', () => { if (cameraSettingsPreviewStream) void startCameraSettingsPreview(); });
+document.querySelector('#settings-close')?.addEventListener('click', () => void stopCameraSettingsPreview());
+document.querySelector('#settings-save')?.addEventListener('click', () => void stopCameraSettingsPreview());
+const settingsModalForCamera = document.querySelector('#settings-modal');
+if (settingsModalForCamera) new MutationObserver(() => { if (settingsModalForCamera.classList.contains('hidden')) void stopCameraSettingsPreview(); }).observe(settingsModalForCamera, { attributes: true, attributeFilter: ['class'] });
+document.head.insertAdjacentHTML('beforeend', `<style>
+#camera-settings-preview-panel{display:grid;gap:10px;padding:13px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--surface) 76%,transparent)}.camera-preview-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.camera-preview-heading>div{display:grid;gap:2px}.camera-preview-heading small,#camera-preview-status{color:var(--muted);font-size:10px;line-height:1.4}.camera-preview-heading button{padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);font-weight:700}.camera-preview-frame{position:relative;display:grid;place-items:center;width:100%;aspect-ratio:16/9;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:#05070d}.camera-preview-frame video{width:100%;height:100%;object-fit:contain;background:#05070d}.camera-preview-frame #camera-preview-empty{position:absolute;inset:0;display:grid;place-items:center;padding:20px;color:#91a0b6;text-align:center;font-size:11px}.camera-preview-frame #camera-preview-empty.hidden{display:none}@media(max-width:520px){.camera-preview-heading{align-items:stretch;flex-direction:column}.camera-preview-heading button{width:100%}}
+</style>`);
 
 // Theme samples use the same main colors as the application. Selecting a card
 // previews it immediately; closing Settings restores the previous theme while

@@ -54,7 +54,6 @@ module.exports = {
     profile.programId = identity;
     const command = String(text).trim().toLowerCase();
     const say = (message) => api.systemMessage(room, textChannel, message, { name: 'XP de Chat', color: '#68e1ad', avatar: ICON, pluginId: plugin.id });
-
     if (command === '!xp') {
       profiles[identity] = profile; all[key] = profiles; saveProfiles(api, all);
       const rank = Object.values(profiles).map((item) => normalize(item)).filter((item) => item.totalXp > profile.totalXp).length + 1;
@@ -66,19 +65,15 @@ module.exports = {
       const top = topFive(profiles);
       return say(top.length ? `Ranking Top 5: ${top.map((item, index) => `${medals[index]} ${item.name} — ${item.totalXp} XP (Nv. ${item.level})`).join(' | ')}` : 'O ranking ainda está vazio.');
     }
-
     const clean = String(text).trim();
     if (command.startsWith('!') || clean.length < 3 || Date.now() - profile.lastMessageAt < api.settings.cooldownSeconds * 1000) return;
     const minGain = Math.min(Number(api.settings.minGain), Number(api.settings.maxGain));
     const maxGain = Math.max(Number(api.settings.minGain), Number(api.settings.maxGain));
     const gained = Math.floor(Math.random() * (maxGain - minGain + 1)) + minGain;
     if (gained <= 0) return;
-
     profile.xp += gained; profile.totalXp += gained; profile.lastMessageAt = Date.now();
     let leveledUp = false;
-    while (profile.xp >= totalForLevel(profile.level, api.settings.levelBase)) {
-      profile.xp -= totalForLevel(profile.level, api.settings.levelBase); profile.level += 1; leveledUp = true;
-    }
+    while (profile.xp >= totalForLevel(profile.level, api.settings.levelBase)) { profile.xp -= totalForLevel(profile.level, api.settings.levelBase); profile.level += 1; leveledUp = true; }
     profiles[identity] = profile; all[key] = profiles; saveProfiles(api, all);
     if (leveledUp) say(`⭐ ${profile.name} chegou ao nível ${profile.level}!`);
   },

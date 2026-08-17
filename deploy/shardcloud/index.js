@@ -26,17 +26,44 @@ const startedAt = Date.now();
 const counters = { connections: 0, joins: 0, messages: 0, edits: 0, signals: 0 };
 const releaseCache = { expiresAt: 0, value: null };
 const pluginLogs = [];
+const roomChatHistory = new Map();
 const addPluginLog = (level, message) => { pluginLogs.unshift({ level, message, time: new Date().toISOString() }); if (pluginLogs.length > 40) pluginLogs.pop(); };
 const safePresenceStatus = (value) => ['online', 'idle', 'dnd'].includes(String(value || '').toLowerCase()) ? String(value).toLowerCase() : 'online';
 const peersIn = (key) => [...(io.sockets.adapter.rooms.get(key) || [])].map((id) => {
   const peer = io.sockets.sockets.get(id)?.data || {};
-  return { id, name: peer.name || 'Visitante', color: peer.color || colors[0], avatar: peer.avatar || '', status: safePresenceStatus(peer.status), voiceChannel: peer.voiceChannel === LOBBY_CHANNEL ? '' : (peer.voiceChannel || 'Geral') };
+  return { id, clientId: peer.clientId || '', name: peer.name || 'Visitante', color: peer.color || colors[0], avatar: peer.avatar || '', status: safePresenceStatus(peer.status), voiceChannel: peer.voiceChannel === LOBBY_CHANNEL ? '' : (peer.voiceChannel || 'Geral') };
 });
 const broadcastPresence = (serverRoom, excludedId) => io.to(serverRoom).emit('room-presence', { members: peersIn(serverRoom).filter((peer) => peer.id !== excludedId) });
 const safeMentions = (serverRoom, mentions) => {
   if (!Array.isArray(mentions)) return [];
   const allowed = new Set(peersIn(serverRoom).map((peer) => peer.id));
   return [...new Set(mentions.map(String).filter((id) => allowed.has(id)))].slice(0, 16);
+};
+const stableMentionIds = (serverRoom, mentions) => {
+  const allowed = new Set((Array.isArray(mentions) ? mentions : []).map(String));
+  return [...new Set(peersIn(serverRoom).filter((peer) => allowed.has(String(peer.id)) && peer.clientId).map((peer) => String(peer.clientId)))].slice(0, 16);
+};
+const historyFor = (room) => {
+  const key = String(room || '').trim().slice(0, 48);
+  if (!roomChatHistory.has(key)) roomChatHistory.set(key, []);
+  return roomChatHistory.get(key);
+};
+const messageById = (room, messageId) => historyFor(room).find((message) => String(message.messageId) === String(messageId || ''));
+const rememberMessage = (room, packet) => {
+  if (!room || !packet?.messageId || !packet?.text) return null;
+  const history = historyFor(room); const existing = messageById(room, packet.messageId);
+  if (existing) { Object.assign(existing, packet); return existing; }
+  const stored = { ...packet, reactions: packet.reactions && typeof packet.reactions === 'object' ? packet.reactions : {}, pinned: Boolean(packet.pinned), pinnedBy: packet.pinnedBy || '' };
+  history.push(stored); if (history.length > 300) history.splice(0, history.length - 300);
+  return stored;
+};
+const forgetMessage = (room, messageId) => {
+  const history = historyFor(room); const index = history.findIndex((message) => String(message.messageId) === String(messageId || ''));
+  return index >= 0 ? history.splice(index, 1)[0] : null;
+};
+const safeReply = (room, reply) => {
+  const source = reply?.messageId ? messageById(room, reply.messageId) : null;
+  return source ? { messageId: source.messageId, name: String(source.name || 'Mensagem').slice(0, 24), text: String(source.text || '').slice(0, 120) } : null;
 };
 const musicFolder = path.join(__dirname, 'music');
 fs.mkdirSync(musicFolder, { recursive: true });
@@ -45,7 +72,10 @@ const pluginMessageId = () => `plugin-${Date.now().toString(36)}-${Math.random()
 const plugins = loadPlugins({
   directories: [path.join(__dirname, 'plugins')], stateFile: process.env.PLUGIN_STATE_FILE || path.join(__dirname, 'data', 'plugin-settings.json'), addLog: addPluginLog,
   emitSystemMessage: ({ room, textChannel, text, name, color, avatar, pluginId }) => {
-    if (room && text) io.to(serverKey(room)).emit('text-message', { from: `plugin:${pluginId || 'server'}`, messageId: pluginMessageId(), createdAt: Date.now(), text, textChannel, name, color, avatar: avatar || '', pluginId });
+    if (room && text) {
+      const packet = { from: `plugin:${pluginId || 'server'}`, messageId: pluginMessageId(), createdAt: Date.now(), text, textChannel, name, color, avatar: avatar || '', pluginId, reactions: {}, pinned: false };
+      rememberMessage(room, packet); io.to(serverKey(room)).emit('text-message', packet);
+    }
   },
   emitPluginEvent: () => {}, media: { list: () => [], url: () => '' }
 });
@@ -97,7 +127,7 @@ app.get('/api/status', (_request, response) => {
 app.get('/api/release', async (_request, response) => {
   response.set('Cache-Control', 'public, max-age=300');
   try { response.json(await latestRelease()); }
-  catch (error) { response.status(503).json({ ok: false, version: '1.1.0', pageUrl: 'https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest', clientUrl: 'https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest', serverUrl: 'https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest', message: error.message }); }
+  catch (error) { response.status(503).json({ ok: false, version: packageInfo.version, pageUrl: 'https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest', clientUrl: 'https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest', serverUrl: 'https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest', message: error.message }); }
 });
 
 io.on('connection', (socket) => {
@@ -119,6 +149,7 @@ io.on('connection', (socket) => {
     socket.emit('color-assigned', { color: safeColor });
     const peers = channel === LOBBY_CHANNEL ? [] : peersIn(voiceRoom).filter((peer) => peer.id !== socket.id);
     socket.emit('room-joined', { roomId: room, voiceChannel: channel, peers });
+    socket.emit('chat-history', { messages: historyFor(room) });
     if (channel !== LOBBY_CHANNEL) socket.to(voiceRoom).emit('peer-joined', { id: socket.id, name: safeName, color: safeColor, avatar: safeAvatar, status: socket.data.status });
     broadcastPresence(serverKey(room));
   });
@@ -142,23 +173,51 @@ io.on('connection', (socket) => {
     if (channel !== LOBBY_CHANNEL) socket.to(next).emit('peer-joined', { id: socket.id, name: socket.data.name, color: socket.data.color, avatar: socket.data.avatar, status: safePresenceStatus(socket.data.status) });
     broadcastPresence(socket.data.serverRoom);
   });
-  socket.on('text-message', ({ text, textChannel, messageId, createdAt, mentions } = {}) => {
+  socket.on('text-message', ({ text, textChannel, messageId, createdAt, mentions, reply } = {}) => {
     if (!socket.data.serverRoom) return;
     const safeText = String(text || '').trim().slice(0, 500); if (!safeText) return;
     const safeTextChannel = safeChannel(textChannel, 'geral'); const id = safeMessageId(messageId, socket.id); const sentAt = Number.isFinite(Number(createdAt)) ? Number(createdAt) : Date.now();
     const safeMentionIds = safeMentions(socket.data.serverRoom, mentions);
-    socket.data.chatMessages ||= new Map(); socket.data.chatMessages.set(id, { textChannel: safeTextChannel, mentions: safeMentionIds });
+    const mentionClientIds = stableMentionIds(socket.data.serverRoom, safeMentionIds);
+    const replyPacket = safeReply(socket.data.room, reply);
+    socket.data.chatMessages ||= new Map(); socket.data.chatMessages.set(id, { textChannel: safeTextChannel, mentions: safeMentionIds, mentionClientIds });
     if (socket.data.chatMessages.size > 250) socket.data.chatMessages.delete(socket.data.chatMessages.keys().next().value);
     counters.messages += 1;
-    io.to(socket.data.serverRoom).emit('text-message', { from: socket.id, messageId: id, createdAt: sentAt, text: safeText, textChannel: safeTextChannel, name: socket.data.name || 'Visitante', color: socket.data.color || colors[0], avatar: socket.data.avatar || '', mentions: safeMentionIds });
+    const packet = { from: socket.id, authorClientId: socket.data.clientId || '', messageId: id, createdAt: sentAt, text: safeText, textChannel: safeTextChannel, name: socket.data.name || 'Visitante', color: socket.data.color || colors[0], avatar: socket.data.avatar || '', mentions: safeMentionIds, mentionClientIds, reply: replyPacket, reactions: {}, pinned: false };
+    rememberMessage(socket.data.room, packet); io.to(socket.data.serverRoom).emit('text-message', packet);
     plugins.onTextMessage({ text: safeText, room: socket.data.room, textChannel: safeTextChannel, voiceChannel: socket.data.voiceChannel, user: { id: socket.id, clientId: socket.data.clientId || '', name: socket.data.name || 'Visitante', color: socket.data.color || colors[0] }, serverIsCloud: true });
   });
   socket.on('edit-message', ({ messageId, text, textChannel, mentions } = {}) => {
     if (!socket.data.serverRoom) return;
-    const id = safeMessageId(messageId, socket.id); const known = socket.data.chatMessages?.get(id); const safeText = String(text || '').trim().slice(0, 500);
-    if (!known || !safeText || safeChannel(textChannel, 'geral') !== known.textChannel) return socket.emit('app-error', 'Não foi possível editar essa mensagem.');
-    counters.edits += 1; const safeMentionIds = safeMentions(socket.data.serverRoom, mentions); known.mentions = safeMentionIds;
-    io.to(socket.data.serverRoom).emit('message-edited', { from: socket.id, messageId: id, text: safeText, textChannel: known.textChannel, editedAt: Date.now(), mentions: safeMentionIds });
+    const id = String(messageId || ''); const stored = messageById(socket.data.room, id); const known = socket.data.chatMessages?.get(id); const safeText = String(text || '').trim().slice(0, 500);
+    const ownsMessage = stored && (stored.authorClientId && socket.data.clientId ? stored.authorClientId === socket.data.clientId : stored.from === socket.id);
+    if ((!known && !ownsMessage) || !safeText || safeChannel(textChannel, 'geral') !== (stored?.textChannel || known?.textChannel)) return socket.emit('app-error', 'Não foi possível editar essa mensagem.');
+    counters.edits += 1; const safeMentionIds = safeMentions(socket.data.serverRoom, mentions); const mentionClientIds = stableMentionIds(socket.data.serverRoom, safeMentionIds); if (known) Object.assign(known, { mentions: safeMentionIds, mentionClientIds });
+    const editedAt = Date.now(); if (stored) Object.assign(stored, { text: safeText, editedAt, mentions: safeMentionIds, mentionClientIds });
+    io.to(socket.data.serverRoom).emit('message-edited', { from: socket.id, messageId: id, text: safeText, textChannel: stored?.textChannel || known.textChannel, editedAt, mentions: safeMentionIds, mentionClientIds });
+  });
+  socket.on('react-message', ({ messageId, emoji } = {}) => {
+    if (!socket.data.serverRoom) return;
+    const stored = messageById(socket.data.room, messageId); const safeEmoji = String(emoji || '').trim().slice(0, 12);
+    if (!stored || !safeEmoji) return socket.emit('app-error', 'Não foi possível reagir a essa mensagem.');
+    stored.reactions ||= {}; const actor = socket.data.clientId || socket.id; const actors = new Set(Array.isArray(stored.reactions[safeEmoji]) ? stored.reactions[safeEmoji] : []);
+    if (actors.has(actor)) actors.delete(actor); else actors.add(actor);
+    if (actors.size) stored.reactions[safeEmoji] = [...actors]; else delete stored.reactions[safeEmoji];
+    io.to(socket.data.serverRoom).emit('message-reaction', { messageId: stored.messageId, textChannel: stored.textChannel, reactions: stored.reactions });
+  });
+  socket.on('pin-message', ({ messageId, pinned } = {}) => {
+    if (!socket.data.serverRoom) return;
+    const stored = messageById(socket.data.room, messageId); if (!stored) return socket.emit('app-error', 'Mensagem não encontrada.');
+    stored.pinned = Boolean(pinned); stored.pinnedBy = socket.data.clientId || socket.id;
+    io.to(socket.data.serverRoom).emit('message-pinned', { messageId: stored.messageId, textChannel: stored.textChannel, pinned: stored.pinned, pinnedBy: stored.pinnedBy });
+  });
+  socket.on('delete-message', ({ messageId } = {}) => {
+    if (!socket.data.serverRoom) return;
+    const stored = messageById(socket.data.room, messageId);
+    const ownsMessage = stored && (stored.authorClientId && socket.data.clientId ? stored.authorClientId === socket.data.clientId : stored.from === socket.id);
+    if (!ownsMessage) return socket.emit('app-error', 'Você só pode apagar suas próprias mensagens.');
+    forgetMessage(socket.data.room, stored.messageId); socket.data.chatMessages?.delete(stored.messageId);
+    io.to(socket.data.serverRoom).emit('message-deleted', { messageId: stored.messageId, textChannel: stored.textChannel });
   });
   socket.on('signal', ({ target, data } = {}) => {
     if (!target || !socket.data.serverRoom) return;

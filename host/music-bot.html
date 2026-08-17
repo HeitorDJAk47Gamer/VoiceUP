@@ -4,7 +4,9 @@
 <title>VoiceUP Music Bot</title>
 <script>
 const bots = new Map();
-const serverUrl = 'http://127.0.0.1:3000';
+const requestedPort = new URLSearchParams(location.search).get('port');
+const serverPort = /^\d{2,5}$/.test(requestedPort || '') ? requestedPort : '3000';
+const serverUrl = `http://127.0.0.1:${serverPort}`;
 const loadSocket = () => new Promise((resolve, reject) => {
   if (window.io) return resolve(window.io);
   const script = document.createElement('script'); script.src = `${serverUrl}/socket.io/socket.io.js`;

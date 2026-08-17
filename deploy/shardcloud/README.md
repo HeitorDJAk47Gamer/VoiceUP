@@ -1,4 +1,4 @@
-# VoiceUP Server Cloud 1.1.0
+# VoiceUP Server Cloud 1.1.1
 
 Este pacote hospeda apenas a sinalizacao das chamadas. Audio, video, tela e chat seguem diretamente entre os clientes apos a conexao P2P.
 
