@@ -24,6 +24,9 @@ jobs:
       - name: Instalar dependencias
         run: npm ci
 
+      - name: Validar compatibilidade do atualizador
+        run: npm run test:update-compat
+
       - name: Gerar instalador do cliente
         run: npm run dist -- --publish never
         env:
@@ -43,6 +46,17 @@ jobs:
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v', ''
           Compress-Archive -Path deploy/shardcloud/* -DestinationPath "deploy/VoiceUP-Server-Cloud-$version.zip" -CompressionLevel Optimal
+
+      - name: Validar pacotes da Release
+        shell: powershell
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $client = "release/VoiceUP Setup $version.exe"
+          $server = "release-server/VoiceUPServer Setup $version.exe"
+          if (-not (Test-Path -LiteralPath $client)) { throw "Instalador do Cliente ausente: $client" }
+          if (-not (Test-Path -LiteralPath $server)) { throw "Instalador do ServerHost ausente: $server" }
+          Write-Output "Cliente publicado como: $(Split-Path -Leaf $client -replace '\s+', '.')"
+          Write-Output "ServerHost publicado como: $(Split-Path -Leaf $server -replace '\s+', '.')"
 
       - name: Criar Release no GitHub
         uses: softprops/action-gh-release@v2

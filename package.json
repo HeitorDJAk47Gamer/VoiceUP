@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "test:update-compat": "node tools/test-update-compat.js",
     "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-process-audio.ps1",
     "predist": "npm run build:native",
     "dist": "electron-builder --win nsis",
