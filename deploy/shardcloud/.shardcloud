@@ -4,4 +4,5 @@ MAIN=index.js
 LANGUAGE=node
 MEMORY=512
 SUBDOMAIN=voiceup
+VOICEUP_SERVER_ICON_URL=https://voiceup.shardweb.app/assets/voiceup-logo.png
 VERSION=recommended

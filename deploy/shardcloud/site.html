@@ -85,6 +85,25 @@
           <article class="download-card featured"><span>PARA TODOS</span><h3>VoiceUP Cliente</h3><p>Entre no Cloud público, em ServerHosts ou faça conexões diretas. Inclui voz, vídeo, tela, chat, temas e perfil.</p><ul><li>Windows 10/11</li><li>Atualização pelo aplicativo</li><li>Sem mensalidade</li></ul><div class="download-actions"><a class="button store-button" href="https://apps.microsoft.com/detail/9NSTDRJGWK60?hl=neutral&amp;gl=BR&amp;ocid=pdpshare" target="_blank" rel="noopener noreferrer" aria-label="Baixar o VoiceUP pela Microsoft Store"><svg class="microsoft-logo" viewBox="0 0 28 28" aria-hidden="true"><path fill="currentColor" d="M7.2 7.4V6.2a6.8 6.8 0 0 1 13.6 0v1.2h2.3a2.4 2.4 0 0 1 2.4 2.4v14.8a2.4 2.4 0 0 1-2.4 2.4H4.9a2.4 2.4 0 0 1-2.4-2.4V9.8a2.4 2.4 0 0 1 2.4-2.4h2.3Zm2.2 0h9.2V6.2a4.6 4.6 0 0 0-9.2 0v1.2Zm-4.7 2.2v15.2h18.6V9.6H4.7Z"/><path fill="#f25022" d="M8.2 12.2h5v5h-5z"/><path fill="#7fba00" d="M14.8 12.2h5v5h-5z"/><path fill="#00a4ef" d="M8.2 18.8h5v5h-5z"/><path fill="#ffb900" d="M14.8 18.8h5v5h-5z"/></svg><span>Obter na Microsoft Store</span></a><a class="button secondary" data-download="client" href="https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest">Baixar instalador <b data-latest-version>mais recente</b></a></div></article>
           <article class="download-card"><span>PARA ADMINISTRADORES</span><h3>VoiceUP ServerHost</h3><p>Hospede salas em seu computador e gerencie participantes, banimentos, plugins, logs e desempenho.</p><ul><li>Painel responsivo</li><li>Controle pela bandeja</li><li>Plugins no servidor</li></ul><a class="button secondary" data-download="server" href="https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/latest">Baixar ServerHost</a></article>
         </div>
+        <article class="public-access" aria-labelledby="public-access-title">
+          <div class="public-access-copy">
+            <p class="eyebrow">ACESSO FORA DA SUA REDE</p>
+            <h3 id="public-access-title">Como deixar seu ServerHost acessível ao público</h3>
+            <p>Ao iniciar, o VoiceUP tenta abrir a porta automaticamente usando <strong>UPnP</strong> ou <strong>NAT-PMP</strong>. Esses recursos pertencem ao roteador: não são programas que se instalam no computador.</p>
+          </div>
+          <div class="public-access-options">
+            <div><span class="access-symbol cloud-symbol">☁</span><h4>Cloud público</h4><p>A forma mais simples para amigos em redes diferentes. Não exige configuração do roteador.</p></div>
+            <div><span class="access-symbol router-symbol">↗</span><h4>UPnP ou encaminhamento</h4><p>Ative UPnP no roteador ou encaminhe a porta indicada pelo ServerHost ao IP local do computador que hospeda.</p></div>
+            <div><span class="access-symbol lock-symbol">◆</span><h4>Rede privada</h4><p>Radmin funciona para grupos que já usam a mesma rede virtual, mas não cria acesso público comum.</p></div>
+          </div>
+          <details class="router-help">
+            <summary>Meu roteador não aceitou o mapeamento automático</summary>
+            <div class="router-help-content">
+              <p>Procure no painel do roteador por <strong>UPnP</strong>, <strong>NAT-PMP</strong> ou <strong>Encaminhamento de porta</strong>. Se a opção não existir, estiver bloqueada pelo provedor ou a senha administrativa tiver sido alterada, peça suporte ao provedor de internet.</p>
+              <p>No Claro Kaon CG3000, o encaminhamento costuma ficar em <strong>Avançado → Firewall → Encaminhamento de porta</strong>. Não use DMZ e não publique senhas, endereços IP ou a chave de pareamento da sala.</p>
+            </div>
+          </details>
+        </article>
       </div>
     </section>
 

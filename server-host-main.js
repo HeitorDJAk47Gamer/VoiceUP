@@ -3,8 +3,9 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const crypto = require('crypto');
-const { startSignalingServer, normalizeRoomLayout } = require('./signaling-server');
+const { startSignalingServer, normalizeRoomLayout, hashRoomPassword } = require('./signaling-server');
 const { registerUpdateHandlers } = require('./update-helper');
+const { localNetworkUrls, openPublicPort } = require('./network-access');
 
 // Estes argumentos permitem executar mais de um ServerHost no mesmo PC sem
 // compartilharem porta, bans, configurações, plugins ou músicas. São úteis
@@ -44,19 +45,81 @@ let pluginFolder = '';
 let portablePluginFolder = '';
 let musicFolder = '';
 let pluginStateFile = '';
-let hostSettings = { closeBehavior: 'tray', theme: 'ocean', rooms: [], cluster: { enabled: false, role: 'primary', primaryUrl: '', publicUrl: '', secret: '', nodeId: '', capacity: 100, weight: 1, failover: true, smartDistribution: true, heartbeatMs: 3000 } };
+let publicPortMapping = null;
+let publicAccessGeneration = 0;
+let publicAccessState = { status: 'idle', mapped: false, message: 'Acesso automático ainda não verificado.' };
+let hostSettings = { closeBehavior: 'tray', theme: 'ocean', serverIcon: '', rooms: [], storage: { retentionDays: 30, maxPerRoom: 300 }, publicAccess: { automatic: true }, cluster: { enabled: false, role: 'primary', primaryUrl: '', publicUrl: '', secret: '', nodeId: '', capacity: 100, weight: 1, failover: true, smartDistribution: true, heartbeatMs: 3000 } };
+
+function normalizeServerIcon(value) {
+  const icon = String(value || '');
+  return /^data:image\/(?:png|jpeg|webp);base64,/i.test(icon) && icon.length <= 60000 ? icon : '';
+}
 
 const settingsPath = () => path.join(app.getPath('userData'), 'server-settings.json');
 function loadSettings() {
   try { hostSettings = { ...hostSettings, ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) }; } catch { /* first run */ }
   hostSettings.rooms = (Array.isArray(hostSettings.rooms) ? hostSettings.rooms : []).map((room) => normalizeRoomLayout(room)).filter((room) => room.id);
+  hostSettings.storage = { retentionDays: 30, maxPerRoom: 300, ...(hostSettings.storage || {}) };
+  hostSettings.storage.retentionDays = Math.max(0, Math.min(3650, Math.round(Number(hostSettings.storage.retentionDays) || 0)));
+  hostSettings.storage.maxPerRoom = Math.max(50, Math.min(5000, Math.round(Number(hostSettings.storage.maxPerRoom) || 300)));
+  hostSettings.publicAccess = { automatic: true, ...(hostSettings.publicAccess || {}) };
+  hostSettings.publicAccess.automatic = hostSettings.publicAccess.automatic !== false;
+  hostSettings.serverIcon = normalizeServerIcon(hostSettings.serverIcon);
   hostSettings.cluster = { enabled: false, role: 'primary', primaryUrl: '', publicUrl: '', secret: '', nodeId: '', capacity: 100, weight: 1, failover: true, smartDistribution: true, heartbeatMs: 3000, ...(hostSettings.cluster || {}) };
   if (!hostSettings.cluster.nodeId) hostSettings.cluster.nodeId = `host-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
   if (!hostSettings.cluster.secret) hostSettings.cluster.secret = crypto.randomBytes(18).toString('hex');
   saveSettings();
 }
 function saveSettings() { try { fs.writeFileSync(settingsPath(), JSON.stringify(hostSettings, null, 2), 'utf8'); } catch { /* optional preference */ } }
-function addresses() { return Object.values(os.networkInterfaces()).flat().filter((item) => item && item.family === 'IPv4' && !item.internal).map((item) => `http://${item.address}:${hostPort}`); }
+function publicRooms() { return hostSettings.rooms.map(({ passwordHash, ...room }) => ({ ...room, private: Boolean(passwordHash) })); }
+function fileSize(target) { try { return fs.statSync(target).size; } catch { return 0; } }
+function directorySize(target) {
+  try {
+    return fs.readdirSync(target, { withFileTypes: true }).reduce((total, entry) => {
+      const item = path.join(target, entry.name);
+      return total + (entry.isDirectory() ? directorySize(item) : fileSize(item));
+    }, 0);
+  } catch { return 0; }
+}
+function categorizedStorage() {
+  const userData = app.getPath('userData');
+  const categories = {
+    chats: fileSize(path.join(userData, 'chat-history.json')),
+    reports: fileSize(path.join(userData, 'bug-reports.json')),
+    bans: fileSize(path.join(userData, 'bans.json')),
+    settings: fileSize(settingsPath()) + fileSize(pluginStateFile),
+    plugins: directorySize(pluginFolder),
+    music: directorySize(musicFolder)
+  };
+  const known = Object.values(categories).reduce((sum, value) => sum + value, 0);
+  const total = directorySize(userData);
+  return { totalBytes: total, categories: { ...categories, other: Math.max(0, total - known) } };
+}
+function addresses() { return localNetworkUrls(hostPort); }
+function serializablePublicAccess(value = {}) {
+  const { close: _close, ...snapshot } = value || {};
+  return snapshot;
+}
+async function closePublicMapping() {
+  publicAccessGeneration += 1;
+  const current = publicPortMapping; publicPortMapping = null;
+  try { await current?.close?.(); } catch { /* already unmapped */ }
+}
+async function refreshPublicMapping() {
+  const generation = ++publicAccessGeneration;
+  const current = publicPortMapping; publicPortMapping = null;
+  try { await current?.close?.(); } catch { /* replace stale mapping */ }
+  if (!signaling || !hostSettings.publicAccess.automatic) {
+    publicAccessState = { status: 'disabled', mapped: false, message: hostSettings.publicAccess.automatic ? 'Servidor desligado.' : 'Acesso público automático desativado.' };
+    return publicAccessState;
+  }
+  publicAccessState = { status: 'checking', mapped: false, message: 'Verificando o roteador…' };
+  const result = await openPublicPort(hostPort, { description: 'VoiceUP ServerHost', timeoutMs: 8000 });
+  if (generation !== publicAccessGeneration || !signaling) { try { await result.close?.(); } catch { /* stale */ } return publicAccessState; }
+  publicAccessState = serializablePublicAccess(result);
+  if (result.mapped) publicPortMapping = result;
+  return publicAccessState;
+}
 function discordTemplateCode(value) {
   const input = String(value || '').trim();
   if (/^[a-z0-9_-]{2,80}$/i.test(input)) return input;
@@ -66,7 +129,12 @@ function discordTemplateCode(value) {
 function roomFromDiscordTemplate(payload = {}, fallback = {}) {
   const guild = payload.serialized_source_guild || payload.serializedSourceGuild || payload.guild || payload;
   const channels = Array.isArray(guild.channels) ? guild.channels : [];
-  const categories = new Map(channels.filter((channel) => Number(channel.type) === 4).map((channel) => [String(channel.id || ''), String(channel.name || '').slice(0, 36)]));
+  const categorySettings = channels.filter((channel) => Number(channel.type) === 4).map((channel, position) => ({
+    id: channel.id,
+    name: String(channel.name || '').slice(0, 36),
+    position: Number.isFinite(Number(channel.position)) ? Number(channel.position) : position
+  })).filter((category) => category.name);
+  const categories = new Map(categorySettings.map((category) => [String(category.id || ''), category.name]));
   const channelCategory = (channel) => categories.get(String(channel.parent_id || channel.parentId || '')) || '';
   const voiceChannelSettings = channels.filter((channel) => [2, 13].includes(Number(channel.type))).map((channel, position) => ({
     id: channel.id,
@@ -90,6 +158,7 @@ function roomFromDiscordTemplate(payload = {}, fallback = {}) {
     id: fallback.id || guild.id || payload.code || '',
     name: fallback.name || guild.name || payload.name || 'Modelo Discord',
     template: 'discord',
+    categorySettings,
     voiceChannelSettings: voiceChannelSettings.length ? voiceChannelSettings : undefined,
     textChannelSettings: textChannelSettings.length ? textChannelSettings : undefined
   });
@@ -117,14 +186,22 @@ async function startHostedSignaling() {
     musicDirectory: musicFolder,
     pluginStateFile,
     bansFile: path.join(app.getPath('userData'), 'bans.json'),
+    historyFile: path.join(app.getPath('userData'), 'chat-history.json'),
+    reportsFile: path.join(app.getPath('userData'), 'bug-reports.json'),
+    chatRetentionDays: hostSettings.storage.retentionDays,
+    chatMaxPerRoom: hostSettings.storage.maxPerRoom,
+    serverIcon: hostSettings.serverIcon,
     roomLayouts: hostSettings.rooms,
     cluster: hostSettings.cluster,
     onPluginEvent: (event) => { if (event?.event === 'music-bot') sendMusicBotCommand(event.payload).catch(() => {}); }
   });
+  void refreshPublicMapping();
   return { ok: true, message: `Servidor iniciado na porta ${hostPort}.` };
 }
 async function stopHostedSignaling() {
   if (!signaling) return { ok: true, message: 'Servidor já está desligado.' };
+  await closePublicMapping();
+  publicAccessState = { status: 'disabled', mapped: false, message: 'Servidor desligado.' };
   const current = signaling; signaling = null;
   const migration = current.redirectClientsForShutdown?.();
   if (migration?.redirected > 0) await new Promise((resolve) => setTimeout(resolve, 650));
@@ -180,8 +257,9 @@ async function openWindow() {
 }
 
 ipcMain.handle('server-info', () => {
-  const urls = addresses(); const host = urls[0] || `http://localhost:${hostPort}`;
-  return { port: hostPort, urls, connectionCode: `VU1:${Buffer.from(JSON.stringify({ host })).toString('base64')}`, pluginFolder, portablePluginFolder, musicFolder, online: Boolean(signaling), version: app.getVersion() };
+  const urls = addresses(); const publicUrl = publicAccessState.scope === 'public' ? publicAccessState.publicUrl : '';
+  const host = publicUrl || urls[0] || `http://localhost:${hostPort}`;
+  return { port: hostPort, urls, publicUrl, publicAccess: publicAccessState, connectionCode: `VU1:${Buffer.from(JSON.stringify({ host })).toString('base64')}`, pluginFolder, portablePluginFolder, musicFolder, online: Boolean(signaling), version: app.getVersion() };
 });
 ipcMain.handle('server-stats', () => {
   const now = process.hrtime.bigint(); const usage = process.cpuUsage(lastCpu); const elapsedMicros = Number(now - lastCpuAt) / 1000;
@@ -190,8 +268,8 @@ ipcMain.handle('server-stats', () => {
   const memory = process.memoryUsage();
   const memoryMb = Math.round(memory.rss / 1024 / 1024);
   signaling?.updateNodeMetrics?.({ cpuPercent, memoryMb, memoryPressure: os.totalmem() > 0 ? memory.rss / os.totalmem() : 0 });
-  const stats = signaling?.getStats?.() || { uptimeSeconds: 0, participants: 0, rooms: 0, averagePing: null, events: { signals: 0 }, logs: [{ time: new Date().toLocaleTimeString('pt-BR'), level: 'info', message: 'Servidor desligado.' }], plugins: [], pluginErrors: [], members: [], bans: [] };
-  return { ...stats, port: hostPort, online: Boolean(signaling), cpuPercent, memoryMb, heapMb: Math.round(memory.heapUsed / 1024 / 1024) };
+  const stats = signaling?.getStats?.() || { uptimeSeconds: 0, participants: 0, rooms: 0, averagePing: null, events: { signals: 0 }, logs: [{ time: new Date().toLocaleTimeString('pt-BR'), level: 'info', message: 'Servidor desligado.' }], plugins: [], pluginErrors: [], members: [], bans: [], reports: [] };
+  return { ...stats, storage: { ...(stats.storage || {}), ...categorizedStorage(), policy: hostSettings.storage }, publicAccess: publicAccessState, port: hostPort, online: Boolean(signaling), cpuPercent, memoryMb, heapMb: Math.round(memory.heapUsed / 1024 / 1024) };
 });
 ipcMain.handle('server:moderate', (_event, { action, id, durationMinutes, reason } = {}) => {
   if (!signaling) return { ok: false, message: 'O servidor está desligado.' };
@@ -210,7 +288,7 @@ ipcMain.handle('server:control', async (_event, action) => {
   } catch (error) { return { ok: false, message: error.message || 'Não foi possível alterar o servidor.' }; }
 });
 ipcMain.handle('server:settings', () => hostSettings);
-ipcMain.handle('server:rooms', () => hostSettings.rooms);
+ipcMain.handle('server:rooms', () => publicRooms());
 ipcMain.handle('server:import-discord-template', async (_event, { source, roomId, roomName } = {}) => {
   try {
     const raw = String(source || '').trim(); if (!raw) return { ok: false, message: 'Cole um código, link ou JSON de modelo do Discord.' };
@@ -247,7 +325,11 @@ ipcMain.handle('server:save-cluster', async (_event, next = {}) => {
   return { ok: true, message: enabled ? `Cluster ${role === 'primary' ? 'primário' : 'secundário'} ativado.` : 'Cluster desativado.', cluster: hostSettings.cluster };
 });
 ipcMain.handle('server:save-room', (_event, next = {}) => {
-  const room = normalizeRoomLayout(next);
+  const previousLookup = String(next.previousId || next.id || '').toLowerCase();
+  const previous = hostSettings.rooms.find((item) => item.id.toLowerCase() === previousLookup);
+  const suppliedPassword = String(next.password || '');
+  const passwordHash = next.clearPassword === true ? '' : (suppliedPassword ? hashRoomPassword(suppliedPassword) : (previous?.passwordHash || ''));
+  const room = normalizeRoomLayout({ ...next, passwordHash, private: Boolean(passwordHash) });
   if (!room.id) return { ok: false, message: 'Informe um código válido para a sala.' };
   const previousId = String(next.previousId || room.id).toLowerCase();
   const duplicate = hostSettings.rooms.find((item) => item.id.toLowerCase() === room.id.toLowerCase() && item.id.toLowerCase() !== previousId);
@@ -256,7 +338,7 @@ ipcMain.handle('server:save-room', (_event, next = {}) => {
   if (index >= 0) hostSettings.rooms[index] = room; else hostSettings.rooms.push(room);
   saveSettings();
   signaling?.updateRoomLayouts?.(hostSettings.rooms);
-  return { ok: true, message: index >= 0 ? 'Sala atualizada.' : 'Sala criada.', rooms: hostSettings.rooms };
+  return { ok: true, message: index >= 0 ? 'Sala atualizada.' : 'Sala criada.', rooms: publicRooms() };
 });
 ipcMain.handle('server:delete-room', (_event, roomId) => {
   const id = String(roomId || '').toLowerCase();
@@ -265,16 +347,32 @@ ipcMain.handle('server:delete-room', (_event, roomId) => {
   if (hostSettings.rooms.length === before) return { ok: false, message: 'Sala não encontrada.' };
   saveSettings();
   signaling?.updateRoomLayouts?.(hostSettings.rooms);
-  return { ok: true, message: 'Sala removida. O código continua aceitando os canais padrão por compatibilidade.', rooms: hostSettings.rooms };
+  return { ok: true, message: 'Sala removida. O código continua aceitando os canais padrão por compatibilidade.', rooms: publicRooms() };
 });
 ipcMain.handle('server:save-settings', (_event, next = {}) => {
   const closeBehaviors = ['tray', 'ask', 'quit'];
   const themes = ['ocean', 'violet', 'forest', 'graphite'];
   hostSettings.closeBehavior = closeBehaviors.includes(next.closeBehavior) ? next.closeBehavior : hostSettings.closeBehavior;
   hostSettings.theme = themes.includes(next.theme) ? next.theme : hostSettings.theme;
+  if (Object.prototype.hasOwnProperty.call(next, 'serverIcon')) {
+    hostSettings.serverIcon = normalizeServerIcon(next.serverIcon);
+    signaling?.updateServerProfile?.({ icon: hostSettings.serverIcon });
+  }
+  if (next.storage && typeof next.storage === 'object') {
+    hostSettings.storage.retentionDays = Math.max(0, Math.min(3650, Math.round(Number(next.storage.retentionDays) || 0)));
+    hostSettings.storage.maxPerRoom = Math.max(50, Math.min(5000, Math.round(Number(next.storage.maxPerRoom) || 300)));
+    signaling?.configureChatStorage?.(hostSettings.storage);
+  }
+  if (next.publicAccess && typeof next.publicAccess === 'object') {
+    const changed = hostSettings.publicAccess.automatic !== (next.publicAccess.automatic !== false);
+    hostSettings.publicAccess.automatic = next.publicAccess.automatic !== false;
+    if (changed) void refreshPublicMapping();
+  }
   saveSettings();
   return hostSettings;
 });
+ipcMain.handle('server:cleanup-messages', (_event, options = {}) => signaling ? signaling.cleanupMessages(options) : { ok: false, message: 'Inicie o servidor para limpar as mensagens.' });
+ipcMain.handle('server:clear-reports', () => signaling ? signaling.clearReports() : { ok: false, message: 'Inicie o servidor para limpar os relatórios.' });
 ipcMain.handle('window:close-choice', (_event, choice) => {
   if (!closePromptOpen) return false;
   closePromptOpen = false;
@@ -307,4 +405,4 @@ registerUpdateHandlers(ipcMain, 'VoiceUPServer Setup ');
 app.whenReady().then(openWindow).catch((error) => { console.error(error); app.quit(); });
 app.on('activate', revealMainWindow);
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' && (isQuitting || hostSettings.closeBehavior === 'quit')) app.quit(); });
-app.on('before-quit', () => { musicBotWindow?.destroy(); signaling?.io.close(); signaling?.server.close(); });
+app.on('before-quit', () => { musicBotWindow?.destroy(); void closePublicMapping(); signaling?.io.close(); signaling?.server.close(); });

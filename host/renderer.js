@@ -11,10 +11,12 @@
   let pluginSnapshotKey = '';
   let dialogResolve = null;
   let settingsSaveTimer = null;
+  let hostServerIcon = '';
   let managedRooms = [];
   let roomSnapshotKey = '';
   let voiceChannelDraft = [];
   let textChannelDraft = [];
+  let categoryDraft = [];
   const roomTemplates = {
     community: { name: 'Comunidade VoiceUP', voice: ['Geral', 'Bate-papo', 'Ausente'], text: ['geral', 'apresentacoes', 'avisos', 'midia'] },
     gaming: { name: 'Servidor de jogos', voice: ['Lobby', 'Jogando 1', 'Jogando 2', 'Ausente'], text: ['geral', 'procurando-grupo', 'clips', 'avisos'] },
@@ -28,6 +30,13 @@
     const minutes = Math.floor((value % 3600) / 60);
     if (hours) return `${hours}h ${minutes}m`;
     return minutes ? `${minutes}m ${value % 60}s` : `${value}s`;
+  };
+  const formatBytes = (bytes) => {
+    const value = Math.max(0, Number(bytes) || 0);
+    if (value < 1024) return `${value} B`;
+    if (value < 1048576) return `${(value / 1024).toFixed(value < 10240 ? 1 : 0)} KB`;
+    if (value < 1073741824) return `${(value / 1048576).toFixed(value < 10485760 ? 1 : 0)} MB`;
+    return `${(value / 1073741824).toFixed(2)} GB`;
   };
   const initials = (name) => String(name || 'V').trim().split(/\s+/).slice(0, 2).map((part) => part[0] || '').join('').toUpperCase();
   const pingQuality = (value) => {
@@ -43,21 +52,27 @@
     return `<span class="ping-bars${compact ? ' compact' : ''}" data-level="${ping.level}" title="${escapeHtml(ping.label)}" aria-label="${escapeHtml(ping.label)}"><i></i><i></i><i></i><i></i>${compact ? '' : `<em>${Number.isFinite(Number(value)) ? `${Math.round(Number(value))} ms` : '—'}</em>`}</span>`;
   };
   const imageData = (file) => new Promise((resolve, reject) => {
-    if (!file || !/^image\/(?:png|webp|jpeg)$/i.test(file.type)) return reject(new Error('Escolha uma imagem PNG, WEBP ou JPG.'));
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Não foi possível ler a imagem.'));
-    reader.onload = () => {
-      const image = new Image(); image.onerror = () => reject(new Error('Imagem inválida.'));
-      image.onload = () => {
-        const size = 256; const canvas = document.createElement('canvas'); canvas.width = size; canvas.height = size;
-        const context = canvas.getContext('2d'); const scale = Math.max(size / image.width, size / image.height); const width = image.width * scale; const height = image.height * scale;
-        context.drawImage(image, (size - width) / 2, (size - height) / 2, width, height);
-        const value = canvas.toDataURL('image/webp', .78); value.length <= 60000 ? resolve(value) : reject(new Error('A imagem ainda ficou grande demais. Escolha outra foto.'));
-      };
-      image.src = reader.result;
+    if (!file) return reject(new Error('Escolha uma imagem.'));
+    // Não dependemos da extensão ou do tipo informado pelo Windows: se o
+    // navegador conseguir decodificar o arquivo como imagem, ele é convertido
+    // para WebP pequeno e seguro para os participantes receberem.
+    const sourceUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onerror = () => { URL.revokeObjectURL(sourceUrl); reject(new Error('Este arquivo não contém uma imagem compatível.')); };
+    image.onload = () => {
+      URL.revokeObjectURL(sourceUrl);
+      const size = 256; const canvas = document.createElement('canvas'); canvas.width = size; canvas.height = size;
+      const context = canvas.getContext('2d'); const scale = Math.max(size / image.width, size / image.height); const width = image.width * scale; const height = image.height * scale;
+      context.drawImage(image, (size - width) / 2, (size - height) / 2, width, height);
+      const value = canvas.toDataURL('image/webp', .78); value.length <= 60000 ? resolve(value) : reject(new Error('A imagem ainda ficou grande demais. Escolha outra foto.'));
     };
-    reader.readAsDataURL(file);
+    image.src = sourceUrl;
   });
+  const renderHostServerIconPreview = () => {
+    const preview = $('host-server-icon-preview');
+    if (!preview) return;
+    preview.innerHTML = hostServerIcon ? `<img src="${escapeHtml(hostServerIcon)}" alt="">` : 'V';
+  };
   const showNotice = (message, type = 'success') => {
     if (!message) return;
     clearTimeout(noticeTimer);
@@ -84,34 +99,23 @@
   });
   const showServerReleaseNotes = (version) => showDialog({
     title: `Novidades da versão ${version}`,
-    message: 'A maior evolução desta versão foi a nova experiência visual do ServerHost e do Client.',
+    message: 'Esta lista reúne somente as mudanças feitas desde a v1.1.1.',
     detail: [
-      'VISUAL',
-      '• Painel completamente redesenhado, responsivo e organizado por navegação lateral.',
-      '• Temas Oceano, Violeta, Floresta e Grafite, modais próprios e barras modernas.',
+      'SERVERHOST E ADMINISTRAÇÃO',
+      '• Editor visual de salas, categorias e canais com limites de call, permissões e salas privadas.',
+      '• Banimentos temporários, moderação aprimorada, fotos de perfil e avisos correspondentes no Client.',
+      '• Modelos e importação de estruturas do Discord preservando categorias e ordem dos canais.',
+      '• Diagnóstico WebRTC detalhado: RTT, jitter, perda, rota ICE, codec, mapa P2P e monitor de banda.',
+      '• Cluster primário/secundário com heartbeat, failover e reconexão automática ao host saudável.',
       '',
-      'PAINEL E ADMINISTRAÇÃO',
-      '• Dashboard com CPU, memória, ping, participantes, sinais, gráficos e logs em tempo real.',
-      '• Pessoas conectadas, expulsão, banimento, remoção de ban e mensagens correspondentes no Client.',
-      '• Reinício, desligamento sem fechar a janela, bandeja do Windows e comportamento configurável ao fechar.',
-      '• Fotos de perfil dos participantes exibidas corretamente no painel de moderação.',
-      '• Banimentos temporários com duração, motivo, expiração automática e sincronização entre hosts.',
-      '• Editor visual de salas e canais com limite da call, bitrate, região, bloqueio, tópico, modo lento e somente leitura.',
-      '• Modelos prontos e importação estrutural de modelos públicos do Discord por código, link ou JSON.',
-      '• Diagnóstico WebRTC com mapa P2P, RTT, jitter, perda, rota ICE, codec e monitor de banda.',
-      '• Cluster primário/secundário com heartbeat, failover automático e distribuição pelo nó saudável menos carregado.',
-      '• Migração de Clients para o secundário antes do desligamento do primário, com recuperação do canal de voz.',
+      'CLOUD E ESTABILIDADE',
+      '• Histórico do Cloud e relatórios passam a usar SQLite em disco, com migração segura do JSON existente.',
+      '• Limpeza por idade, limite por sala e métricas de armazenamento no status do servidor.',
+      '• Correções para áudio entre versões, lives simultâneas, câmera, tela cheia e canais extensos.',
       '',
-      'PLUGINS',
-      '• Gestão visual, ativação por chave, configurações persistentes e avatares dos bots.',
-      '• Dados RPG, até três Music Bots e XP com ranking Top 5 e pontuação configurável.',
-      '• API beta documentada, exemplo para desenvolvedores e catálogo público com downloads.',
-      '',
-      'CLIENT, CLOUD E DISTRIBUIÇÃO',
-      '• Nova interface de chamadas, chat, temas, lives, GIFs, formatação e qualidade original.',
-      '• Site oficial, status, plugins, privacidade, termos e pacote Cloud atualizado.',
-      '• Atualizador, instaladores Client/ServerHost e compatibilidade progressiva.',
-      '• Client e ServerHost agora procuram atualizações automaticamente ao abrir.'
+      'CLIENT E DISTRIBUIÇÃO',
+      '• Lives com áudio separado da voz, controles locais, múltiplas transmissões e câmera simultânea.',
+      '• Atualizador automático ao abrir, convite P2P direto com diagnóstico UPnP/NAT-PMP e relatórios de erro.'
     ].join('\n'),
     icon: '✦',
     wide: true,
@@ -286,6 +290,7 @@
     syncLegacyChannelFields();
   };
   const setRoomDraft = (room = {}) => {
+    categoryDraft = (Array.isArray(room.categorySettings) ? room.categorySettings : (room.categories || []).map((name, position) => ({ id: `category-${position + 1}`, name, position }))).map((category, position) => ({ id: category.id || `category-${position + 1}`, name: String(category.name || '').slice(0, 36), position: Number.isFinite(Number(category.position)) ? Number(category.position) : position })).filter((category) => category.name);
     voiceChannelDraft = channelDraft(room.voiceChannelSettings, room.voiceChannels || ['Geral', 'Jogando', 'Ausente'], 'voice');
     textChannelDraft = channelDraft(room.textChannelSettings, room.textChannels || ['geral', 'conversa', 'avisos'], 'text');
     renderChannelEditors();
@@ -294,6 +299,8 @@
     $('room-previous-id').value = '';
     $('room-name').value = '';
     $('room-id').value = '';
+    $('room-password').value = '';
+    $('room-password-clear').checked = false;
     setRoomDraft({ voiceChannels: ['Geral', 'Jogando', 'Ausente'], textChannels: ['geral', 'conversa', 'avisos'] });
     $('room-editor-title').textContent = 'Criar sala';
     $('room-name').focus();
@@ -302,6 +309,9 @@
     $('room-previous-id').value = room.id || '';
     $('room-name').value = room.name || '';
     $('room-id').value = room.id || '';
+    $('room-password').value = '';
+    $('room-password').placeholder = room.private ? 'Senha atual preservada' : 'Nova senha (opcional)';
+    $('room-password-clear').checked = false;
     setRoomDraft(room);
     $('room-editor-title').textContent = `Editar ${room.name || room.id}`;
     document.querySelector('[data-page="rooms"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -310,7 +320,7 @@
     managedRooms = Array.isArray(rooms) ? rooms : [];
     $('managed-room-count').textContent = `${managedRooms.length} sala${managedRooms.length === 1 ? '' : 's'}`;
     $('nav-room-count').textContent = managedRooms.length;
-    $('room-list').innerHTML = managedRooms.length ? managedRooms.map((room) => `<article class="managed-room" data-room-id="${escapeHtml(room.id)}"><header><span><strong>${escapeHtml(room.name || room.id)}</strong><code>${escapeHtml(room.id)}</code></span><span class="managed-room-actions"><button class="button secondary" type="button" data-edit-room="${escapeHtml(room.id)}">Editar</button><button class="button danger" type="button" data-delete-room="${escapeHtml(room.id)}">Excluir</button></span></header><div><span><b>Voz</b>${(room.voiceChannels || []).map((channel) => `<i>◖ ${escapeHtml(channel)}</i>`).join('')}</span><span><b>Texto</b>${(room.textChannels || []).map((channel) => `<i># ${escapeHtml(channel)}</i>`).join('')}</span></div></article>`).join('') : '<div class="empty">Nenhuma sala gerenciada. Códigos livres ainda usam os canais padrão.</div>';
+    $('room-list').innerHTML = managedRooms.length ? managedRooms.map((room) => `<article class="managed-room" data-room-id="${escapeHtml(room.id)}"><header><span><strong>${escapeHtml(room.name || room.id)}${room.private ? ' · 🔒 privada' : ''}</strong><code>${escapeHtml(room.id)}</code></span><span class="managed-room-actions"><button class="button secondary" type="button" data-edit-room="${escapeHtml(room.id)}">Editar</button><button class="button danger" type="button" data-delete-room="${escapeHtml(room.id)}">Excluir</button></span></header><div><span><b>Voz</b>${(room.voiceChannelSettings || (room.voiceChannels || []).map((name) => ({ name }))).map((channel) => `<i>◖ ${escapeHtml(channel.name)} · ${Number(channel.humans || channel.userLimit || latestStats.maxHumanVoiceChannelSize || 12)} máx.</i>`).join('')}</span><span><b>Texto</b>${(room.textChannels || []).map((channel) => `<i># ${escapeHtml(channel)}</i>`).join('')}</span></div></article>`).join('') : '<div class="empty">Nenhuma sala gerenciada. Códigos livres ainda usam os canais padrão.</div>';
     document.querySelectorAll('[data-edit-room]').forEach((button) => { button.onclick = () => { const room = managedRooms.find((item) => item.id === button.dataset.editRoom); if (room) fillRoomForm(room); }; });
     document.querySelectorAll('[data-delete-room]').forEach((button) => {
       button.onclick = async () => {
@@ -452,12 +462,28 @@
   function render(stats) {
     latestStats = stats;
     ['participants', 'rooms'].forEach((key) => { $(key).textContent = Number(stats[key] || 0); });
+    $('call-limit').textContent = `canais em uso · ${Number(stats.maxHumanVoiceChannelSize || 12)} pessoas/call`;
     const signals = Number(stats.signals ?? stats.events?.signals ?? 0);
     $('ping').innerHTML = pingBars(stats.averagePing, true);
     $('cpu').textContent = `${Number(stats.cpuPercent || 0).toFixed(1).replace('.0', '')}%`;
     $('memory').textContent = `${stats.memoryMb || 0} MB`;
     $('uptime').textContent = formatTime(stats.uptimeSeconds);
     $('signals-summary').textContent = `${signals} sinais`;
+    const storage = stats.storage || {};
+    const storageCategories = storage.categories || {};
+    $('storage-total').textContent = formatBytes(storage.totalBytes || 0);
+    const storageLabels = { chats: 'Chats', reports: 'Relatórios', bans: 'Banimentos', settings: 'Configurações', plugins: 'Plugins', music: 'Músicas', other: 'Outros' };
+    $('storage-categories').innerHTML = Object.entries(storageLabels).map(([key, label]) => `<div class="storage-category"><span>${escapeHtml(label)}</span><strong>${escapeHtml(formatBytes(storageCategories[key] || 0))}</strong></div>`).join('');
+    const reports = Array.isArray(stats.reports) ? stats.reports : [];
+    $('bug-report-list').innerHTML = reports.length ? reports.map((report) => `<article class="bug-report"><b>${escapeHtml(report.name || 'Cliente')} · ${escapeHtml(report.category || 'erro')}</b><time>${escapeHtml(new Date(Number(report.receivedAt) || Date.now()).toLocaleString('pt-BR'))}</time><p>${escapeHtml(report.description || '')}</p><small>${escapeHtml(report.version || 'versão não informada')} · ${escapeHtml(report.id || '')}</small></article>`).join('') : '<div class="empty">Nenhum relatório recebido.</div>';
+    const publicAccess = stats.publicAccess || {};
+    const accessElement = $('public-access-status');
+    accessElement.className = `public-access-status ${publicAccess.status || 'idle'}`;
+    accessElement.querySelector('span').textContent = publicAccess.message || 'Acesso automático ainda não verificado.';
+    const addresses = [...new Set([...(publicAccess.scope === 'public' && publicAccess.publicUrl ? [publicAccess.publicUrl] : []), ...(latestInfo?.urls || [`http://localhost:${stats.port || 3000}`])])];
+    $('urls').innerHTML = addresses.map((url, index) => `<div class="copy-row${url === publicAccess.publicUrl ? ' public-url' : ''}"><code id="host-url-${index}">${escapeHtml(url)}</code><button class="icon-button copy-button" type="button" data-copy-target="host-url-${index}" title="Copiar endereço">⧉</button></div>`).join('');
+    const inviteHost = publicAccess.scope === 'public' && publicAccess.publicUrl ? publicAccess.publicUrl : addresses[0];
+    if (inviteHost) $('connection-code').textContent = `VU1:${btoa(JSON.stringify({ host: inviteHost }))}`;
     const cluster = stats.cluster || {};
     $('cluster-status').textContent = !cluster.enabled ? 'Desativado' : cluster.state === 'conectado' ? `${cluster.role === 'primary' ? 'Primário' : 'Secundário'} conectado` : `${cluster.role === 'primary' ? 'Primário' : 'Secundário'} · ${cluster.state || 'aguardando'}`;
     $('cluster-status').classList.toggle('cluster-online', cluster.state === 'conectado' || cluster.state === 'failover ativo');
@@ -467,7 +493,7 @@
     if (runtimeRoomKey !== roomSnapshotKey) { roomSnapshotKey = runtimeRoomKey; renderRooms(runtimeRooms); }
     const roomsReadOnly = cluster.enabled && cluster.role === 'secondary';
     document.querySelector('.room-editor')?.classList.toggle('cluster-readonly', roomsReadOnly);
-    ['room-name', 'room-id', 'room-voice-channels', 'room-text-channels', 'save-room', 'clear-room-form'].forEach((id) => { if ($(id)) $(id).disabled = roomsReadOnly; });
+    ['room-name', 'room-id', 'room-password', 'room-password-clear', 'room-voice-channels', 'room-text-channels', 'save-room', 'clear-room-form'].forEach((id) => { if ($(id)) $(id).disabled = roomsReadOnly; });
     document.querySelectorAll('[data-edit-room],[data-delete-room]').forEach((button) => { button.disabled = roomsReadOnly; });
     if (roomsReadOnly) $('room-editor-title').textContent = 'Estrutura sincronizada pelo host primário';
     const online = Boolean(stats.online);
@@ -505,12 +531,17 @@
       $('connection-code').textContent = info.connectionCode || '';
       $('plugin-folder').textContent = info.pluginFolder || 'Indisponível';
       $('music-folder').textContent = info.musicFolder || 'Indisponível';
-      const serverVersion = info.version || '1.1.1';
+      const serverVersion = info.version || '1.1.2';
       const releaseNotesVersion = serverVersion;
       $('app-version').textContent = serverVersion;
       const settings = await window.voiceupServer.settings();
       $('host-close-behavior').value = settings.closeBehavior || 'tray';
       $('host-theme').value = settings.theme || 'ocean';
+      hostServerIcon = settings.serverIcon || '';
+      renderHostServerIconPreview();
+      $('chat-retention-days').value = Number(settings.storage?.retentionDays ?? 30);
+      $('chat-max-per-room').value = Number(settings.storage?.maxPerRoom ?? 300);
+      $('public-access-automatic').checked = settings.publicAccess?.automatic !== false;
       setTheme($('host-theme').value);
       renderRooms(await window.voiceupServer.rooms());
       clearRoomForm();
@@ -596,8 +627,8 @@
       if (result.ok) { if (!$('room-name').value.trim()) $('room-name').value = result.room.name; if (!$('room-id').value.trim()) $('room-id').value = result.room.id; setRoomDraft(result.room); }
     };
     $('export-discord-template').onclick = async () => {
-      const categories = [...new Set([...voiceChannelDraft, ...textChannelDraft].map((channel) => channel.category).filter(Boolean))];
-      const categoryIds = new Map(categories.map((name, index) => [name, `category-${index + 1}`]));
+      const categories = [...new Set([...categoryDraft.map((category) => category.name), ...voiceChannelDraft, ...textChannelDraft].map((entry) => typeof entry === 'string' ? entry : entry.category).filter(Boolean))];
+      const categoryIds = new Map(categories.map((name, index) => [name, categoryDraft.find((category) => category.name === name)?.id || `category-${index + 1}`]));
       const channels = [
         ...categories.map((name, position) => ({ id: categoryIds.get(name), type: 4, name, position })),
         ...textChannelDraft.map((channel, position) => ({ id: channel.id, type: 0, name: channel.name, position, parent_id: categoryIds.get(channel.category) || null, topic: channel.topic || null, rate_limit_per_user: Number(channel.slowModeSeconds || 0) })),
@@ -612,10 +643,14 @@
         previousId: $('room-previous-id').value,
         id: $('room-id').value,
         name: $('room-name').value,
+        password: $('room-password').value,
+        clearPassword: $('room-password-clear').checked,
         voiceChannels: voiceChannelDraft.map((channel) => channel.name),
         textChannels: textChannelDraft.map((channel) => channel.name),
         voiceChannelSettings: voiceChannelDraft,
-        textChannelSettings: textChannelDraft
+        textChannelSettings: textChannelDraft,
+        categories: [...new Set([...categoryDraft.map((category) => category.name), ...voiceChannelDraft.map((channel) => channel.category), ...textChannelDraft.map((channel) => channel.category)].filter(Boolean))],
+        categorySettings: categoryDraft
       };
       if (!room.id.trim() || !room.name.trim()) return showNotice('Informe o nome e o código da sala.', 'error');
       if (!room.voiceChannels.length || !room.textChannels.length) return showNotice('Crie pelo menos um canal de voz e um de texto.', 'error');
@@ -638,13 +673,76 @@
       refresh();
     };
     const saveHostSettings = async (notify = false) => {
-      const settings = await window.voiceupServer.saveSettings({ closeBehavior: $('host-close-behavior').value, theme: $('host-theme').value });
+      const settings = await window.voiceupServer.saveSettings({ closeBehavior: $('host-close-behavior').value, theme: $('host-theme').value, serverIcon: hostServerIcon, publicAccess: { automatic: $('public-access-automatic').checked }, storage: { retentionDays: Number($('chat-retention-days').value), maxPerRoom: Number($('chat-max-per-room').value) } });
       setTheme(settings.theme);
       if (notify) showNotice('Configurações do ServerHost salvas.');
     };
     const scheduleHostSettingsSave = () => { clearTimeout(settingsSaveTimer); settingsSaveTimer = window.setTimeout(() => void saveHostSettings(false), 220); };
     $('host-theme').onchange = () => { setTheme($('host-theme').value); drawChart(); scheduleHostSettingsSave(); };
     $('host-close-behavior').onchange = scheduleHostSettingsSave;
+    $('chat-retention-days').onchange = scheduleHostSettingsSave;
+    $('chat-max-per-room').onchange = scheduleHostSettingsSave;
+    $('public-access-automatic').onchange = scheduleHostSettingsSave;
+    $('host-server-icon').onchange = async () => {
+      try {
+        hostServerIcon = await imageData($('host-server-icon').files?.[0]);
+        renderHostServerIconPreview();
+        await saveHostSettings(false);
+        showNotice('Imagem do servidor atualizada.');
+      } catch (error) { showNotice(error.message || 'Não foi possível usar esta imagem.', 'error'); }
+      finally { $('host-server-icon').value = ''; }
+    };
+    $('host-server-icon-clear').onclick = async () => {
+      hostServerIcon = '';
+      renderHostServerIconPreview();
+      await saveHostSettings(false);
+      showNotice('Ícone padrão restaurado.');
+    };
+    $('cleanup-expired-messages').onclick = async () => {
+      const result = await window.voiceupServer.cleanupMessages({ olderThanDays: Number($('chat-retention-days').value) });
+      showNotice(result.ok ? `${result.removed || 0} mensagem(ns) expirada(s) removida(s).` : result.message, result.ok ? 'success' : 'error'); refresh();
+    };
+    $('clear-all-messages').onclick = async () => {
+      const accepted = await showDialog({ title: 'Limpar todos os chats?', message: 'O histórico de todas as salas será apagado do disco.', detail: 'Essa ação não pode ser desfeita.', tone: 'danger', icon: '×', actions: [{ value: 'confirm', label: 'Limpar chats', style: 'danger' }, { value: 'cancel', label: 'Cancelar', style: 'secondary' }] });
+      if (accepted !== 'confirm') return;
+      const result = await window.voiceupServer.cleanupMessages({ clearAll: true });
+      showNotice(result.ok ? `${result.removed || 0} mensagem(ns) removida(s).` : result.message, result.ok ? 'success' : 'error'); refresh();
+    };
+    $('clear-bug-reports').onclick = async () => {
+      const result = await window.voiceupServer.clearReports();
+      showNotice(result.ok ? `${result.removed || 0} relatório(s) removido(s).` : result.message, result.ok ? 'success' : 'error'); refresh();
+    };
+    $('send-host-report').onclick = async () => {
+      const description = $('host-report-description').value.trim();
+      const status = $('host-report-status');
+      if (description.length < 8) { status.textContent = 'Descreva o problema com pelo menos 8 caracteres.'; return; }
+      const button = $('send-host-report');
+      button.disabled = true; status.textContent = 'Enviando…';
+      try {
+        const diagnosticsEnabled = $('host-report-diagnostics').checked;
+        const info = await window.voiceupServer.getInfo();
+        const stats = diagnosticsEnabled ? await window.voiceupServer.getStats() : null;
+        const response = await fetch('https://voiceup.shardweb.app/api/bug-reports', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            source: 'serverhost', category: $('host-report-category').value,
+            description, steps: $('host-report-steps').value.trim(),
+            version: info?.version || 'não informada',
+            diagnostics: diagnosticsEnabled ? [
+              `plataforma=${navigator.platform || 'Windows'}`,
+              `cpu=${Number(stats?.cpuPercent || 0).toFixed(1)}%`, `memoria=${Number(stats?.memoryMb || 0)}MB`,
+              `participantes=${Number(stats?.participants || 0)}`,
+              `acessoPublico=${stats?.publicAccess?.mapped ? 'mapeado' : (stats?.publicAccess?.method || 'indisponível')}`
+            ] : undefined
+          })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.ok === false) throw new Error(result.message || `Falha HTTP ${response.status}`);
+        $('host-report-description').value = ''; $('host-report-steps').value = '';
+        status.textContent = 'Relatório enviado. Obrigado por ajudar.';
+      } catch (error) { status.textContent = `Não foi possível enviar: ${error?.message || 'erro de conexão'}`; }
+      finally { button.disabled = false; }
+    };
     $('save-settings').onclick = () => void saveHostSettings(true);
     $('check-update').onclick = async () => { if (pendingUpdate) await confirmPendingServerUpdate(); else await checkServerUpdates(); };
     $('server-release-notes').onclick = () => void showServerReleaseNotes(releaseNotesVersion);

@@ -1,16 +1,23 @@
 const { app, BrowserWindow, shell, desktopCapturer, ipcMain, Tray, Menu, globalShortcut, net: electronNet } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('node:crypto');
+const { spawn } = require('node:child_process');
 const dns = require('node:dns').promises;
 const nodeNet = require('node:net');
 const { registerUpdateHandlers } = require('./update-helper');
+const { startSignalingServer, normalizeRoomLayout, hashRoomPassword } = require('./signaling-server');
+const { localNetworkUrls, openPublicPort } = require('./network-access');
 
 let mainWindow;
 let tray;
 let isQuitting = false;
 let closePromptOpen = false;
 let youtubeHeadersConfigured = false;
-let selectedCapture = { id: '', includeAudio: false };
+let selectedCapture = { id: '', kind: '', includeAudio: false };
+let processAudioCapture = null;
+let directRoomServer = null;
+let directPortMapping = null;
 let windowSettings = { closeBehavior: 'tray' };
 const registeredShortcuts = new Map();
 const APP_WEB_IDENTITY = 'https://voiceup.shardweb.app/';
@@ -25,6 +32,174 @@ const BACKGROUND_CAPTURE_TITLES = new Set([
   'start'
 ]);
 const settingsPath = () => path.join(app.getPath('userData'), 'window-settings.json');
+const availableTcpPort = () => new Promise((resolve, reject) => {
+  const probe = nodeNet.createServer();
+  probe.unref();
+  probe.once('error', reject);
+  probe.listen(0, '0.0.0.0', () => {
+    const port = Number(probe.address()?.port || 0);
+    probe.close((error) => error ? reject(error) : resolve(port));
+  });
+});
+const serializablePublicAccess = (value = {}) => {
+  const { close: _close, ...snapshot } = value || {};
+  return snapshot;
+};
+const stopDirectRoom = async () => {
+  const mapping = directPortMapping; directPortMapping = null;
+  const current = directRoomServer; directRoomServer = null;
+  try { await mapping?.close?.(); } catch { /* mapping can already be gone */ }
+  if (!current) return { ok: true, message: 'A sala direta já está desligada.' };
+  try { current.closeFederation?.(); } catch { /* optional */ }
+  await new Promise((resolve) => {
+    try { current.io.close(() => resolve()); } catch { resolve(); }
+  });
+  return { ok: true, message: 'Sala direta encerrada.' };
+};
+const directRoomStatus = () => directRoomServer ? {
+  ok: true,
+  active: true,
+  port: directRoomServer.port,
+  roomId: directRoomServer.roomId,
+  localUrl: directRoomServer.localUrl,
+  networkUrls: directRoomServer.networkUrls,
+  access: directRoomServer.access,
+  shareCode: directRoomServer.shareCode
+} : { ok: true, active: false };
+const startDirectRoom = async (input = {}) => {
+  await stopDirectRoom();
+  const port = await availableTcpPort();
+  const roomId = String(input.roomId || `direta-${crypto.randomBytes(4).toString('hex')}`)
+    .trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-').slice(0, 48) || `direta-${crypto.randomBytes(4).toString('hex')}`;
+  const roomName = String(input.name || 'Sala direta').trim().slice(0, 42) || 'Sala direta';
+  const password = String(input.password || '').slice(0, 128);
+  const dataDirectory = path.join(app.getPath('userData'), 'direct-room-data');
+  fs.mkdirSync(dataDirectory, { recursive: true });
+  const layout = normalizeRoomLayout({
+    id: roomId,
+    name: roomName,
+    passwordHash: password ? hashRoomPassword(password) : '',
+    voiceChannelSettings: [{ name: 'Geral', userLimit: 12 }],
+    textChannelSettings: [{ name: 'geral' }]
+  });
+  const signaling = await startSignalingServer(port, {
+    roomLayouts: [layout],
+    historyFile: path.join(dataDirectory, 'chat-history.json'),
+    reportsFile: path.join(dataDirectory, 'bug-reports.json'),
+    chatRetentionDays: 30,
+    chatMaxPerRoom: 300
+  });
+  const localUrl = `http://127.0.0.1:${port}`;
+  const networkUrls = localNetworkUrls(port);
+  directRoomServer = { ...signaling, roomId, localUrl, networkUrls, access: { status: 'checking', mapped: false }, shareCode: '' };
+
+  let access = { status: 'disabled', mapped: false, message: 'Acesso automático não solicitado.' };
+  if (input.publicAccess !== false) access = await openPublicPort(port, { description: `VoiceUP sala ${roomId}`, timeoutMs: 7500 });
+  directPortMapping = access.mapped ? access : null;
+  const publicAccess = serializablePublicAccess(access);
+  const shareHost = publicAccess.scope === 'public' && publicAccess.publicUrl ? publicAccess.publicUrl : (networkUrls[0] || localUrl);
+  const shareCode = `VU2:${Buffer.from(JSON.stringify({ host: shareHost, roomId, private: Boolean(password), name: roomName }), 'utf8').toString('base64')}`;
+  Object.assign(directRoomServer, { access: publicAccess, shareCode });
+  return {
+    ok: true, active: true, port, roomId, roomName, private: Boolean(password),
+    localUrl, networkUrls, access: publicAccess, shareCode,
+    message: publicAccess.scope === 'public'
+      ? 'Sala direta criada e liberada automaticamente no roteador.'
+      : 'Sala direta criada. O link funciona nesta rede; confira o diagnóstico para acesso pela internet.'
+  };
+};
+const processAudioHelperPath = () => app.isPackaged
+  ? path.join(process.resourcesPath, 'native', 'voiceup-process-audio.exe')
+  : path.join(__dirname, 'native', 'voiceup-process-audio.exe');
+const processAudioCapability = () => ({
+  available: process.platform === 'win32' && fs.existsSync(processAudioHelperPath()),
+  mode: 'process-tree-include-exclude',
+  sampleRate: 48000,
+  channels: 2
+});
+const sendProcessAudioState = (details) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('capture:process-audio-state', details);
+};
+function stopProcessAudioCapture(reason = 'stopped') {
+  const current = processAudioCapture;
+  processAudioCapture = null;
+  if (!current) return false;
+  current.expectedStop = true;
+  clearTimeout(current.timeout);
+  try { current.child.stdout?.removeAllListeners(); current.child.stderr?.removeAllListeners(); current.child.kill(); } catch { /* already stopped */ }
+  sendProcessAudioState({ active: false, reason, sourceId: current.sourceId });
+  return true;
+}
+function startProcessAudioCapture(sourceId) {
+  stopProcessAudioCapture('replaced');
+  const capability = processAudioCapability();
+  if (!capability.available) return Promise.resolve({ ok: false, reason: 'native-helper-unavailable' });
+  if (selectedCapture.id !== sourceId || !selectedCapture.includeAudio) {
+    return Promise.resolve({ ok: false, reason: 'invalid-capture-source' });
+  }
+  const handle = String(sourceId || '').match(/^window:([^:]+):/)?.[1] || '';
+  const captureMode = selectedCapture.kind === 'window' ? 'selected-app' : selectedCapture.kind === 'screen' ? 'system-without-voiceup' : '';
+  const helperArguments = captureMode === 'selected-app'
+    ? (handle ? ['capture-window', handle] : null)
+    : captureMode === 'system-without-voiceup'
+      ? ['capture-exclude-pid', String(process.pid)]
+      : null;
+  if (!helperArguments) return Promise.resolve({ ok: false, reason: 'invalid-capture-source' });
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let stderrBuffer = '';
+    const child = spawn(processAudioHelperPath(), helperArguments, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    const state = { child, sourceId, expectedStop: false, timeout: null, remainder: Buffer.alloc(0) };
+    processAudioCapture = state;
+    const finishStart = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(state.timeout);
+      resolve(result);
+    };
+    state.timeout = setTimeout(() => {
+      if (processAudioCapture === state) stopProcessAudioCapture('startup-timeout');
+      finishStart({ ok: false, reason: 'startup-timeout' });
+    }, 11000);
+
+    child.stdout.on('data', (chunk) => {
+      if (processAudioCapture !== state || !chunk?.length || !mainWindow || mainWindow.isDestroyed()) return;
+      const combined = state.remainder.length ? Buffer.concat([state.remainder, chunk]) : chunk;
+      const alignedLength = combined.length - (combined.length % 4);
+      if (!alignedLength) { state.remainder = Buffer.from(combined); return; }
+      state.remainder = alignedLength < combined.length ? Buffer.from(combined.subarray(alignedLength)) : Buffer.alloc(0);
+      mainWindow.webContents.send('capture:process-audio-data', combined.subarray(0, alignedLength));
+    });
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (text) => {
+      stderrBuffer += text;
+      const lines = stderrBuffer.split(/\r?\n/);
+      stderrBuffer = lines.pop() || '';
+      for (const line of lines) {
+        const ready = line.match(/^VOICEUP_READY\s+(\d+)\s+(\d+)\s+(\d+)/);
+        if (ready) {
+          const result = { ok: true, sampleRate: Number(ready[1]), channels: Number(ready[2]), processId: Number(ready[3]), sourceId, captureMode };
+          sendProcessAudioState({ active: true, ...result });
+          finishStart(result);
+        }
+      }
+    });
+    child.once('error', (error) => {
+      if (processAudioCapture === state) processAudioCapture = null;
+      finishStart({ ok: false, reason: 'spawn-failed', message: error.message });
+      sendProcessAudioState({ active: false, reason: 'spawn-failed', sourceId });
+    });
+    child.once('exit', (code) => {
+      if (processAudioCapture === state) processAudioCapture = null;
+      finishStart({ ok: false, reason: state.expectedStop ? 'stopped' : 'capture-ended', code });
+      if (!state.expectedStop) sendProcessAudioState({ active: false, reason: 'capture-ended', code, sourceId });
+    });
+  });
+}
 const isPrivateAddress = (address) => {
   const value = String(address || '').toLowerCase().split('%')[0];
   if (nodeNet.isIP(value) === 4) {
@@ -74,12 +249,21 @@ const fetchLinkPreview = async (raw) => {
   try {
     let response;
     for (let redirect = 0; redirect < 4; redirect += 1) {
-      response = await electronNet.fetch(current.href, { redirect: 'manual', signal: controller.signal, headers: { Accept: 'text/html,application/xhtml+xml;q=0.9', 'User-Agent': `VoiceUP/${app.getVersion()}` } });
+      response = await electronNet.fetch(current.href, { redirect: 'manual', signal: controller.signal, headers: { Accept: 'text/html,application/xhtml+xml;q=0.9,image/avif,image/webp,image/apng,image/*;q=0.8', 'User-Agent': `VoiceUP/${app.getVersion()}` } });
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
       const location = response.headers.get('location'); if (!location) return null;
       current = await publicPreviewUrl(new URL(location, current).href);
     }
-    if (!response?.ok || !String(response.headers.get('content-type') || '').toLowerCase().includes('text/html')) return null;
+    if (!response?.ok) return null;
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    // URLs such as a CDN's /revision/latest have no useful final extension,
+    // but their response still identifies itself as an image.  Returning this
+    // marker lets the renderer replace the regular link with an image embed.
+    if (/^image\/(?:avif|bmp|gif|jpe?g|png|svg\+xml|webp)/.test(contentType)) {
+      await response.body?.cancel?.().catch(() => {});
+      return { url: current.href, image: current.href, type: 'image' };
+    }
+    if (!contentType.includes('text/html')) return null;
     if (Number(response.headers.get('content-length') || 0) > LINK_PREVIEW_LIMIT * 2) return null;
     const html = await readLimitedText(response); const metadata = {};
     for (const tag of html.match(/<meta\b[^>]*>/gi) || []) {
@@ -169,7 +353,7 @@ async function createWindow() {
     }
     mainWindow.hide();
   });
-  mainWindow.on('closed', () => { mainWindow = null; closePromptOpen = false; });
+  mainWindow.on('closed', () => { stopProcessAudioCapture('window-closed'); mainWindow = null; closePromptOpen = false; });
   mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => callback(permission === 'media' || permission === 'display-capture'));
   mainWindow.webContents.session.setPermissionCheckHandler((_webContents, permission) => permission === 'media' || permission === 'display-capture');
   configureYouTubeHeaders(mainWindow.webContents.session);
@@ -177,7 +361,10 @@ async function createWindow() {
     try {
       const sources = await shareableDesktopSources();
       const source = sources.find((item) => item.id === selectedCapture.id) || sources[0];
-      callback(source ? { video: source, ...(selectedCapture.includeAudio ? { audio: 'loopback' } : {}) } : {});
+      // Audio is always published through the native process-loopback helper.
+      // For a screen it excludes the complete VoiceUP process tree, preventing
+      // remote call voices from returning through the live and being doubled.
+      callback(source ? { video: source } : {});
     } catch { callback({}); }
   });
   await mainWindow.loadFile(path.join(__dirname, 'public', 'index.html'), { query: { version: app.getVersion() } });
@@ -192,13 +379,24 @@ ipcMain.handle('capture:sources', async () => (await shareableDesktopSources()).
   thumbnail: source.thumbnail?.isEmpty?.() ? '' : source.thumbnail?.toDataURL?.() || '',
   appIcon: source.appIcon?.isEmpty?.() ? '' : source.appIcon?.toDataURL?.() || ''
 })));
-ipcMain.handle('capture:select', (_event, selection = {}) => { selectedCapture = { id: String(selection.id || ''), includeAudio: Boolean(selection.includeAudio) }; return true; });
+ipcMain.handle('capture:select', (_event, selection = {}) => {
+  stopProcessAudioCapture('source-changed');
+  const id = String(selection.id || '');
+  selectedCapture = { id, kind: id.startsWith('screen:') ? 'screen' : id.startsWith('window:') ? 'window' : '', includeAudio: Boolean(selection.includeAudio) };
+  return { ok: true, kind: selectedCapture.kind, processAudio: selectedCapture.kind === 'window' ? processAudioCapability() : null };
+});
+ipcMain.handle('capture:process-audio-capability', () => processAudioCapability());
+ipcMain.handle('capture:process-audio-start', (_event, sourceId) => startProcessAudioCapture(String(sourceId || '')));
+ipcMain.handle('capture:process-audio-stop', () => stopProcessAudioCapture('renderer-stopped'));
 ipcMain.handle('link:preview', async (_event, raw) => { try { return await fetchLinkPreview(raw); } catch { return null; } });
 ipcMain.handle('window:set-video-fullscreen', (_event, enabled) => { mainWindow?.setFullScreen(Boolean(enabled)); return Boolean(enabled); });
 ipcMain.handle('window:settings', () => windowSettings);
 ipcMain.handle('window:save-settings', (_event, next = {}) => { const allowed = ['tray', 'ask', 'quit']; windowSettings.closeBehavior = allowed.includes(next.closeBehavior) ? next.closeBehavior : 'tray'; saveSettings(); return windowSettings; });
 ipcMain.handle('shortcuts:configure', (_event, shortcuts = {}) => configureGlobalShortcuts(shortcuts));
 ipcMain.handle('shortcuts:clear', () => { clearGlobalShortcuts(); return true; });
+ipcMain.handle('direct-room:start', (_event, options = {}) => startDirectRoom(options));
+ipcMain.handle('direct-room:stop', () => stopDirectRoom());
+ipcMain.handle('direct-room:status', () => directRoomStatus());
 ipcMain.handle('window:close-choice', (_event, choice) => {
   if (!closePromptOpen) return false;
   closePromptOpen = false;
@@ -209,4 +407,4 @@ ipcMain.handle('window:close-choice', (_event, choice) => {
 app.whenReady().then(createWindow);
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' && (isQuitting || windowSettings.closeBehavior === 'quit')) app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); else revealWindow(); });
-app.on('before-quit', () => { isQuitting = true; clearGlobalShortcuts(); });
+app.on('before-quit', () => { isQuitting = true; stopProcessAudioCapture('app-quit'); clearGlobalShortcuts(); void stopDirectRoom(); });

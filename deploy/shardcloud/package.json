@@ -1,11 +1,14 @@
 {
   "name": "voiceup-server-cloud",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "description": "Servidor de sinalização VoiceUP para hospedagem Cloud",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "express": "^4.21.2",

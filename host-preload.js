@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('voiceupServer', {
   importDiscordTemplate: (source, roomId, roomName) => ipcRenderer.invoke('server:import-discord-template', { source, roomId, roomName }),
   saveRoom: (room) => ipcRenderer.invoke('server:save-room', room),
   deleteRoom: (roomId) => ipcRenderer.invoke('server:delete-room', roomId),
+  cleanupMessages: (options) => ipcRenderer.invoke('server:cleanup-messages', options),
+  clearReports: () => ipcRenderer.invoke('server:clear-reports'),
   clusterSettings: () => ipcRenderer.invoke('server:cluster-settings'),
   saveCluster: (settings) => ipcRenderer.invoke('server:save-cluster', settings),
   onCloseRequest: (handler) => {

@@ -4,7 +4,9 @@ const { Server } = require('socket.io');
 const { io: createSocketClient } = require('socket.io-client');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { loadPlugins } = require('./plugin-runtime');
+const { createPersistentChatStore, createBugReportStore } = require('./persistent-storage');
 
 const AVATAR_COLORS = ['#56e2cf', '#ff8b72', '#6676ea', '#a879ff', '#e8b65a', '#47a7f5', '#ec6fa8'];
 const positiveInteger = (value, fallback) => {
@@ -37,6 +39,22 @@ const safeChannelList = (values, fallback) => {
 const clampNumber = (value, minimum, maximum, fallback) => {
   const number = Number(value);
   return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, number)) : fallback;
+};
+const hashRoomPassword = (password) => {
+  const value = String(password || '');
+  if (!value) return '';
+  const salt = crypto.randomBytes(16);
+  const digest = crypto.scryptSync(value, salt, 32);
+  return `scrypt$${salt.toString('hex')}$${digest.toString('hex')}`;
+};
+const verifyRoomPassword = (password, encoded) => {
+  const match = /^scrypt\$([a-f0-9]{32})\$([a-f0-9]{64})$/i.exec(String(encoded || ''));
+  if (!match) return !encoded;
+  try {
+    const expected = Buffer.from(match[2], 'hex');
+    const actual = crypto.scryptSync(String(password || ''), Buffer.from(match[1], 'hex'), expected.length);
+    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  } catch { return false; }
 };
 const normalizeChannelSettings = (values, type, fallback) => {
   const source = Array.isArray(values) && values.length ? values : fallback;
@@ -75,6 +93,13 @@ const normalizeRoomLayout = (value = {}, roomId = '') => {
   const textInput = Array.isArray(value.textChannelSettings) && value.textChannelSettings.length ? value.textChannelSettings : value.textChannels;
   const voiceChannelSettings = normalizeChannelSettings(voiceInput, 'voice', DEFAULT_ROOM_LAYOUT.voiceChannels);
   const textChannelSettings = normalizeChannelSettings(textInput, 'text', DEFAULT_ROOM_LAYOUT.textChannels);
+  const inferredCategoryNames = [...voiceChannelSettings, ...textChannelSettings].map((channel) => channel.category).filter(Boolean);
+  const categoryInput = Array.isArray(value.categorySettings) ? value.categorySettings : (Array.isArray(value.categories) ? value.categories : []);
+  const categorySettings = [...categoryInput, ...inferredCategoryNames].slice(0, 96).reduce((result, entry, index) => {
+    const input = typeof entry === 'string' ? { name: entry } : (entry && typeof entry === 'object' ? entry : {});
+    const name = String(input.name || '').trim().slice(0, 36); if (!name || result.some((category) => category.name === name)) return result;
+    result.push({ id: safeChannelId(input.id || name, `category-${index + 1}`), name, position: Math.round(clampNumber(input.position, 0, 999, index)) }); return result;
+  }, []).sort((left, right) => left.position - right.position).map((category, position) => ({ ...category, position }));
   return {
     id: safeRoomId(value.id || roomId),
     name: String(value.name || roomId || DEFAULT_ROOM_LAYOUT.name).trim().slice(0, 48) || DEFAULT_ROOM_LAYOUT.name,
@@ -82,18 +107,35 @@ const normalizeRoomLayout = (value = {}, roomId = '') => {
     voiceChannels: safeChannelList(voiceChannelSettings.map((channel) => channel.name), DEFAULT_ROOM_LAYOUT.voiceChannels),
     textChannels: safeChannelList(textChannelSettings.map((channel) => channel.name), DEFAULT_ROOM_LAYOUT.textChannels),
     voiceChannelSettings,
-    textChannelSettings
+    textChannelSettings,
+    categories: categorySettings.map((category) => category.name),
+    categorySettings,
+    passwordHash: /^scrypt\$[a-f0-9]{32}\$[a-f0-9]{64}$/i.test(String(value.passwordHash || '')) ? String(value.passwordHash) : '',
+    private: Boolean(value.private || value.passwordHash)
   };
 };
 
 function startSignalingServer(port = 3000, options = {}) {
   const app = express();
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: '48kb' }));
   const server = http.createServer(app);
   const io = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
   const startedAt = Date.now();
   const events = { connections: 0, signals: 0, joins: 0, messages: 0, kicks: 0, bans: 0 };
+  const normalizeServerIcon = (value) => {
+    const icon = String(value || '');
+    return /^data:image\/(?:png|jpeg|webp);base64,/i.test(icon) && icon.length <= 60000 ? icon : '';
+  };
+  let serverProfile = { icon: normalizeServerIcon(options.serverIcon) };
   const logs = [];
-  const roomChatHistory = new Map();
+  const chatStore = createPersistentChatStore({
+    filePath: options.historyFile || path.join(process.cwd(), 'data', 'chat-history.json'),
+    maxPerRoom: options.chatMaxPerRoom || 300,
+    retentionDays: options.chatRetentionDays || 0
+  });
+  const reportStore = createBugReportStore({ filePath: options.reportsFile || path.join(process.cwd(), 'data', 'bug-reports.json') });
+  const reportRateLimits = new Map();
   const clusterOptions = options.cluster && typeof options.cluster === 'object' ? options.cluster : {};
   const clusterEnabled = clusterOptions.enabled === true;
   const clusterRole = clusterOptions.role === 'secondary' ? 'secondary' : 'primary';
@@ -135,9 +177,22 @@ function startSignalingServer(port = 3000, options = {}) {
     const humans = configured.userLimit > 0 ? Math.min(MAX_HUMAN_VOICE_CHANNEL_SIZE, configured.userLimit) : MAX_HUMAN_VOICE_CHANNEL_SIZE;
     return { humans, total: Math.min(MAX_VOICE_CHANNEL_SIZE, humans + Math.max(0, MAX_VOICE_CHANNEL_SIZE - MAX_HUMAN_VOICE_CHANNEL_SIZE)) };
   };
+  const publicRoomLayout = (layout) => ({
+    ...layout,
+    passwordHash: undefined,
+    private: Boolean(layout.passwordHash),
+    limits: { humansPerCall: MAX_HUMAN_VOICE_CHANNEL_SIZE, membersPerCall: MAX_VOICE_CHANNEL_SIZE },
+    voiceChannelSettings: (layout.voiceChannelSettings || []).map((channel) => ({ ...channel, ...voiceChannelLimits(layout, channel.name) }))
+  });
   const publishRoomLayout = (socket) => {
     if (!socket?.data?.room) return;
-    socket.emit('room-layout', roomLayout(socket.data.room));
+    socket.emit('room-layout', publicRoomLayout(roomLayout(socket.data.room)));
+  };
+  const publishServerProfile = (socket) => socket?.emit('server-profile', { ...serverProfile });
+  const updateServerProfile = (next = {}) => {
+    serverProfile = { icon: normalizeServerIcon(next.icon) };
+    io.emit('server-profile', { ...serverProfile });
+    return { ...serverProfile };
   };
   setConfiguredRooms(options.roomLayouts);
   const addLog = (level, message) => { logs.unshift({ time: new Date().toLocaleTimeString('pt-BR'), level, message }); if (logs.length > 80) logs.pop(); };
@@ -190,27 +245,14 @@ function startSignalingServer(port = 3000, options = {}) {
     const allowed = new Set((Array.isArray(mentions) ? mentions : []).map(String));
     return [...new Set(peersIn(serverRoom).filter((peer) => allowed.has(String(peer.id)) && peer.clientId).map((peer) => String(peer.clientId)))].slice(0, 16);
   };
-  const historyFor = (room) => {
-    const key = safeRoomId(room);
-    if (!roomChatHistory.has(key)) roomChatHistory.set(key, []);
-    return roomChatHistory.get(key);
-  };
-  const messageById = (room, messageId) => historyFor(room).find((message) => String(message.messageId) === String(messageId || ''));
+  const historyFor = (room) => chatStore.get(safeRoomId(room));
+  const messageById = (room, messageId) => chatStore.find(safeRoomId(room), messageId);
   const rememberMessage = (room, packet) => {
     if (!room || !packet?.messageId || !packet?.text) return null;
-    const history = historyFor(room);
-    const existing = messageById(room, packet.messageId);
-    if (existing) { Object.assign(existing, packet); return existing; }
     const stored = { ...packet, reactions: packet.reactions && typeof packet.reactions === 'object' ? packet.reactions : {}, pinned: Boolean(packet.pinned), pinnedBy: packet.pinnedBy || '' };
-    history.push(stored);
-    if (history.length > 300) history.splice(0, history.length - 300);
-    return stored;
+    return chatStore.remember(safeRoomId(room), stored);
   };
-  const forgetMessage = (room, messageId) => {
-    const history = historyFor(room); const index = history.findIndex((message) => String(message.messageId) === String(messageId || ''));
-    if (index < 0) return null;
-    return history.splice(index, 1)[0];
-  };
+  const forgetMessage = (room, messageId) => chatStore.forget(safeRoomId(room), messageId);
   const safeReply = (room, reply) => {
     const source = reply?.messageId ? messageById(room, reply.messageId) : null;
     return source ? { messageId: source.messageId, name: String(source.name || 'Mensagem').slice(0, 24), text: String(source.text || '').slice(0, 120) } : null;
@@ -372,17 +414,17 @@ function startSignalingServer(port = 3000, options = {}) {
       const targetRoom = serverKey(safeRoomId(room)); if (!packet?.messageId || !room) return;
       const mentions = Array.isArray(packet.mentions) ? packet.mentions.map(localizeFederatedId) : [];
       const localized = { ...packet, mentions }; const stored = messageById(room, packet.messageId);
-      if (stored) Object.assign(stored, { text: localized.text, editedAt: localized.editedAt, mentions });
+      if (stored) { Object.assign(stored, { text: localized.text, editedAt: localized.editedAt, mentions }); chatStore.touch(); }
       io.to(targetRoom).emit('message-edited', localized);
     });
     transport.on('federation:reaction', ({ room, packet } = {}) => {
       if (!room || !packet?.messageId) return;
-      const stored = messageById(room, packet.messageId); if (stored) stored.reactions = packet.reactions || {};
+      const stored = messageById(room, packet.messageId); if (stored) { stored.reactions = packet.reactions || {}; chatStore.touch(); }
       io.to(serverKey(safeRoomId(room))).emit('message-reaction', packet);
     });
     transport.on('federation:pin', ({ room, packet } = {}) => {
       if (!room || !packet?.messageId) return;
-      const stored = messageById(room, packet.messageId); if (stored) Object.assign(stored, { pinned: Boolean(packet.pinned), pinnedBy: packet.pinnedBy || '' });
+      const stored = messageById(room, packet.messageId); if (stored) { Object.assign(stored, { pinned: Boolean(packet.pinned), pinnedBy: packet.pinnedBy || '' }); chatStore.touch(); }
       io.to(serverKey(safeRoomId(room))).emit('message-pinned', packet);
     });
     transport.on('federation:delete', ({ room, packet } = {}) => {
@@ -458,7 +500,25 @@ function startSignalingServer(port = 3000, options = {}) {
     media: { list: musicFiles, url: () => '' }
   });
 
-  app.get('/health', (_req, res) => res.json({ ok: true, app: 'VoiceUp Server', nodeId: clusterNodeId, cluster: { enabled: clusterEnabled, role: clusterRole, state: federationState }, maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, maxHumanVoiceChannelSize: MAX_HUMAN_VOICE_CHANNEL_SIZE, managedRooms: configuredRooms.size, plugins: plugins.list().map(({ id, version }) => ({ id, version })), musicFiles: musicFiles() }));
+  app.use('/api/bug-reports', (_req, res, next) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    next();
+  });
+  app.options('/api/bug-reports', (_req, res) => res.sendStatus(204));
+  app.post('/api/bug-reports', (req, res) => {
+    const key = String(req.ip || req.socket?.remoteAddress || 'unknown');
+    const now = Date.now();
+    const recent = (reportRateLimits.get(key) || []).filter((time) => now - time < 600000);
+    if (recent.length >= 4) return res.status(429).json({ ok: false, message: 'Aguarde alguns minutos antes de enviar outro relatório.' });
+    const report = reportStore.add(req.body || {});
+    if (!report) return res.status(400).json({ ok: false, message: 'Descreva o problema encontrado.' });
+    recent.push(now); reportRateLimits.set(key, recent);
+    addLog('report', `Novo relatório de ${report.name || 'cliente'} · ${report.id}`);
+    return res.status(201).json({ ok: true, id: report.id, message: 'Relatório enviado ao responsável por este servidor.' });
+  });
+  app.get('/health', (_req, res) => res.json({ ok: true, app: 'VoiceUp Server', nodeId: clusterNodeId, cluster: { enabled: clusterEnabled, role: clusterRole, state: federationState }, maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, maxHumanVoiceChannelSize: MAX_HUMAN_VOICE_CHANNEL_SIZE, managedRooms: configuredRooms.size, storage: { chat: chatStore.stats(), reports: reportStore.stats() }, plugins: plugins.list().map(({ id, version }) => ({ id, version })), musicFiles: musicFiles() }));
   io.on('connection', (socket) => {
     const federationAuth = socket.handshake?.auth || {};
     if (federationAuth.voiceupFederation) {
@@ -482,7 +542,7 @@ function startSignalingServer(port = 3000, options = {}) {
       return;
     }
     events.connections += 1; addLog('info', 'Novo cliente conectado');
-    socket.on('join-room', ({ roomId, voiceChannel, name, color, avatar, bot, clientId, status, capabilities }) => {
+    socket.on('join-room', ({ roomId, roomPassword, voiceChannel, name, color, avatar, bot, clientId, status, capabilities }) => {
       const room = safeRoomId(roomId);
       const layout = roomLayout(room);
       const requestedVoiceChannel = safeChannel(voiceChannel, LOBBY_CHANNEL);
@@ -490,6 +550,10 @@ function startSignalingServer(port = 3000, options = {}) {
       const safeName = String(name || 'Visitante').trim().slice(0, 24) || 'Visitante';
       const identity = safeIdentity(clientId);
       if (!room) return socket.emit('app-error', 'Informe um código de sala.');
+      if (layout.passwordHash && !bot && !verifyRoomPassword(roomPassword, layout.passwordHash)) {
+        socket.emit('room-password-required', { roomId: room, message: 'Esta sala é privada. Informe a senha correta.' });
+        return socket.emit('app-error', 'Esta sala é privada. Informe a senha correta.');
+      }
       pruneExpiredBans();
       if (!bot && identity && banned.has(identity)) {
         const entry = banned.get(identity); const temporary = Boolean(entry.expiresAt);
@@ -519,8 +583,9 @@ function startSignalingServer(port = 3000, options = {}) {
       Object.assign(socket.data, { room, serverRoom, voiceRoom, voiceChannel: voiceChannelName, name: safeName, color: safeColor, avatar: safeAvatar, status: safePresenceStatus(status), clientId: identity, capabilities: safeCapabilities, isBot: Boolean(bot), joinedAt: Date.now() });
       socket.emit('color-assigned', { color: safeColor }); events.joins += 1; addLog('join', `${safeName} entrou em ${room} / ${voiceChannelName}`);
       publishRoomLayout(socket);
+      publishServerProfile(socket);
       const peers = voiceChannelName === LOBBY_CHANNEL ? [] : peersIn(voiceRoom).filter((peer) => peer.id !== socket.id);
-      socket.emit('room-joined', { roomId: room, voiceChannel: voiceChannelName, peers });
+      socket.emit('room-joined', { roomId: room, voiceChannel: voiceChannelName, peers, limits: publicRoomLayout(layout).limits, serverProfile: { ...serverProfile } });
       socket.emit('chat-history', { messages: historyFor(room) });
       publishClusterRoute(socket);
       if (voiceChannelName !== LOBBY_CHANNEL) socket.to(voiceRoom).emit('peer-joined', { id: socket.id, name: safeName, color: safeColor, avatar: safeAvatar, status: socket.data.status });
@@ -555,7 +620,7 @@ function startSignalingServer(port = 3000, options = {}) {
       socket.leave(socket.data.voiceRoom);
       socket.join(nextVoiceRoom); socket.data.voiceRoom = nextVoiceRoom; socket.data.voiceChannel = channel;
       const peers = channel === LOBBY_CHANNEL ? [] : peersIn(nextVoiceRoom).filter((peer) => peer.id !== socket.id);
-      socket.emit('room-joined', { roomId: socket.data.room, voiceChannel: channel, peers });
+      socket.emit('room-joined', { roomId: socket.data.room, voiceChannel: channel, peers, limits: publicRoomLayout(layout).limits, serverProfile: { ...serverProfile } });
       if (channel !== LOBBY_CHANNEL) socket.to(nextVoiceRoom).emit('peer-joined', { id: socket.id, name: socket.data.name, color: socket.data.color, avatar: socket.data.avatar, status: safePresenceStatus(socket.data.status) });
       broadcastPresence(socket.data.serverRoom); addLog('channel', channel === LOBBY_CHANNEL ? `${socket.data.name} saiu da call` : `${socket.data.name} mudou para ${channel}`);
       sendFederation('federation:member', { hostId: clusterNodeId, member: exportMember(socket) });
@@ -593,7 +658,7 @@ function startSignalingServer(port = 3000, options = {}) {
       if ((!known && !ownsMessage) || !safeText || safeChannel(textChannel, 'geral') !== (stored?.textChannel || known?.textChannel)) return socket.emit('app-error', 'Não foi possível editar essa mensagem.');
       const editedAt = Date.now(); const safeMentionIds = safeMentions(socket.data.serverRoom, mentions); const mentionClientIds = stableMentionIds(socket.data.serverRoom, safeMentionIds);
       if (known) Object.assign(known, { mentions: safeMentionIds, mentionClientIds });
-      if (stored) Object.assign(stored, { text: safeText, editedAt, mentions: safeMentionIds, mentionClientIds });
+      if (stored) { Object.assign(stored, { text: safeText, editedAt, mentions: safeMentionIds, mentionClientIds }); chatStore.touch(); }
       const packet = { from: socket.id, messageId: id, text: safeText, textChannel: stored?.textChannel || known.textChannel, editedAt, mentions: safeMentionIds, mentionClientIds };
       io.to(socket.data.serverRoom).emit('message-edited', packet);
       sendFederation('federation:edit', { hostId: clusterNodeId, room: socket.data.room, packet: { ...packet, from: federationId(socket.id) } });
@@ -606,6 +671,7 @@ function startSignalingServer(port = 3000, options = {}) {
       const actor = socket.data.clientId || socket.id; const actors = new Set(Array.isArray(stored.reactions[safeEmoji]) ? stored.reactions[safeEmoji] : []);
       if (actors.has(actor)) actors.delete(actor); else actors.add(actor);
       if (actors.size) stored.reactions[safeEmoji] = [...actors]; else delete stored.reactions[safeEmoji];
+      chatStore.touch();
       const packet = { messageId: stored.messageId, textChannel: stored.textChannel, reactions: stored.reactions };
       io.to(socket.data.serverRoom).emit('message-reaction', packet);
       sendFederation('federation:reaction', { hostId: clusterNodeId, room: socket.data.room, packet });
@@ -614,6 +680,7 @@ function startSignalingServer(port = 3000, options = {}) {
       if (!socket.data.serverRoom) return;
       const stored = messageById(socket.data.room, messageId); if (!stored) return socket.emit('app-error', 'Mensagem não encontrada.');
       stored.pinned = Boolean(pinned); stored.pinnedBy = socket.data.clientId || socket.id;
+      chatStore.touch();
       const packet = { messageId: stored.messageId, textChannel: stored.textChannel, pinned: stored.pinned, pinnedBy: stored.pinnedBy };
       io.to(socket.data.serverRoom).emit('message-pinned', packet);
       sendFederation('federation:pin', { hostId: clusterNodeId, room: socket.data.room, packet });
@@ -727,8 +794,12 @@ function startSignalingServer(port = 3000, options = {}) {
       { ...localNode, state: 'online', score: nodeLoadScore(localNode), local: true },
       ...(remoteNodeMetrics ? [{ ...remoteNodeMetrics, state: remoteHealthy ? 'online' : 'offline', score: nodeLoadScore(remoteNodeMetrics), local: false }] : [])
     ];
-    return { uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), participants: allMembers.length, localParticipants: localClientSockets().length, rooms: voiceRooms.size, maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, maxHumanVoiceChannelSize: MAX_HUMAN_VOICE_CHANNEL_SIZE, roomLayouts: [...configuredRooms.values()], cluster: { enabled: clusterEnabled, role: clusterRole, nodeId: clusterNodeId, state: federationState, remoteHost: federationRemoteHost, remoteParticipants: remoteMembers.size, failover: clusterFailover, smartDistribution: clusterSmartDistribution, publicUrl: clusterPublicUrl, capacity: clusterCapacity, weight: clusterWeight, nodes: clusterNodes, alternates: clusterAlternates() }, webrtc: { supportedClients: recentTelemetry.length, unsupportedClients: Math.max(0, allMembers.filter((member) => !member.isBot).length - recentTelemetry.length), connections, sampledAt: Date.now() }, bandwidth, averagePing: pings.length ? Math.round(pings.reduce((total, ping) => total + ping, 0) / pings.length) : null, events, logs, plugins: plugins.list(), pluginErrors: plugins.errors(), members: allMembers, bans: [...banned.values()] };
+    return { uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), participants: allMembers.length, localParticipants: localClientSockets().length, rooms: voiceRooms.size, maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, maxHumanVoiceChannelSize: MAX_HUMAN_VOICE_CHANNEL_SIZE, roomLayouts: [...configuredRooms.values()].map(publicRoomLayout), storage: { chat: chatStore.stats(), reports: reportStore.stats() }, reports: reportStore.list(20), cluster: { enabled: clusterEnabled, role: clusterRole, nodeId: clusterNodeId, state: federationState, remoteHost: federationRemoteHost, remoteParticipants: remoteMembers.size, failover: clusterFailover, smartDistribution: clusterSmartDistribution, publicUrl: clusterPublicUrl, capacity: clusterCapacity, weight: clusterWeight, nodes: clusterNodes, alternates: clusterAlternates() }, webrtc: { supportedClients: recentTelemetry.length, unsupportedClients: Math.max(0, allMembers.filter((member) => !member.isBot).length - recentTelemetry.length), connections, sampledAt: Date.now() }, bandwidth, averagePing: pings.length ? Math.round(pings.reduce((total, ping) => total + ping, 0) / pings.length) : null, events, logs, plugins: plugins.list(), pluginErrors: plugins.errors(), members: allMembers, bans: [...banned.values()] };
   };
+  const cleanupMessages = (options = {}) => ({ ok: true, ...chatStore.cleanup(options), storage: chatStore.stats() });
+  const configureChatStorage = (settings = {}) => ({ ok: true, ...chatStore.configure(settings), storage: chatStore.stats() });
+  const listReports = (limit = 50) => reportStore.list(limit);
+  const clearReports = () => ({ ok: true, removed: reportStore.clear() });
   const startSecondaryFederation = () => {
     if (!clusterEnabled || clusterRole !== 'secondary') return;
     if (!clusterPrimaryUrl || !clusterSecret) { federationState = 'configuração incompleta'; addLog('cluster', 'Informe URL primária e chave para ligar o host secundário'); return; }
@@ -740,7 +811,7 @@ function startSignalingServer(port = 3000, options = {}) {
   const updateNodeMetrics = (next = {}) => { localNodeMetrics = { ...localNodeMetrics, cpuPercent: finiteMetric(next.cpuPercent, 0, 100) || 0, memoryMb: finiteMetric(next.memoryMb, 0, 1e7) || 0, memoryPressure: finiteMetric(next.memoryPressure, 0, 1) || 0, updatedAt: Date.now() }; return localNodeSnapshot(); };
   const closeFederation = () => { clearInterval(federationHeartbeatTimer); federationHeartbeatTimer = null; const transport = federationTransport; federationTransport = null; transport?.disconnect?.(); clearRemoteHost(''); remoteTelemetry.clear(); };
   if (clusterEnabled) federationHeartbeatTimer = setInterval(sendClusterHeartbeat, clusterHeartbeatMs);
-  server.on('close', closeFederation);
-  return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '0.0.0.0', () => { addLog('info', `Servidor iniciado na porta ${port}`); startSecondaryFederation(); resolve({ server, io, port, getStats, members, kick, ban, unban, updateRoomLayouts, updateNodeMetrics, redirectClientsForShutdown, closeFederation, configurePlugin: plugins.configure, pluginAction: plugins.action }); }); });
+  server.on('close', () => { closeFederation(); chatStore.close(); reportStore.close(); });
+  return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '0.0.0.0', () => { addLog('info', `Servidor iniciado na porta ${port}`); startSecondaryFederation(); resolve({ server, io, port, getStats, members, kick, ban, unban, updateRoomLayouts, updateNodeMetrics, updateServerProfile, redirectClientsForShutdown, closeFederation, cleanupMessages, configureChatStorage, listReports, clearReports, configurePlugin: plugins.configure, pluginAction: plugins.action }); }); });
 }
-module.exports = { startSignalingServer, DEFAULT_ROOM_LAYOUT, normalizeRoomLayout, normalizeChannelSettings };
+module.exports = { startSignalingServer, DEFAULT_ROOM_LAYOUT, normalizeRoomLayout, normalizeChannelSettings, hashRoomPassword, verifyRoomPassword };

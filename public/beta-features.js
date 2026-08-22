@@ -1,4 +1,4 @@
-/* VoiceUP 1.1.1 beta: interaction and workspace layer.
+/* VoiceUP 1.1.2-beta.8: interaction and workspace layer.
  * Kept separate from the WebRTC media core so the stabilized simultaneous
  * camera/screen negotiation remains untouched and easy to audit. */
 (() => {
@@ -489,11 +489,12 @@
   const serverInitials = (name) => String(name || 'S').trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   const renderServerRail = () => {
     const currentUrl = byId('host-url')?.value.trim().replace(/\/$/, ''); const currentRoom = byId('host-room')?.value.trim();
-    serverRail.innerHTML = `<button type="button" class="server-rail-home" title="Tela inicial" aria-label="Tela inicial"><span class="brand-mark">V</span></button><i></i>${readSavedServers().map((server) => `<button type="button" class="server-rail-item${server.url?.replace(/\/$/, '') === currentUrl && server.roomId === currentRoom ? ' active' : ''}" data-rail-server="${escapeHtml(server.id)}" title="${escapeHtml(server.name)}" aria-label="Abrir ${escapeHtml(server.name)}"><span>${escapeHtml(serverInitials(server.name))}</span></button>`).join('')}<button type="button" class="server-rail-add" title="Adicionar servidor" aria-label="Adicionar servidor">${svg.plus}</button>`;
+    serverRail.innerHTML = `<button type="button" class="server-rail-home" title="Tela inicial" aria-label="Tela inicial"><span class="brand-mark">V</span></button><i></i>${readSavedServers().map((server) => `<button type="button" class="server-rail-item${server.url?.replace(/\/$/, '') === currentUrl && server.roomId === currentRoom ? ' active' : ''}" data-rail-server="${escapeHtml(server.id)}" title="${escapeHtml(server.name)}" aria-label="Abrir ${escapeHtml(server.name)}"><span>${server.icon ? `<img src="${escapeHtml(server.icon)}" alt="">` : escapeHtml(serverInitials(server.name))}</span></button>`).join('')}<button type="button" class="server-rail-add" title="Adicionar servidor" aria-label="Adicionar servidor">${svg.plus}</button>`;
   };
   renderServerRail();
   const savedList = byId('saved-servers-list'); if (savedList) new MutationObserver(renderServerRail).observe(savedList, { childList: true, subtree: true });
   window.addEventListener('storage', (event) => { if (event.key === 'voiceup-saved-servers-v1') renderServerRail(); });
+  window.addEventListener('voiceup-saved-servers-changed', renderServerRail);
   const queueServerOpen = async (server) => {
     if (!server) return;
     const proceed = currentMode === 'hosted' && hostedSocket?.connected && typeof showVoiceupDialog === 'function'

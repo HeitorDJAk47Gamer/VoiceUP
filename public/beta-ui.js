@@ -225,6 +225,20 @@ const hostedIncomingVideoKind = (p, transceiver, track) => {
   return 'camera';
 };
 
+// Voice and live audio use independent negotiated slots. Keeping the first
+// audio m-line dedicated to the microphone preserves compatibility with older
+// VoiceUP clients; the second carries only the selected screen/window audio.
+const hostedIncomingAudioKind = (p, transceiver, track) => {
+  if (transceiver === p?.screenAudioTransceiver
+    || transceiver?.receiver === p?.screenAudioReceiver
+    || track === p?.screenAudioReceiver?.track) return 'screen-audio';
+  if (transceiver === p?.audioTransceiver
+    || transceiver?.receiver === p?.audioReceiver
+    || track === p?.audioReceiver?.track) return 'voice-audio';
+  const negotiatedAudio = p?.pc?.getTransceivers?.().filter((item) => item.receiver?.track?.kind === 'audio') || [];
+  return negotiatedAudio.indexOf(transceiver) === 1 ? 'screen-audio' : 'voice-audio';
+};
+
 function addHostedOfferMedia(p, pc) {
   const audioTrack = outgoingAudioTrack();
   p.audioStream = new MediaStream(audioTrack ? [audioTrack] : []);
@@ -232,6 +246,13 @@ function addHostedOfferMedia(p, pc) {
     ? pc.addTransceiver(audioTrack, { direction: 'sendrecv', streams: [p.audioStream] })
     : pc.addTransceiver('audio', { direction: 'sendrecv', streams: [p.audioStream] });
   p.audioTransceiver = audioTransceiver; p.audioSender = audioTransceiver.sender; p.audioReceiver = audioTransceiver.receiver;
+
+  const screenAudioTrack = sharedAudioTrack?.readyState === 'live' ? sharedAudioTrack : null;
+  p.screenAudioStream = new MediaStream(screenAudioTrack ? [screenAudioTrack] : []);
+  const screenAudioTransceiver = screenAudioTrack
+    ? pc.addTransceiver(screenAudioTrack, { direction: 'sendrecv', streams: [p.screenAudioStream] })
+    : pc.addTransceiver('audio', { direction: 'sendrecv', streams: [p.screenAudioStream] });
+  p.screenAudioTransceiver = screenAudioTransceiver; p.screenAudioSender = screenAudioTransceiver.sender; p.screenAudioReceiver = screenAudioTransceiver.receiver;
 
   const cameraTrack = betaTransportVideoTrack('camera');
   const screenTrack = betaTransportVideoTrack('screen');
@@ -249,7 +270,9 @@ async function bindHostedAnswerMedia(p) {
   const pc = p?.pc;
   if (!pc) return;
   const transceivers = pc.getTransceivers();
-  const audioTransceiver = transceivers.find((item) => item.receiver?.track?.kind === 'audio');
+  const audioTransceivers = transceivers.filter((item) => item.receiver?.track?.kind === 'audio');
+  const audioTransceiver = audioTransceivers[0];
+  const screenAudioTransceiver = audioTransceivers[1];
   const videoTransceivers = transceivers.filter((item) => item.receiver?.track?.kind === 'video');
   const cameraTransceiver = videoTransceivers[0];
   const screenTransceiver = videoTransceivers[1];
@@ -262,6 +285,15 @@ async function bindHostedAnswerMedia(p) {
     if (audioTransceiver.direction !== 'stopped') audioTransceiver.direction = 'sendrecv';
     if (typeof audioTransceiver.sender.setStreams === 'function') audioTransceiver.sender.setStreams(p.audioStream);
     replacements.push(audioTransceiver.sender.replaceTrack(audioTrack || null));
+  }
+
+  if (screenAudioTransceiver) {
+    const screenAudioTrack = sharedAudioTrack?.readyState === 'live' ? sharedAudioTrack : null;
+    p.screenAudioStream = new MediaStream(screenAudioTrack ? [screenAudioTrack] : []);
+    p.screenAudioTransceiver = screenAudioTransceiver; p.screenAudioSender = screenAudioTransceiver.sender; p.screenAudioReceiver = screenAudioTransceiver.receiver;
+    if (screenAudioTransceiver.direction !== 'stopped') screenAudioTransceiver.direction = 'sendrecv';
+    if (typeof screenAudioTransceiver.sender.setStreams === 'function') screenAudioTransceiver.sender.setStreams(p.screenAudioStream);
+    replacements.push(screenAudioTransceiver.sender.replaceTrack(screenAudioTrack));
   }
 
   if (cameraTransceiver) {
@@ -301,7 +333,7 @@ function makeHostedConnection(p, initiator = false) {
   if (initiator) addHostedOfferMedia(p, pc);
   if (initiator && betaActiveVideoTrack('camera')) tuneVideoSender(p.cameraSender, 'camera').catch(() => {});
   if (initiator && betaActiveVideoTrack('screen')) tuneVideoSender(p.screenSender, 'screen').catch(() => {});
-  pc.ontrack = ({ track, streams, transceiver }) => attachHostedTrack(p, track, streams, hostedIncomingVideoKind(p, transceiver, track));
+  pc.ontrack = ({ track, streams, transceiver }) => attachHostedTrack(p, track, streams, track.kind === 'audio' ? hostedIncomingAudioKind(p, transceiver, track) : hostedIncomingVideoKind(p, transceiver, track));
   pc.ondatachannel = ({ channel }) => bindHostedChannel(p, channel);
   pc.onicecandidate = ({ candidate }) => { if (candidate) hostedSocket?.emit('signal', { target: p.id, data: { candidate: candidate.toJSON() } }); };
   pc.oniceconnectionstatechange = () => { if (pc.iceConnectionState === 'failed') { p.connected = false; renderHostedParticipants(); } };
@@ -340,6 +372,11 @@ audioSenders = function betaAudioSendersForHostedRooms() {
   if (currentMode !== 'hosted') return [peer?.audioSender, ...betaAudioSenders()].filter(Boolean);
   return readyHostedPeers().map((participant) => participant.audioSender || participant.pc?.getSenders().find((sender) => sender.track?.kind === 'audio')).filter(Boolean);
 };
+
+function screenAudioSenders() {
+  if (currentMode !== 'hosted') return [peer?.screenAudioSender].filter(Boolean);
+  return [...hostedPeers.values()].filter((participant) => !participant.left).map((participant) => participant.screenAudioSender).filter(Boolean);
+}
 
 // A participant can have a valid WebRTC sender a few milliseconds before its
 // data channel is marked as ready. Publishing to every existing sender avoids
@@ -436,6 +473,12 @@ makePeer = function makePeerBeta(role = 'offerer') {
       const existing = pc.getSenders().find((sender) => sender.track?.kind === 'audio');
       peer.audioSender = existing || pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
     }
+    const screenAudioTrack = sharedAudioTrack?.readyState === 'live' ? sharedAudioTrack : null;
+    peer.screenAudioStream = new MediaStream(screenAudioTrack ? [screenAudioTrack] : []);
+    const screenAudioTransceiver = screenAudioTrack
+      ? pc.addTransceiver(screenAudioTrack, { direction: 'sendrecv', streams: [peer.screenAudioStream] })
+      : pc.addTransceiver('audio', { direction: 'sendrecv', streams: [peer.screenAudioStream] });
+    peer.screenAudioTransceiver = screenAudioTransceiver; peer.screenAudioSender = screenAudioTransceiver.sender; peer.screenAudioReceiver = screenAudioTransceiver.receiver;
     const cameraTransceiver = pc.getTransceivers().find((transceiver) => transceiver.receiver.track.kind === 'video');
     const initialCameraTrack = betaTransportVideoTrack('camera');
     const initialScreenTrack = betaTransportVideoTrack('screen');
@@ -450,7 +493,12 @@ makePeer = function makePeerBeta(role = 'offerer') {
   }
   const originalTrackHandler = pc.ontrack;
   pc.ontrack = (event) => {
-    if (event.track.kind === 'audio') { originalTrackHandler?.(event); setupManualAudioGain(event.streams?.[0] || new MediaStream([event.track])); setTimeout(applyOutputMute, 0); setTimeout(applyOutputMute, 250); return; }
+    if (event.track.kind === 'audio') {
+      const kind = hostedIncomingAudioKind(peer, event.transceiver, event.track);
+      const stream = event.streams?.[0] || new MediaStream([event.track]);
+      if (kind === 'screen-audio') { setupManualScreenAudioGain(stream); return; }
+      originalTrackHandler?.(event); setupManualAudioGain(stream); setTimeout(applyOutputMute, 0); setTimeout(applyOutputMute, 250); return;
+    }
     const videoTransceivers = pc.getTransceivers().filter((transceiver) => transceiver.receiver?.track?.kind === 'video');
     const videoIndex = videoTransceivers.indexOf(event.transceiver);
     const kind = event.transceiver?.receiver === peer.screenReceiver || videoIndex === 1 ? 'screen' : 'camera';
@@ -462,7 +510,7 @@ makePeer = function makePeerBeta(role = 'offerer') {
     event.track.onunmute = reveal;
     event.track.onended = () => {
       peer.videoExpectedKinds[kind] = false;
-      if (kind === 'screen') peer.mediaViewKinds.screen = false;
+      if (kind === 'screen') { peer.mediaViewKinds.screen = false; applyLiveAudioLevels(); }
       hideVideoTile(`manual-${kind}`); renderIncomingMediaOffers();
     };
     reveal();
@@ -756,7 +804,7 @@ receiveData = async function receiveDataBetaTyping(raw) {
     if (msg.type === 'video-off' && ['camera', 'screen'].includes(msg.description)) {
       peer.videoExpectedKinds ||= {}; peer.mediaViewKinds ||= { camera: true, screen: false };
       peer.videoExpectedKinds[msg.description] = false;
-      if (msg.description === 'screen') peer.mediaViewKinds.screen = false;
+      if (msg.description === 'screen') { peer.mediaViewKinds.screen = false; applyLiveAudioLevels(); }
       hideVideoTile(`manual-${msg.description}`); renderIncomingMediaOffers(); return;
     }
   } catch { /* normal receiver reports malformed connection data */ }
@@ -783,13 +831,23 @@ function setMediaParticipantVolume(participant, value) {
   return safe;
 }
 
+function setMediaLiveVolume(participant, value) {
+  const safe = Math.max(0, Math.min(200, Number(value) || 0));
+  if (participant === peer) manualLiveVolume = safe;
+  else if (participant) participant.liveVolume = safe;
+  applyLiveAudioLevels();
+  return safe;
+}
+
 function decorateRemoteMediaTile(id, kind, participant) {
   const tile = videoGallery.querySelector(`[data-video-peer="${videoTileId(id)}"]`);
   if (!tile) return;
   tile.dataset.mediaKind = kind;
   tile.dataset.mediaOwner = participant === peer ? 'manual-peer' : String(participant?.id || '');
   tile.querySelector('.media-tile-controls')?.remove();
-  const volume = participant === peer ? Number(manualParticipantVolume || 100) : Number(participant?.volume ?? 100);
+  const volume = kind === 'screen'
+    ? (participant === peer ? Number(manualLiveVolume ?? 100) : Number(participant?.liveVolume ?? 100))
+    : (participant === peer ? Number(manualParticipantVolume || 100) : Number(participant?.volume ?? 100));
   const controls = document.createElement('div');
   controls.className = 'media-tile-controls';
   controls.innerHTML = `${kind === 'screen' ? `<label title="Volume da transmissão"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4zM15.5 9.5a4 4 0 0 1 0 5M18 7a7.5 7.5 0 0 1 0 10"/></svg><input data-media-volume type="range" min="0" max="200" step="1" value="${Math.round(volume)}"/><b>${Math.round(volume)}%</b></label>` : ''}<button type="button" data-media-view-close title="${kind === 'screen' ? 'Sair da transmissão' : 'Ocultar esta câmera'}" aria-label="${kind === 'screen' ? 'Sair da transmissão' : 'Ocultar esta câmera'}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4l16 16M10.7 10.7a2 2 0 0 0 2.6 2.6M9.9 4.2A10.8 10.8 0 0 1 21 12a12.7 12.7 0 0 1-3.1 4.4M6.2 6.2A12.8 12.8 0 0 0 3 12a11.7 11.7 0 0 0 7.6 6.6"/></svg></button>`;
@@ -828,6 +886,7 @@ document.addEventListener('click', (event) => {
     event.preventDefault(); event.stopPropagation();
     const participant = mediaParticipantByOwner(offer.dataset.mediaOfferOwner); if (!participant) return;
     const kind = offer.dataset.mediaOfferKind; mediaViewState(participant)[kind] = true;
+    if (kind === 'screen') applyLiveAudioLevels();
     if (participant === peer) showManualMedia(kind); else showHostedVideo(participant, kind === 'screen' ? 'Tela compartilhada' : 'Câmera', kind);
     renderIncomingMediaOffers(); return;
   }
@@ -836,6 +895,7 @@ document.addEventListener('click', (event) => {
     const tile = close.closest('.video-tile'); const participant = mediaParticipantByOwner(tile?.dataset.mediaOwner); const kind = tile?.dataset.mediaKind;
     if (!participant || !kind) return;
     mediaViewState(participant)[kind] = false;
+    if (kind === 'screen') applyLiveAudioLevels();
     hideVideoTile(participant === peer ? `manual-${kind}` : `${participant.id}-${kind}`);
     renderIncomingMediaOffers(); return;
   }
@@ -844,7 +904,7 @@ document.addEventListener('click', (event) => {
 document.addEventListener('input', (event) => {
   const input = event.target.closest?.('[data-media-volume]'); if (!input) return;
   const tile = input.closest('.video-tile'); const participant = mediaParticipantByOwner(tile?.dataset.mediaOwner); if (!participant) return;
-  const value = setMediaParticipantVolume(participant, input.value); input.nextElementSibling.textContent = `${Math.round(value)}%`;
+  const value = setMediaLiveVolume(participant, input.value); input.nextElementSibling.textContent = `${Math.round(value)}%`;
 });
 
 function applyHostedVideoState(p, active, description, revision) {
@@ -856,7 +916,7 @@ function applyHostedVideoState(p, active, description, revision) {
   p.videoExpectedKinds[kind] = Boolean(active);
   mediaViewState(p);
   if (!p.videoExpectedKinds[kind]) {
-    if (kind === 'screen') p.mediaViewKinds.screen = false;
+    if (kind === 'screen') { p.mediaViewKinds.screen = false; applyLiveAudioLevels(); }
     clearTimeout(p.videoMuteTimers[kind]); hideVideoTile(`${p.id}-${kind}`); renderIncomingMediaOffers(); return;
   }
   // Some Windows WebRTC builds dispatch the incoming video track before the
@@ -1009,10 +1069,13 @@ let betaMicGainContext = null;
 let betaMicGainNode = null;
 let betaMicGainTrack = null;
 let betaMicGainSourceTrack = null;
-let betaSharedMicGainNode = null;
 let manualAudioGainContext = null;
 let manualAudioGainNode = null;
 let manualParticipantVolume = 100;
+let manualScreenAudio = null;
+let manualScreenAudioGainContext = null;
+let manualScreenAudioGainNode = null;
+let manualLiveVolume = 100;
 const outputButton = document.querySelector('#output-button');
 const outputIcon = (muted) => muted
   ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4zM19 9l-6 6M13 9l6 6"/></svg>'
@@ -1021,7 +1084,7 @@ const refreshOutputButton = () => {
   if (!outputButton) return;
   outputButton.innerHTML = outputIcon(betaOutputMuted);
   outputButton.classList.toggle('muted', betaOutputMuted);
-  outputButton.title = betaOutputMuted ? 'Ativar áudio recebido' : 'Silenciar todo o áudio recebido';
+  outputButton.title = betaOutputMuted ? 'Ativar vozes recebidas' : 'Silenciar vozes recebidas';
   outputButton.setAttribute('aria-label', outputButton.title);
 };
 const applyOutputMute = () => {
@@ -1034,10 +1097,22 @@ const applyOutputMute = () => {
     if (item.audio) { item.audio.muted = Boolean(item.audioGainNode) || betaOutputMuted || item.muted; item.audio.volume = Math.min(1, level); }
   });
 };
+const applyLiveAudioLevels = () => {
+  const manualWatching = Boolean(peer && mediaViewState(peer).screen);
+  const manualLevel = manualWatching ? manualLiveVolume / 100 : 0;
+  if (manualScreenAudioGainNode) manualScreenAudioGainNode.gain.value = manualLevel;
+  if (manualScreenAudio) { manualScreenAudio.muted = Boolean(manualScreenAudioGainNode) || !manualWatching; manualScreenAudio.volume = Math.min(1, manualLevel); }
+  hostedPeers.forEach((item) => {
+    const watching = Boolean(mediaViewState(item).screen);
+    const level = watching ? Number(item.liveVolume ?? 100) / 100 : 0;
+    if (item.screenAudioGainNode) item.screenAudioGainNode.gain.value = level;
+    if (item.screenAudio) { item.screenAudio.muted = Boolean(item.screenAudioGainNode) || !watching; item.screenAudio.volume = Math.min(1, level); }
+  });
+};
 const persistOutputMute = () => {
   try { const profile = JSON.parse(localStorage.getItem('voiceup-profile-v1') || '{}'); profile.outputMuted = betaOutputMuted; localStorage.setItem('voiceup-profile-v1', JSON.stringify(profile)); } catch { /* optional local preference */ }
 };
-outputButton?.addEventListener('click', () => { betaOutputMuted = !betaOutputMuted; applyOutputMute(); refreshOutputButton(); persistOutputMute(); toast(betaOutputMuted ? 'Áudio recebido silenciado.' : 'Áudio recebido ativado.'); });
+outputButton?.addEventListener('click', () => { betaOutputMuted = !betaOutputMuted; applyOutputMute(); refreshOutputButton(); persistOutputMute(); toast(betaOutputMuted ? 'Vozes recebidas silenciadas. O áudio das lives continua independente.' : 'Vozes recebidas ativadas.'); });
 refreshOutputButton();
 applyOutputMute();
 
@@ -1052,7 +1127,7 @@ const gainedMicrophoneTrack = () => {
   // At the default gain, publish the physical track directly. Besides avoiding
   // needless processing, this preserves one-way audio compatibility with old
   // VoiceUP builds that expect the original getUserMedia stream.
-  if (Math.abs(betaInputVolume - 100) < 0.01) {
+  if (Math.abs(betaInputVolume - 100) < 0.01 && noiseMode !== 'enhanced') {
     closeMicGain();
     return rawTrack;
   }
@@ -1063,7 +1138,14 @@ const gainedMicrophoneTrack = () => {
     const destination = betaMicGainContext.createMediaStreamDestination();
     betaMicGainNode = betaMicGainContext.createGain();
     betaMicGainNode.gain.value = betaInputVolume / 100;
-    betaMicGainContext.createMediaStreamSource(new MediaStream([rawTrack])).connect(betaMicGainNode).connect(destination);
+    let microphoneNode = betaMicGainContext.createMediaStreamSource(new MediaStream([rawTrack]));
+    if (noiseMode === 'enhanced') {
+      const highpass = betaMicGainContext.createBiquadFilter(); highpass.type = 'highpass'; highpass.frequency.value = 82; highpass.Q.value = .72;
+      const lowpass = betaMicGainContext.createBiquadFilter(); lowpass.type = 'lowpass'; lowpass.frequency.value = 12000; lowpass.Q.value = .45;
+      const compressor = betaMicGainContext.createDynamicsCompressor(); compressor.threshold.value = -42; compressor.knee.value = 22; compressor.ratio.value = 3; compressor.attack.value = .006; compressor.release.value = .22;
+      microphoneNode = microphoneNode.connect(highpass).connect(lowpass).connect(compressor);
+    }
+    microphoneNode.connect(betaMicGainNode).connect(destination);
     betaMicGainSourceTrack = rawTrack;
     betaMicGainTrack = destination.stream.getAudioTracks()[0];
     betaMicGainContext.resume().catch(() => {});
@@ -1071,40 +1153,154 @@ const gainedMicrophoneTrack = () => {
   } catch { closeMicGain(); return rawTrack; }
 };
 const betaRawOutgoingAudioTrack = outgoingAudioTrack;
-outgoingAudioTrack = function outgoingAudioTrackBetaGain() { return sharedAudioTrack || gainedMicrophoneTrack() || betaRawOutgoingAudioTrack(); };
+outgoingAudioTrack = function outgoingAudioTrackBetaGain() { return gainedMicrophoneTrack() || localStream?.getAudioTracks?.()[0] || (sharedAudioTrack ? null : betaRawOutgoingAudioTrack()); };
 const refreshOutgoingMicrophone = async () => {
   closeMicGain();
   const track = outgoingAudioTrack();
-  if (track && !sharedAudioTrack) await Promise.allSettled(audioSenders().map((sender) => sender.replaceTrack(track)));
+  if (track) await Promise.allSettled(audioSenders().map((sender) => sender.replaceTrack(track)));
 };
 const betaRequestAudioForGain = requestAudio;
 requestAudio = async function requestAudioBetaGain(...args) { const result = await betaRequestAudioForGain(...args); await refreshOutgoingMicrophone(); return result; };
 const betaReplaceMicrophoneForGain = replaceMicrophone;
 replaceMicrophone = async function replaceMicrophoneBetaGain(...args) { const result = await betaReplaceMicrophoneForGain(...args); await refreshOutgoingMicrophone(); return result; };
-const betaStopSharedSystemAudioForGain = stopSharedSystemAudio;
-stopSharedSystemAudio = async function stopSharedSystemAudioBetaGain(...args) { betaSharedMicGainNode = null; return betaStopSharedSystemAudioForGain(...args); };
-startSharedSystemAudio = async function startSharedSystemAudioBetaGain() {
-  const systemTrack = screenStream?.getAudioTracks?.()[0];
-  if (!systemTrack) { if (shareSystemAudio) toast('O sistema não disponibilizou áudio para esta tela ou janela.'); return; }
-  try {
-    sharedAudioContext = new AudioContext();
-    const destination = sharedAudioContext.createMediaStreamDestination();
-    const micTrack = localStream?.getAudioTracks?.()[0];
-    if (micTrack) {
-      betaSharedMicGainNode = sharedAudioContext.createGain();
-      betaSharedMicGainNode.gain.value = betaInputVolume / 100;
-      sharedAudioContext.createMediaStreamSource(new MediaStream([micTrack])).connect(betaSharedMicGainNode).connect(destination);
+
+let nativeShareAudioContext = null;
+let nativeShareAudioNode = null;
+let nativeShareAudioDestination = null;
+let nativeShareAudioTrack = null;
+let nativeShareAudioWanted = false;
+const nativeShareAudioProcessor = `
+class VoiceUpProcessPcmProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.queue = [];
+    this.offset = 0;
+    this.queuedFrames = 0;
+    this.port.onmessage = ({ data }) => {
+      if (data?.reset) { this.queue = []; this.offset = 0; this.queuedFrames = 0; return; }
+      if (!(data instanceof ArrayBuffer) || data.byteLength < 4) return;
+      const pcm = new Int16Array(data);
+      this.queue.push(pcm);
+      this.queuedFrames += Math.floor(pcm.length / 2);
+      while (this.queuedFrames > 24000 && this.queue.length > 1) {
+        const removed = this.queue.shift();
+        this.queuedFrames -= Math.floor((removed.length - this.offset) / 2);
+        this.offset = 0;
+      }
+    };
+  }
+  process(_inputs, outputs) {
+    const output = outputs[0];
+    const left = output[0];
+    const right = output[1] || left;
+    left.fill(0); if (right !== left) right.fill(0);
+    for (let frame = 0; frame < left.length;) {
+      const chunk = this.queue[0];
+      if (!chunk) break;
+      if (this.offset + 1 >= chunk.length) { this.queue.shift(); this.offset = 0; continue; }
+      const available = Math.floor((chunk.length - this.offset) / 2);
+      const count = Math.min(left.length - frame, available);
+      for (let index = 0; index < count; index += 1) {
+        left[frame + index] = chunk[this.offset + index * 2] / 32768;
+        right[frame + index] = chunk[this.offset + index * 2 + 1] / 32768;
+      }
+      this.offset += count * 2;
+      this.queuedFrames = Math.max(0, this.queuedFrames - count);
+      frame += count;
+      if (this.offset >= chunk.length) { this.queue.shift(); this.offset = 0; }
     }
-    sharedAudioContext.createMediaStreamSource(new MediaStream([systemTrack])).connect(destination);
-    sharedAudioTrack = destination.stream.getAudioTracks()[0];
-    await Promise.allSettled(audioSenders().map((sender) => sender.replaceTrack(sharedAudioTrack)));
-  } catch { toast('Não foi possível misturar o áudio do sistema com o microfone.'); }
+    return true;
+  }
+}
+registerProcessor('voiceup-process-pcm', VoiceUpProcessPcmProcessor);
+`;
+const processAudioArrayBuffer = (data) => {
+  if (data instanceof ArrayBuffer) return data.slice(0);
+  if (ArrayBuffer.isView(data)) return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  if (data?.type === 'Buffer' && Array.isArray(data.data)) return Uint8Array.from(data.data).buffer;
+  return null;
+};
+window.voiceupDesktop?.onProcessAudioData?.((data) => {
+  const buffer = processAudioArrayBuffer(data);
+  if (buffer && nativeShareAudioWanted && nativeShareAudioNode) nativeShareAudioNode.port.postMessage(buffer, [buffer]);
+});
+window.voiceupDesktop?.onProcessAudioState?.((state) => {
+  if (state?.active || !nativeShareAudioWanted || ['renderer-stopped', 'source-changed', 'replaced', 'app-quit'].includes(state?.reason)) return;
+  nativeShareAudioWanted = false;
+  toast('O áudio protegido da transmissão foi interrompido. A live continuará sem áudio para evitar duplicação ou vazamento de outros programas.');
+  void stopSharedSystemAudio();
+});
+const closeNativeShareAudio = async ({ stopNative = true } = {}) => {
+  nativeShareAudioWanted = false;
+  if (stopNative) await window.voiceupDesktop?.stopProcessAudio?.().catch(() => {});
+  try { nativeShareAudioNode?.port?.postMessage({ reset: true }); } catch { /* already closed */ }
+  try { nativeShareAudioNode?.disconnect?.(); } catch { /* already closed */ }
+  nativeShareAudioTrack?.stop?.();
+  await nativeShareAudioContext?.close?.().catch(() => {});
+  nativeShareAudioContext = null; nativeShareAudioNode = null; nativeShareAudioDestination = null; nativeShareAudioTrack = null;
+};
+const startNativeShareAudio = async (sourceId) => {
+  if (!window.voiceupDesktop?.startProcessAudio) throw new Error('Esta versão não contém o capturador protegido de áudio.');
+  await closeNativeShareAudio();
+  nativeShareAudioContext = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 });
+  const moduleUrl = URL.createObjectURL(new Blob([nativeShareAudioProcessor], { type: 'text/javascript' }));
+  try { await nativeShareAudioContext.audioWorklet.addModule(moduleUrl); }
+  finally { URL.revokeObjectURL(moduleUrl); }
+  nativeShareAudioNode = new AudioWorkletNode(nativeShareAudioContext, 'voiceup-process-pcm', {
+    numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit'
+  });
+  nativeShareAudioDestination = nativeShareAudioContext.createMediaStreamDestination();
+  nativeShareAudioNode.connect(nativeShareAudioDestination);
+  nativeShareAudioTrack = nativeShareAudioDestination.stream.getAudioTracks()[0];
+  nativeShareAudioTrack.contentHint = 'music';
+  nativeShareAudioWanted = true;
+  const result = await window.voiceupDesktop.startProcessAudio(sourceId);
+  if (!result?.ok) {
+    await closeNativeShareAudio();
+    const reason = result?.reason === 'invalid-capture-source'
+      ? 'A fonte escolhida não está mais disponível.'
+      : result?.reason === 'startup-timeout'
+        ? 'O Windows demorou demais para liberar o áudio protegido.'
+        : 'A captura protegida de áudio não está disponível neste Windows.';
+    throw new Error(reason);
+  }
+  await nativeShareAudioContext.resume();
+  return nativeShareAudioTrack;
+};
+
+stopSharedSystemAudio = async function stopSharedSystemAudioBetaSeparated() {
+  const previous = sharedAudioTrack;
+  sharedAudioTrack = null;
+  await Promise.allSettled(screenAudioSenders().map((sender) => sender.replaceTrack(null)));
+  if (peer?.channel?.readyState === 'open') peer.channel.send(JSON.stringify({ type: 'screen-audio-off' }));
+  if (currentMode === 'hosted') [...hostedPeers.values()].forEach((participant) => participant.channel?.readyState === 'open' && participant.channel.send(JSON.stringify({ type: 'screen-audio-off' })));
+  previous?.stop?.();
+  await closeNativeShareAudio();
+  await sharedAudioContext?.close?.().catch(() => {}); sharedAudioContext = null;
+};
+startSharedSystemAudio = async function startSharedSystemAudioBetaGain() {
+  const usesProtectedDesktopCapture = /^(?:window|screen):/.test(String(selectedScreenSource || '')) && Boolean(window.voiceupDesktop?.startProcessAudio);
+  const systemTrack = screenStream?.getAudioTracks?.()[0];
+  if (!usesProtectedDesktopCapture && !systemTrack) { if (shareSystemAudio) toast('O sistema não disponibilizou áudio para esta transmissão.'); return; }
+  try {
+    sharedAudioTrack?.stop?.();
+    sharedAudioTrack = usesProtectedDesktopCapture ? await startNativeShareAudio(selectedScreenSource) : systemTrack.clone();
+    sharedAudioTrack.contentHint = 'music';
+    await Promise.allSettled(screenAudioSenders().map((sender) => sender.replaceTrack(sharedAudioTrack)));
+    if (peer?.channel?.readyState === 'open') peer.channel.send(JSON.stringify({ type: 'screen-audio-on' }));
+    if (currentMode === 'hosted') [...hostedPeers.values()].forEach((participant) => participant.channel?.readyState === 'open' && participant.channel.send(JSON.stringify({ type: 'screen-audio-on' })));
+  } catch (error) {
+    await closeNativeShareAudio();
+    sharedAudioTrack = null;
+    toast(error?.message || 'Não foi possível publicar o áudio desta transmissão. A live continuará sem áudio para proteger sua privacidade.');
+  }
 };
 const setAudioContextSink = async (context) => {
   if (!context || typeof context.setSinkId !== 'function') return;
   await context.setSinkId(audioOutputId || 'default').catch(() => {});
 };
 const closeManualAudioGain = () => { manualAudioGainContext?.close?.().catch(() => {}); manualAudioGainContext = null; manualAudioGainNode = null; };
+const closeManualScreenAudioGain = () => { manualScreenAudio?.pause?.(); manualScreenAudio = null; manualScreenAudioGainContext?.close?.().catch(() => {}); manualScreenAudioGainContext = null; manualScreenAudioGainNode = null; };
 const setupManualAudioGain = (stream) => {
   closeManualAudioGain();
   try {
@@ -1130,12 +1326,37 @@ const setupHostedAudioGain = (participant, stream) => {
   } catch { participant.audioGainContext = null; participant.audioGainNode = null; }
   applyOutputMute();
 };
+const setupManualScreenAudioGain = (stream) => {
+  closeManualScreenAudioGain();
+  manualScreenAudio = new Audio(); manualScreenAudio.srcObject = stream; manualScreenAudio.autoplay = true;
+  if (audioOutputId && typeof manualScreenAudio.setSinkId === 'function') manualScreenAudio.setSinkId(audioOutputId).catch(() => {});
+  try {
+    manualScreenAudioGainContext = new AudioContext(); manualScreenAudioGainNode = manualScreenAudioGainContext.createGain();
+    manualScreenAudioGainContext.createMediaStreamSource(stream).connect(manualScreenAudioGainNode).connect(manualScreenAudioGainContext.destination);
+    setAudioContextSink(manualScreenAudioGainContext); manualScreenAudioGainContext.resume().catch(() => {}); manualScreenAudio.pause();
+  } catch { manualScreenAudioGainContext = null; manualScreenAudioGainNode = null; manualScreenAudio.play().catch(() => {}); }
+  applyLiveAudioLevels();
+};
+const setupHostedScreenAudioGain = (participant, stream) => {
+  participant.screenAudio?.pause?.(); participant.screenAudioGainContext?.close?.().catch(() => {});
+  participant.screenAudio = new Audio(); participant.screenAudio.srcObject = stream; participant.screenAudio.autoplay = true;
+  if (audioOutputId && typeof participant.screenAudio.setSinkId === 'function') participant.screenAudio.setSinkId(audioOutputId).catch(() => {});
+  try {
+    participant.screenAudioGainContext = new AudioContext(); participant.screenAudioGainNode = participant.screenAudioGainContext.createGain();
+    participant.screenAudioGainContext.createMediaStreamSource(stream).connect(participant.screenAudioGainNode).connect(participant.screenAudioGainContext.destination);
+    setAudioContextSink(participant.screenAudioGainContext); participant.screenAudioGainContext.resume().catch(() => {}); participant.screenAudio.pause();
+  } catch { participant.screenAudioGainContext = null; participant.screenAudioGainNode = null; participant.screenAudio.play().catch(() => {}); }
+  applyLiveAudioLevels();
+};
 
 const betaApplyAudioOutput = applyAudioOutput;
 applyAudioOutput = async function applyAudioOutputBetaMuteSafe() {
   const result = await betaApplyAudioOutput();
-  await Promise.allSettled([setAudioContextSink(manualAudioGainContext), ...[...hostedPeers.values()].map((item) => setAudioContextSink(item.audioGainContext))]);
+  const liveElements = [manualScreenAudio, ...[...hostedPeers.values()].map((item) => item.screenAudio)].filter(Boolean);
+  await Promise.allSettled(liveElements.filter((item) => typeof item.setSinkId === 'function').map((item) => item.setSinkId(audioOutputId || 'default')));
+  await Promise.allSettled([setAudioContextSink(manualAudioGainContext), setAudioContextSink(manualScreenAudioGainContext), ...[...hostedPeers.values()].flatMap((item) => [setAudioContextSink(item.audioGainContext), setAudioContextSink(item.screenAudioGainContext)])]);
   applyOutputMute();
+  applyLiveAudioLevels();
   setTimeout(applyOutputMute, 100);
   setTimeout(applyOutputMute, 450);
   return result;
@@ -1170,6 +1391,7 @@ function showHostedVideo(p, label = 'Video recebido', kind = 'camera') {
 function requestParticipantMediaView(participant, kind = 'screen') {
   if (!participant) return false;
   mediaViewState(participant)[kind] = true;
+  if (kind === 'screen') applyLiveAudioLevels();
   // Ask the broadcaster to reattach this exact sender. This also recovers
   // when both sides start a live at the same time or one side joined late.
   if (participant === peer) {
@@ -1254,6 +1476,11 @@ function startRemoteVoiceDetection(p, stream) {
 function attachHostedTrack(p, track, streams, kind = 'camera') {
   const stream = track.kind === 'video' ? new MediaStream([track]) : (streams[0] || new MediaStream([track]));
   if (track.kind === 'audio') {
+    if (kind === 'screen-audio') {
+      setupHostedScreenAudioGain(p, stream);
+      track.addEventListener('ended', () => { p.screenAudio?.pause?.(); p.screenAudio = null; p.screenAudioGainContext?.close?.().catch(() => {}); p.screenAudioGainContext = null; p.screenAudioGainNode = null; }, { once: true });
+      return;
+    }
     p.audio?.pause(); p.audio = new Audio(); p.audio.srcObject = stream; p.audio.autoplay = true; p.audio.muted = betaOutputMuted || p.muted;
     if (audioOutputId && typeof p.audio.setSinkId === 'function') p.audio.setSinkId(audioOutputId).catch(() => {});
     p.audio.play().catch(() => {});
@@ -1274,7 +1501,7 @@ function attachHostedTrack(p, track, streams, kind = 'camera') {
   // replaceTrack may mute the receiver momentarily while Chromium switches the
   // source. The explicit, reliable video-off message owns removal of the tile.
   track.onmute = () => { clearTimeout(p.videoMuteTimers[kind]); p.videoMuteTimers[kind] = setTimeout(reveal, 900); };
-  track.onended = () => { p.videoExpectedKinds[kind] = false; if (kind === 'screen') mediaViewState(p).screen = false; hideVideoTile(`${p.id}-${kind}`); renderIncomingMediaOffers(); };
+  track.onended = () => { p.videoExpectedKinds[kind] = false; if (kind === 'screen') { mediaViewState(p).screen = false; applyLiveAudioLevels(); } hideVideoTile(`${p.id}-${kind}`); renderIncomingMediaOffers(); };
   reveal();
 }
 
@@ -1283,6 +1510,8 @@ removeHostedPeer = function removeHostedPeerBetaVoice(id, name) {
   const participant = hostedPeers.get(id);
   stopRemoteVoiceDetection(participant);
   participant?.audioGainContext?.close?.().catch(() => {});
+  participant?.screenAudio?.pause?.();
+  participant?.screenAudioGainContext?.close?.().catch(() => {});
   hideVideoTile(`${id}-camera`); hideVideoTile(`${id}-screen`);
   const result = betaRemoveHostedPeerForVoice(id, name); renderIncomingMediaOffers(); return result;
 };
@@ -1716,7 +1945,7 @@ const renderCentralCallMembers = () => {
   const structureKey = participants.map((member) => { const media = mediaParticipantByOwner(member.id === 'self' ? '' : member.id); return [member.id, member.name, member.color, member.avatar?.length || 0, member.connected ? 1 : 0, media?.videoExpectedKinds?.screen ? 1 : 0, media?.videoExpectedKinds?.camera ? 1 : 0].join(':'); }).join('|');
   if (list.dataset.structureKey !== structureKey) {
     list.dataset.structureKey = structureKey;
-    list.innerHTML = participants.map((member) => `<article class="call-member" data-call-member="${escapeHtml(member.id)}"${member.id !== 'self' ? ' tabindex="0" role="button" aria-label="Ajustar volume deste participante"' : ''}>${betaMemberAvatar(member)}${mediaOfferBadge(member)}<strong>${escapeHtml(member.name || 'Você')}${member.id === 'self' ? ` (${escapeHtml(betaT('state.self') || 'você')})` : ''}</strong><small>${member.connected ? (betaT('state.inChannel') || 'No canal') : (betaT('state.connecting') || 'Conectando...')}</small></article>`).join('');
+    list.innerHTML = participants.map((member) => `<article class="call-member" data-call-member="${escapeHtml(member.id)}"${member.id !== 'self' ? ' tabindex="0" role="button" aria-label="Ajustar volume deste participante"' : ''}>${betaMemberAvatar(member)}${mediaOfferBadge(member)}<strong>${escapeHtml(member.name || 'Você')}${member.id === 'self' ? ` (${escapeHtml(betaT('state.self') || 'você')})` : ''}</strong><small>${member.connected ? (currentMode === 'manual' ? (betaChannelName(activeVoiceChannel, 'voice') || 'Geral') : (betaT('state.inChannel') || 'No canal')) : (betaT('state.connecting') || 'Conectando...')}</small></article>`).join('');
   }
   // Toggle only the speaking state. Recreating the avatar would restart the
   // aura animation on every sample and make it look as if it never appeared.
@@ -1725,7 +1954,7 @@ const renderCentralCallMembers = () => {
     if (!article) continue;
     article.classList.toggle('speaking', Boolean(member.speaking));
     const state = article.querySelector('small');
-    if (state) state.textContent = member.speaking ? (betaT('state.speaking') || 'Falando...') : member.connected ? (betaT('state.inChannel') || 'No canal') : (betaT('state.connecting') || 'Conectando...');
+    if (state) state.textContent = member.speaking ? (betaT('state.speaking') || 'Falando...') : member.connected ? (currentMode === 'manual' ? (betaChannelName(activeVoiceChannel, 'voice') || 'Geral') : (betaT('state.inChannel') || 'No canal')) : (betaT('state.connecting') || 'Conectando...');
   }
   // Video tiles are the equivalent of the large participant cards. Give the
   // whole tile the speaking border, rather than only outlining the avatar.
@@ -1866,7 +2095,7 @@ const renderSavedServers = () => {
   if (!savedServersList) return;
   const roomWord = betaT('saved.room') || 'sala';
   const removeLabel = betaT('saved.remove') || 'Remover servidor salvo';
-  savedServersList.innerHTML = savedServers.length ? savedServers.map((server) => `<article class="saved-server${server.id === selectedSavedServerId ? ' selected' : ''}" data-saved-server="${escapeHtml(server.id)}"><button class="saved-server-open" type="button"><span class="saved-server-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01M12 7h4M12 17h4"/></svg></span><span><strong>${escapeHtml(server.name)}</strong><small>${escapeHtml(server.url)} · ${escapeHtml(roomWord)} ${escapeHtml(server.roomId)}</small></span></button><button class="saved-server-remove" type="button" title="${escapeHtml(removeLabel)}" aria-label="${escapeHtml(removeLabel)}: ${escapeHtml(server.name)}"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></article>`).join('') : `<p>${betaT('saved.empty') || 'Nenhum servidor salvo ainda. Preencha os dados acima e clique em “Salvar atual”.'}</p>`;
+  savedServersList.innerHTML = savedServers.length ? savedServers.map((server) => `<article class="saved-server${server.id === selectedSavedServerId ? ' selected' : ''}" data-saved-server="${escapeHtml(server.id)}"><button class="saved-server-open" type="button"><span class="saved-server-icon" aria-hidden="true">${server.icon ? `<img src="${escapeHtml(server.icon)}" alt="">` : '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01M12 7h4M12 17h4"/></svg>'}</span><span><strong>${escapeHtml(server.name)}</strong><small>${escapeHtml(server.url)} · ${escapeHtml(roomWord)} ${escapeHtml(server.roomId)}</small></span></button><button class="saved-server-remove" type="button" title="${escapeHtml(removeLabel)}" aria-label="${escapeHtml(removeLabel)}: ${escapeHtml(server.name)}"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></article>`).join('') : `<p>${betaT('saved.empty') || 'Nenhum servidor salvo ainda. Preencha os dados acima e clique em “Salvar atual”.'}</p>`;
 };
 const selectSavedServer = (server) => {
   if (!server) return;
@@ -1885,7 +2114,7 @@ const saveCurrentServer = ({ silent = false } = {}) => {
   const existing = savedServers.find((server) => server.url === url && server.roomId === roomId);
   const id = existing?.id || `server-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const name = hostNameInput?.value.trim() || existing?.name || defaultServerName(url, roomId);
-  const next = { id, name, url, roomId, lastUsedAt: Date.now() };
+  const next = { id, name, url, roomId, icon: existing?.icon || '', lastUsedAt: Date.now() };
   savedServers = [next, ...savedServers.filter((server) => server.id !== id)].slice(0, 12);
   selectedSavedServerId = id;
   if (hostNameInput) hostNameInput.value = name;
@@ -1930,6 +2159,10 @@ document.querySelector('#join-host')?.addEventListener('click', () => saveCurren
 const initialSavedServer = savedServers.find((server) => server.url === document.querySelector('#host-url')?.value.trim() && server.roomId === document.querySelector('#host-room')?.value.trim());
 if (initialSavedServer) selectSavedServer(initialSavedServer);
 else renderSavedServers();
+window.addEventListener('voiceup-saved-servers-changed', () => {
+  savedServers = readSavedServers();
+  renderSavedServers();
+});
 document.head.insertAdjacentHTML('beforeend', `<style>
 #accept-offer{display:flex!important;align-items:center!important;justify-content:center!important;min-height:48px!important;background:var(--focus)!important;color:var(--beta-button-ink)!important;border:0!important;font-weight:700!important}#accept-offer::before{content:'↗';margin-right:8px;font-size:16px}.beta-hosted #pair-panel{display:none!important}.beta-hosted .participant-heading,.beta-hosted #participants{display:none!important}.beta-hosted .self-card{margin-top:auto!important}.members-clone .server-member{margin:2px 0;border-radius:9px}.members-clone .server-member.in-active-call{background:color-mix(in srgb,var(--focus) 10%,transparent)}.members-clone .server-member small{color:var(--muted)}.members-clone .hosted-mute{width:31px;height:31px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);display:grid;place-items:center}.members-clone .hosted-mute svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 #call-members{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:28px;max-width:min(760px,90vw);margin:0 auto 22px}.call-member{display:grid;justify-items:center;gap:8px;min-width:136px;padding:13px 12px;color:var(--ink);text-align:center;border:2px solid transparent;border-radius:16px}.call-member .avatar{width:88px;height:88px;font-size:28px;border-radius:28px;box-shadow:var(--shadow);transition:outline-color .14s,box-shadow .14s,transform .14s}.call-member strong{font-size:14px;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.call-member small{color:var(--muted);font-size:11px}.call-member.speaking{border-color:transparent;background:transparent;box-shadow:none}.call-member.speaking .avatar{outline:3px solid var(--focus);outline-offset:5px;box-shadow:0 0 0 7px color-mix(in srgb,var(--focus) 20%,transparent),0 0 24px 7px color-mix(in srgb,var(--focus) 55%,transparent),var(--shadow);transform:scale(1.035);animation:voiceup-speaking-aura 1.15s ease-in-out infinite}.call-member.speaking small{color:var(--focus);font-weight:700}.video-tile.speaking{border:2px solid var(--focus)!important;box-shadow:0 0 19px color-mix(in srgb,var(--focus) 36%,transparent)}.video-frame:has(.video-tile.speaking){border-color:var(--focus)!important;box-shadow:0 0 21px color-mix(in srgb,var(--focus) 28%,transparent),var(--shadow)!important}@keyframes voiceup-speaking-aura{0%,100%{box-shadow:0 0 0 6px color-mix(in srgb,var(--focus) 17%,transparent),0 0 18px 5px color-mix(in srgb,var(--focus) 42%,transparent),var(--shadow)}50%{box-shadow:0 0 0 9px color-mix(in srgb,var(--focus) 23%,transparent),0 0 30px 9px color-mix(in srgb,var(--focus) 62%,transparent),var(--shadow)}}@media(prefers-reduced-motion:reduce){.call-member.speaking .avatar{animation:none}}@media(max-width:700px){#call-members{gap:17px}.call-member .avatar{width:68px;height:68px;border-radius:22px;font-size:22px}.call-member{min-width:94px;padding:9px}.call-member strong{font-size:12px}}
@@ -2283,10 +2516,10 @@ if (settingsDialog && !document.querySelector('#settings-tabs')) {
   const tabs = document.createElement('div');
   tabs.id = 'settings-tabs';
   tabs.setAttribute('role', 'tablist');
-  tabs.innerHTML = '<button type="button" class="settings-tab active" data-settings-tab="general">Geral</button><button type="button" class="settings-tab" data-settings-tab="appearance">Aparência</button><button type="button" class="settings-tab" data-settings-tab="audio">Áudio</button><button type="button" class="settings-tab" data-settings-tab="video">Vídeo e live</button>';
+  tabs.innerHTML = '<button type="button" class="settings-tab active" data-settings-tab="general">Geral</button><button type="button" class="settings-tab" data-settings-tab="appearance">Aparência</button><button type="button" class="settings-tab" data-settings-tab="audio">Áudio</button><button type="button" class="settings-tab" data-settings-tab="video">Vídeo e live</button><button type="button" class="settings-tab" data-settings-tab="support">Suporte</button>';
   const panels = document.createElement('div');
   panels.id = 'settings-tab-panels';
-  panels.innerHTML = '<div class="settings-panel active" data-settings-panel="general"></div><div class="settings-panel" data-settings-panel="appearance"></div><div class="settings-panel" data-settings-panel="audio"></div><div class="settings-panel" data-settings-panel="video"></div>';
+  panels.innerHTML = '<div class="settings-panel active" data-settings-panel="general"></div><div class="settings-panel" data-settings-panel="appearance"></div><div class="settings-panel" data-settings-panel="audio"></div><div class="settings-panel" data-settings-panel="video"></div><div class="settings-panel" data-settings-panel="support"></div>';
   settingsDialog.insertBefore(tabs, settingsDialog.querySelector('#client-preferences') || settingsDialog.lastElementChild);
   settingsDialog.insertBefore(panels, tabs.nextSibling);
   const panel = (name) => panels.querySelector(`[data-settings-panel="${name}"]`);
@@ -2304,6 +2537,7 @@ if (settingsDialog && !document.querySelector('#settings-tabs')) {
   move(document.querySelector('#carry-media-toggle')?.closest('label'), panel('video'));
   move(document.querySelector('#refresh-devices'), panel('video'));
   move(document.querySelector('#device-note'), panel('video'));
+  panel('support').innerHTML = `<section id="bug-report-panel"><div class="bug-report-heading"><div><strong>Relatar um problema</strong><small>O relatório vai para o servidor informado na tela inicial.</small></div><span>Privacidade protegida</span></div><label>Categoria<select id="bug-report-category"><option value="erro">Erro ou travamento</option><option value="audio">Áudio</option><option value="video">Câmera ou live</option><option value="conexao">Conexão</option><option value="interface">Interface</option><option value="sugestao">Sugestão</option></select></label><label>O que aconteceu?<textarea id="bug-report-description" maxlength="4000" rows="4" placeholder="Descreva o problema e o resultado esperado."></textarea></label><label>Como reproduzir (opcional)<textarea id="bug-report-steps" maxlength="4000" rows="3" placeholder="Ex.: entrei em Geral, liguei a câmera e..."></textarea></label><label class="bug-report-diagnostics"><input id="bug-report-diagnostics" type="checkbox" checked><span><b>Incluir diagnóstico técnico básico</b><small>Envia versão, Windows e os últimos erros. Nunca envia senha, mensagens, foto ou áudio.</small></span></label><button id="bug-report-send" type="button">Enviar relatório</button><small id="bug-report-status">Nenhum relatório enviado nesta sessão.</small></section>`;
   // The old section is only a wrapper once its fields have moved.
   document.querySelector('#device-settings')?.remove();
   const selectTab = (name) => {
@@ -2312,6 +2546,52 @@ if (settingsDialog && !document.querySelector('#settings-tabs')) {
   };
   tabs.querySelectorAll('.settings-tab').forEach((button) => button.addEventListener('click', () => selectTab(button.dataset.settingsTab)));
 }
+
+const bugReportEndpoint = () => {
+  let host = String(document.querySelector('#host-url')?.value || 'https://voiceup.shardweb.app').trim();
+  if (/^VU[12]:/i.test(host)) {
+    try {
+      const encoded = host.replace(/^VU[12]:/i, '');
+      const decoded = JSON.parse(decodeURIComponent(escape(atob(encoded))));
+      host = String(decoded.host || '');
+    } catch { host = ''; }
+  }
+  if (!/^https?:\/\//i.test(host)) host = 'https://voiceup.shardweb.app';
+  return `${host.replace(/\/$/, '')}/api/bug-reports`;
+};
+document.querySelector('#bug-report-send')?.addEventListener('click', async () => {
+  const button = document.querySelector('#bug-report-send');
+  const status = document.querySelector('#bug-report-status');
+  const description = String(document.querySelector('#bug-report-description')?.value || '').trim();
+  if (!description) { status.textContent = 'Descreva o problema antes de enviar.'; return; }
+  let savedProfile = {};
+  try { savedProfile = JSON.parse(localStorage.getItem('voiceup-profile-v1') || '{}'); } catch { /* perfil opcional */ }
+  const includeDiagnostics = Boolean(document.querySelector('#bug-report-diagnostics')?.checked);
+  const body = {
+    category: document.querySelector('#bug-report-category')?.value || 'erro',
+    description,
+    steps: String(document.querySelector('#bug-report-steps')?.value || '').trim(),
+    version: String(window.voiceupVersion || '').slice(0, 48),
+    platform: includeDiagnostics ? String(navigator.userAgent || '').slice(0, 80) : '',
+    clientId: includeDiagnostics ? String(savedProfile.clientId || '').slice(0, 80) : '',
+    name: includeDiagnostics ? String(savedProfile.name || '').slice(0, 40) : '',
+    roomId: includeDiagnostics ? String(document.querySelector('#host-room')?.value || '').slice(0, 48) : '',
+    diagnostics: includeDiagnostics ? (window.voiceupDiagnostics || []).slice(-25) : []
+  };
+  button.disabled = true; button.textContent = 'Enviando…'; status.textContent = 'Enviando relatório com segurança…';
+  try {
+    const response = await fetch(bugReportEndpoint(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.message || `Servidor respondeu ${response.status}.`);
+    document.querySelector('#bug-report-description').value = '';
+    document.querySelector('#bug-report-steps').value = '';
+    status.textContent = `Relatório ${result.id || ''} enviado. Obrigado!`.replace(/\s+/g, ' ').trim();
+  } catch (error) {
+    status.textContent = `Não foi possível enviar: ${String(error?.message || 'servidor indisponível').slice(0, 160)}`;
+  } finally {
+    button.disabled = false; button.textContent = 'Enviar relatório';
+  }
+});
 
 // Camera selection and preview live entirely inside Settings. The preview
 // never enters a peer connection; it only verifies the selected Windows
@@ -2332,12 +2612,20 @@ const cameraPreviewToggle = document.querySelector('#camera-preview-toggle');
 const cameraPreviewEmpty = document.querySelector('#camera-preview-empty');
 const cameraPreviewStatus = document.querySelector('#camera-preview-status');
 const stopCameraSettingsPreview = async () => {
-  if (cameraSettingsPreviewOwnsStream) cameraSettingsPreviewStream?.getTracks?.().forEach((track) => track.stop());
+  const ownedTracks = cameraSettingsPreviewOwnsStream ? (cameraSettingsPreviewStream?.getTracks?.() || []) : [];
+  ownedTracks.forEach((track) => track.stop());
   cameraSettingsPreviewStream = null; cameraSettingsPreviewOwnsStream = false;
   if (cameraSettingsPreview) cameraSettingsPreview.srcObject = null;
   cameraPreviewEmpty?.classList.remove('hidden');
   if (cameraPreviewToggle) cameraPreviewToggle.textContent = 'Iniciar prévia';
   if (cameraPreviewStatus) cameraPreviewStatus.textContent = 'A câmera escolhida será usada ao clicar em Ligar câmera.';
+  // Algumas webcams do Windows continuam ocupadas por alguns milissegundos
+  // depois de stop(). Sem esta janela de liberação, abrir a câmera na chamada
+  // logo após fechar a prévia resulta em NotReadableError/TrackStartError.
+  if (ownedTracks.length) {
+    if (typeof waitForCameraRelease === 'function') await waitForCameraRelease();
+    else await new Promise((resolve) => setTimeout(resolve, 240));
+  }
 };
 window.voiceupStopCameraSettingsPreview = stopCameraSettingsPreview;
 const startCameraSettingsPreview = async () => {
@@ -2348,10 +2636,12 @@ const startCameraSettingsPreview = async () => {
       cameraSettingsPreviewStream = cameraStream;
       cameraSettingsPreviewOwnsStream = false;
     } else {
-      const constraints = quality();
-      if (chosenDevice) constraints.deviceId = { exact: chosenDevice };
-      cameraSettingsPreviewStream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
+      const capture = typeof acquireCameraStream === 'function'
+        ? await acquireCameraStream(chosenDevice, true)
+        : { stream: await navigator.mediaDevices.getUserMedia({ video: chosenDevice ? { deviceId: { exact: chosenDevice } } : true, audio: false }), usedDefault: false, relaxed: true };
+      cameraSettingsPreviewStream = capture.stream;
       cameraSettingsPreviewOwnsStream = true;
+      if (capture.usedDefault && cameraInputSelect) cameraInputSelect.value = '';
     }
     const track = cameraSettingsPreviewStream?.getVideoTracks?.()[0];
     if (!track) throw new Error('A câmera não criou uma faixa de vídeo.');
@@ -2366,9 +2656,16 @@ const startCameraSettingsPreview = async () => {
     if ([...cameraInputSelect.options].some((option) => option.value === selectedValue)) cameraInputSelect.value = selectedValue;
   } catch (error) {
     await stopCameraSettingsPreview();
-    const detail = error?.name === 'NotAllowedError'
+    const errorName = String(error?.name || '');
+    const selectedCameraName = String(cameraInputSelect?.selectedOptions?.[0]?.textContent || '').trim();
+    const busyCameraAdvice = /iriun/i.test(selectedCameraName)
+      ? 'Abra o Iriun Webcam no PC e no celular, conecte os dois e inicie a prévia novamente.'
+      : 'A câmera está ocupada. Feche a câmera em outro VoiceUP ou aplicativo e tente novamente.';
+    const detail = errorName === 'NotAllowedError' || errorName === 'SecurityError'
       ? 'Permita o acesso em Configurações do Windows > Privacidade e segurança > Câmera.'
-      : error?.name === 'NotFoundError' || error?.name === 'OverconstrainedError'
+      : errorName === 'NotReadableError' || errorName === 'TrackStartError' || errorName === 'AbortError'
+        ? busyCameraAdvice
+      : errorName === 'NotFoundError' || errorName === 'OverconstrainedError'
         ? 'A câmera selecionada não está conectada ou está indisponível.'
         : error?.message || 'Feche outro programa que esteja usando a câmera e tente novamente.';
     if (cameraPreviewStatus) cameraPreviewStatus.textContent = detail;
@@ -2398,11 +2695,15 @@ const themeCatalog = [
   { id: 'crimson', name: 'Carmesim', detail: 'Vinho e rubi', colors: ['#17090e', '#281017', '#12070b', '#ff6680', '#f5a45d'] },
   { id: 'obsidian', name: 'Obsidiana', detail: 'Grafite e jade', colors: ['#101414', '#18201f', '#0c1111', '#6bd6b0', '#c8a96a'] },
   { id: 'cobalt', name: 'Cobalto', detail: 'Azul e laranja', colors: ['#081326', '#102449', '#081a35', '#6da7ff', '#ff9a61'] },
+  { id: 'amethyst', name: 'Ametista', detail: 'Violeta e ciano', colors: ['#100b1d', '#1c1232', '#0d0918', '#b98cff', '#52d8de'] },
+  { id: 'volcano', name: 'Vulcão', detail: 'Carvão e lava', colors: ['#15110f', '#241916', '#0e0c0b', '#ff815f', '#e5bd68'] },
   { id: 'snow', name: 'Neve colorida', detail: 'Azul sereno fosco', light: true, colors: ['#c7d7e7', '#d9e4ef', '#b9ccdf', '#197d8c', '#c95872'] },
   { id: 'lilac', name: 'Lilás fosco', detail: 'Violeta suave', light: true, colors: ['#d7c9e8', '#e5d9f0', '#cbbadc', '#7153ad', '#c9588a'] },
   { id: 'sage', name: 'Sálvia fosca', detail: 'Verde natural', light: true, colors: ['#c8d9c8', '#d9e5d5', '#b9cfbd', '#2c765e', '#c46758'] },
   { id: 'peach', name: 'Pêssego fosco', detail: 'Coral quente', light: true, colors: ['#e4c8be', '#eed9d1', '#d9b9ae', '#a64f67', '#c96542'] },
-  { id: 'mist', name: 'Névoa fosca', detail: 'Cinza azulado', light: true, colors: ['#c8d1dc', '#d9e0e8', '#bbc6d2', '#426e9d', '#aa6077'] }
+  { id: 'mist', name: 'Névoa fosca', detail: 'Cinza azulado', light: true, colors: ['#c8d1dc', '#d9e0e8', '#bbc6d2', '#426e9d', '#aa6077'] },
+  { id: 'lagoon', name: 'Lagoa fosca', detail: 'Turquesa suave', light: true, colors: ['#bcd8d5', '#d1e5e1', '#acd0cb', '#1d776f', '#b25f79'] },
+  { id: 'sunset', name: 'Entardecer', detail: 'Rosa e dourado', light: true, colors: ['#dfc7cf', '#ead8dc', '#d4b8c2', '#9b4d78', '#b77035'] }
 ];
 const themeSelect = document.querySelector('#theme-select');
 const themeLabel = themeSelect?.closest('label');
@@ -2410,14 +2711,17 @@ let themeBeforeSettings = null;
 if (themeLabel && !document.querySelector('#theme-samples')) {
   const samples = document.createElement('section');
   samples.id = 'theme-samples';
-  samples.setAttribute('aria-label', 'Amostras de temas');
-  samples.innerHTML = `<div class="theme-samples-heading"><strong>Amostras</strong><small>Clique para visualizar antes de salvar.</small></div><div class="theme-samples-grid">${themeCatalog.map(({ id, name, detail, light, colors }) => `
-    <button class="theme-sample-card${light ? ' light' : ''}" type="button" data-theme-sample="${id}" aria-label="Visualizar tema ${name}" style="--sample-base:${colors[0]};--sample-content:${colors[1]};--sample-side:${colors[2]};--sample-focus:${colors[3]};--sample-coral:${colors[4]}">
+  samples.setAttribute('aria-label', 'Temas');
+  samples.innerHTML = `<div class="theme-samples-heading"><strong>Temas</strong><small>Clique em um tema para aplicar.</small></div><div class="theme-samples-grid">${themeCatalog.map(({ id, name, detail, light, colors }) => `
+    <button class="theme-sample-card${light ? ' light' : ''}" type="button" data-theme-sample="${id}" aria-label="Selecionar tema ${name}" style="--sample-base:${colors[0]};--sample-content:${colors[1]};--sample-side:${colors[2]};--sample-focus:${colors[3]};--sample-coral:${colors[4]}">
       <span class="theme-sample-window" aria-hidden="true"><i></i><b><em></em><em></em></b><u></u></span>
       <span class="theme-sample-copy"><strong>${name}</strong><small>${detail}</small></span>
       <span class="theme-sample-check" aria-hidden="true">✓</span>
     </button>`).join('')}</div>`;
   themeLabel.insertAdjacentElement('afterend', samples);
+  // The cards are the visible selector. Keep the native select as an internal
+  // value holder so saving and legacy settings code remain compatible.
+  themeLabel.classList.add('theme-select-control-hidden');
   const selectThemeSample = (nextTheme, preview = true) => {
     if (!themeCatalog.some((item) => item.id === nextTheme)) return;
     themeSelect.value = nextTheme;
@@ -2569,10 +2873,9 @@ const updateGlobalVolumeUi = () => {
   if (outputVolumeRange) outputVolumeRange.value = String(betaOutputVolume);
 };
 const applyInputVolume = () => {
-  const needsProcessedTrack = Math.abs(betaInputVolume - 100) >= 0.01;
-  if (needsProcessedTrack !== Boolean(betaMicGainNode) && !sharedAudioTrack) void refreshOutgoingMicrophone();
+  const needsProcessedTrack = Math.abs(betaInputVolume - 100) >= 0.01 || noiseMode === 'enhanced';
+  if (needsProcessedTrack !== Boolean(betaMicGainNode)) void refreshOutgoingMicrophone();
   else if (betaMicGainNode) betaMicGainNode.gain.value = betaInputVolume / 100;
-  if (betaSharedMicGainNode) betaSharedMicGainNode.gain.value = betaInputVolume / 100;
 };
 inputVolumeRange?.addEventListener('input', () => { betaInputVolume = Math.max(0, Math.min(200, Number(inputVolumeRange.value))); applyInputVolume(); updateGlobalVolumeUi(); });
 outputVolumeRange?.addEventListener('input', () => { betaOutputVolume = Math.max(0, Math.min(200, Number(outputVolumeRange.value))); applyOutputMute(); updateGlobalVolumeUi(); });
@@ -2747,17 +3050,21 @@ body.theme-cyber{--ink:#e6f3ff;--muted:#839ab2;--night:#050d1b;--night2:#0a1930;
 body.theme-crimson{--ink:#fae9ed;--muted:#aa8089;--night:#17090e;--night2:#281017;--line:#58303a;--cyan:#ff6680;--coral:#f5a45d;--focus:#ff6680;--focus-contrast:#2a080f;--beta-button-ink:var(--focus-contrast)}body.theme-crimson .sidebar{background:#12070b!important}body.theme-crimson #right-panel{background:#1b0a10!important}body.theme-crimson .content{background:radial-gradient(circle at 52% 32%,#55202d 0,#281017 46%,#17090e 100%)!important}
 body.theme-obsidian{--ink:#e5efeb;--muted:#879992;--night:#101414;--night2:#18201f;--line:#354640;--cyan:#6bd6b0;--coral:#c8a96a;--focus:#6bd6b0;--focus-contrast:#10251e;--beta-button-ink:var(--focus-contrast)}body.theme-obsidian .sidebar{background:#0c1111!important}body.theme-obsidian #right-panel{background:#111817!important}body.theme-obsidian .content{background:radial-gradient(circle at 52% 32%,#263a35 0,#18201f 47%,#101414 100%)!important}
 body.theme-cobalt{--ink:#e8efff;--muted:#8899ba;--night:#081326;--night2:#102449;--line:#294a78;--cyan:#6da7ff;--coral:#ff9a61;--focus:#6da7ff;--focus-contrast:#07162d;--beta-button-ink:var(--focus-contrast)}body.theme-cobalt .sidebar{background:#081a35!important}body.theme-cobalt #right-panel{background:#09182f!important}body.theme-cobalt .content{background:radial-gradient(circle at 52% 32%,#204d8b 0,#102449 46%,#081326 100%)!important}
+body.theme-amethyst{--ink:#f1eaff;--muted:#a497bc;--night:#100b1d;--night2:#1c1232;--line:#493763;--cyan:#b98cff;--coral:#52d8de;--focus:#b98cff;--focus-contrast:#1b0d2d;--beta-button-ink:var(--focus-contrast)}body.theme-amethyst .sidebar{background:#0d0918!important}body.theme-amethyst #right-panel{background:#140d24!important}body.theme-amethyst .content{background:radial-gradient(circle at 52% 32%,#3a245e 0,#1c1232 48%,#100b1d 100%)!important}
+body.theme-volcano{--ink:#f7ebe5;--muted:#a9958b;--night:#15110f;--night2:#241916;--line:#554039;--cyan:#ff815f;--coral:#e5bd68;--focus:#ff815f;--focus-contrast:#2b1009;--beta-button-ink:var(--focus-contrast)}body.theme-volcano .sidebar{background:#0e0c0b!important}body.theme-volcano #right-panel{background:#1b1311!important}body.theme-volcano .content{background:radial-gradient(circle at 52% 32%,#4a2921 0,#241916 48%,#15110f 100%)!important}
 body.theme-snow{--ink:#15283a;--muted:#566f86;--night:#c7d7e7;--night2:#d9e4ef;--line:#9eb5ca;--cyan:#197d8c;--coral:#c95872;--focus:#197d8c;--focus-contrast:#fff;--beta-button-ink:#fff}body.theme-snow .sidebar{background:#b9ccdf!important}body.theme-snow #right-panel{background:#c2d3e3!important}body.theme-snow .content{background:radial-gradient(circle at 52% 32%,#bfd8ea 0,#d9e4ef 54%,#c7d7e7 100%)!important}
 body.theme-lilac{--ink:#2f2142;--muted:#6d5d7f;--night:#d7c9e8;--night2:#e5d9f0;--line:#b6a4ca;--cyan:#7153ad;--coral:#c9588a;--focus:#7153ad;--focus-contrast:#fff;--beta-button-ink:#fff}body.theme-lilac .sidebar{background:#cbbadc!important}body.theme-lilac #right-panel{background:#d3c4e2!important}body.theme-lilac .content{background:radial-gradient(circle at 52% 32%,#d3bfe7 0,#e5d9f0 54%,#d7c9e8 100%)!important}
 body.theme-sage{--ink:#21342d;--muted:#5c7168;--night:#c8d9c8;--night2:#d9e5d5;--line:#9fb9a5;--cyan:#2c765e;--coral:#c46758;--focus:#2c765e;--focus-contrast:#fff;--beta-button-ink:#fff}body.theme-sage .sidebar{background:#b9cfbd!important}body.theme-sage #right-panel{background:#c5d8c5!important}body.theme-sage .content{background:radial-gradient(circle at 52% 32%,#c3ddc5 0,#d9e5d5 54%,#c8d9c8 100%)!important}
 body.theme-peach{--ink:#422a31;--muted:#785f67;--night:#e4c8be;--night2:#eed9d1;--line:#c9a79e;--cyan:#a64f67;--coral:#c96542;--focus:#a64f67;--focus-contrast:#fff;--beta-button-ink:#fff}body.theme-peach .sidebar{background:#d9b9ae!important}body.theme-peach #right-panel{background:#e1c5ba!important}body.theme-peach .content{background:radial-gradient(circle at 52% 32%,#e8c6b9 0,#eed9d1 54%,#e4c8be 100%)!important}
 body.theme-mist{--ink:#233348;--muted:#5d6e82;--night:#c8d1dc;--night2:#d9e0e8;--line:#a4b1c0;--cyan:#426e9d;--coral:#aa6077;--focus:#426e9d;--focus-contrast:#fff;--beta-button-ink:#fff}body.theme-mist .sidebar{background:#bbc6d2!important}body.theme-mist #right-panel{background:#c5cfda!important}body.theme-mist .content{background:radial-gradient(circle at 52% 32%,#c2d2e2 0,#d9e0e8 54%,#c8d1dc 100%)!important}
-body.theme-snow,body.theme-lilac,body.theme-sage,body.theme-peach,body.theme-mist{--panel:color-mix(in srgb,var(--night) 88%,var(--night2));--surface:color-mix(in srgb,var(--night2) 82%,#fff 8%);--surface-2:color-mix(in srgb,var(--night) 72%,var(--night2))}body.theme-snow .video-frame,body.theme-lilac .video-frame,body.theme-sage .video-frame,body.theme-peach .video-frame,body.theme-mist .video-frame{background:#26313f!important}
+body.theme-lagoon{--ink:#183b3a;--muted:#567571;--night:#bcd8d5;--night2:#d1e5e1;--line:#91bab5;--cyan:#1d776f;--coral:#b25f79;--focus:#1d776f;--focus-contrast:#fff;--beta-button-ink:#fff}body.theme-lagoon .sidebar{background:#acd0cb!important}body.theme-lagoon #right-panel{background:#b6d5d1!important}body.theme-lagoon .content{background:radial-gradient(circle at 52% 32%,#b4dad5 0,#d1e5e1 54%,#bcd8d5 100%)!important}
+body.theme-sunset{--ink:#402635;--muted:#765b69;--night:#dfc7cf;--night2:#ead8dc;--line:#c5a5b1;--cyan:#9b4d78;--coral:#b77035;--focus:#9b4d78;--focus-contrast:#fff;--beta-button-ink:#fff}body.theme-sunset .sidebar{background:#d4b8c2!important}body.theme-sunset #right-panel{background:#dbc2ca!important}body.theme-sunset .content{background:radial-gradient(circle at 52% 32%,#e4c2cd 0,#ead8dc 54%,#dfc7cf 100%)!important}
+body.theme-snow,body.theme-lilac,body.theme-sage,body.theme-peach,body.theme-mist,body.theme-lagoon,body.theme-sunset{--panel:color-mix(in srgb,var(--night) 88%,var(--night2));--surface:color-mix(in srgb,var(--night2) 82%,#fff 8%);--surface-2:color-mix(in srgb,var(--night) 72%,var(--night2))}body.theme-snow .video-frame,body.theme-lilac .video-frame,body.theme-sage .video-frame,body.theme-peach .video-frame,body.theme-mist .video-frame,body.theme-lagoon .video-frame,body.theme-sunset .video-frame{background:#26313f!important}
 #settings-tabs{flex-wrap:wrap}.appearance-options{display:grid;gap:12px;padding:14px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--surface) 76%,transparent)}.appearance-options-heading{display:grid;gap:3px}.appearance-options-heading small{color:var(--muted);font-size:11px}.appearance-options-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.appearance-options-grid label{display:grid;gap:6px;font-size:12px}.appearance-effects{display:flex!important;align-items:center;gap:8px!important;font-weight:600}.appearance-effects input{width:auto!important}.settings-panel[data-settings-panel="appearance"]>#theme-samples{order:2}.settings-panel[data-settings-panel="appearance"]>#appearance-options{order:3}
 body[data-interface-density="compact"] .room-channel{padding-block:6px!important}body[data-interface-density="compact"] .participant,body[data-interface-density="compact"] .members-clone .participant{padding-block:6px}body[data-interface-density="compact"] .messages{gap:3px!important;padding-block:9px!important}body[data-interface-density="compact"] .message{padding-block:5px!important}body[data-interface-density="compact"] .self-card{padding-block:10px 7px}
 body[data-font-scale="small"] .room-channel,body[data-font-scale="small"] .participant,body[data-font-scale="small"] .message-text,body[data-font-scale="small"] #settings-modal label{font-size:11px!important}body[data-font-scale="large"] .room-channel,body[data-font-scale="large"] .participant,body[data-font-scale="large"] .message-text,body[data-font-scale="large"] #settings-modal label{font-size:15px!important}body[data-font-scale="large"] .message .author{font-size:11px!important}
 body[data-panel-width="narrow"] .app{grid-template-columns:270px minmax(420px,1fr) 280px}body[data-panel-width="wide"] .app{grid-template-columns:270px minmax(420px,1fr) 370px}body[data-motion="reduced"] *,body[data-motion="reduced"] *::before,body[data-motion="reduced"] *::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}body[data-effects="off"] .welcome,body[data-effects="off"] .content{background:var(--night2)!important}body[data-effects="off"] .welcome::before,body[data-effects="off"] .card-glow{display:none!important}body[data-effects="off"] #settings-modal,body[data-effects="off"] .participant-audio-popover{backdrop-filter:none!important}body[data-effects="off"] .call-member.speaking .avatar{box-shadow:0 0 0 5px color-mix(in srgb,var(--focus) 26%,transparent)!important}
 #server-lobby{display:none;min-width:0;min-height:0;text-align:left}body.server-lobby-mode .content{grid-template-rows:61px minmax(0,1fr)!important;min-height:0!important;overflow:hidden!important}body.server-lobby-mode .control-dock{display:none!important}body.server-lobby-mode .stage{align-self:stretch!important;width:100%!important;height:100%!important;min-height:0!important;padding:0!important;overflow:hidden!important}body.server-lobby-mode .stage>#identity-stage,body.server-lobby-mode .stage>#video-frame,body.server-lobby-mode .stage>#local-video,body.server-lobby-mode .stage>#pair-panel{display:none!important}body.server-lobby-mode #server-lobby{contain:layout size;width:100%!important;max-width:none!important;height:100%!important;min-height:0;margin:0!important;display:grid;grid-template-rows:62px minmax(0,1fr);overflow:hidden!important;border:0;border-radius:0;background:color-mix(in srgb,var(--night2) 92%,var(--focus) 2%);box-shadow:none}#server-lobby>header{display:flex!important;align-items:center!important;justify-content:space-between!important;padding:0 24px!important;background:color-mix(in srgb,var(--night) 55%,transparent)!important;border-bottom:1px solid var(--line)!important}#server-lobby>header .eyebrow{display:block!important;margin:0 0 2px!important;font-size:8px!important;color:var(--focus)!important}#server-lobby>header h2{margin:0!important;font-size:18px!important}#server-lobby>header>small{color:var(--muted);font-size:11px}#server-lobby-chat-slot{display:grid!important;width:100%;height:100%;min-height:0;overflow:hidden!important}#server-lobby #chat-panel{contain:layout;display:grid!important;width:100%!important;height:100%!important;max-height:100%!important;min-height:0!important;align-self:stretch!important;overflow:hidden!important;grid-template-rows:minmax(0,1fr) auto 64px!important}#server-lobby #messages{grid-row:1;width:100%!important;height:100%!important;max-height:100%!important;min-height:0!important;padding:20px 24px!important;overflow-x:hidden!important;overflow-y:auto!important;overscroll-behavior:contain;align-content:flex-start}#server-lobby #messages>.message{flex:0 0 auto!important;min-height:min-content;max-width:min(760px,92%)!important}#server-lobby #messages>.system-message{flex:0 0 auto}#server-lobby .typing-indicator{grid-row:2;flex:none}#server-lobby #message-form{grid-row:3!important;align-self:stretch!important;min-height:64px!important;max-height:64px!important;display:flex;gap:9px;padding:10px 18px;border-top:1px solid var(--line);background:color-mix(in srgb,var(--night) 55%,transparent)}#server-lobby #message-input{width:100%;min-width:0;padding:11px 14px;border:1px solid var(--line);border-radius:9px;outline:none;background:var(--surface);color:var(--ink)}#server-lobby #message-input:focus{border-color:var(--focus);box-shadow:0 0 0 3px color-mix(in srgb,var(--focus) 17%,transparent)}#server-lobby #message-form>button{flex:0 0 44px;width:44px;border-radius:9px;background:var(--focus);color:var(--focus-contrast)}body.server-lobby-mode #right-panel>.panel-tabs{grid-template-columns:1fr}body.server-lobby-mode #right-panel [data-panel="chat"]{display:none}body.server-lobby-mode #members-panel{display:grid!important}
-.host-name-label{display:grid;gap:7px;font-size:12px;font-weight:600;color:var(--muted)}.saved-servers{display:grid;gap:10px;margin-top:4px;padding:12px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--surface) 70%,transparent)}.saved-servers-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.saved-servers-heading>div:first-child{display:grid;gap:2px}.saved-servers-heading small{color:var(--muted);font-size:10px}.saved-servers-actions{display:flex!important;align-items:center;gap:6px!important}.saved-servers-actions>button{min-height:34px!important;margin:0!important;padding:7px 10px!important;display:block!important;background:var(--surface-2)!important;color:var(--ink)!important;border:1px solid var(--line)!important}.saved-servers-actions>#save-current-server{background:var(--focus)!important;color:var(--focus-contrast)!important;border-color:transparent!important}.saved-servers-list{display:grid;gap:6px;max-height:186px;overflow:auto}.saved-servers-list>p{margin:3px;color:var(--muted);font-size:11px;line-height:1.45}.saved-server{display:grid;grid-template-columns:minmax(0,1fr) 31px;align-items:center;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:var(--surface)}.saved-server.selected{border-color:var(--focus);box-shadow:0 0 0 2px color-mix(in srgb,var(--focus) 14%,transparent)}.saved-server-open{min-width:0!important;min-height:50px!important;margin:0!important;padding:7px 9px!important;display:grid!important;grid-template-columns:34px minmax(0,1fr)!important;align-items:center!important;justify-content:initial!important;gap:9px!important;text-align:left!important;background:transparent!important;color:var(--ink)!important}.saved-server-open>span:last-child{display:grid;gap:2px;min-width:0}.saved-server-open strong,.saved-server-open small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.saved-server-open strong{font-size:12px}.saved-server-open small{color:var(--muted);font-size:9px}.saved-server-icon{width:34px;height:34px;display:grid;place-items:center;border-radius:9px;background:color-mix(in srgb,var(--focus) 12%,var(--night2));color:var(--focus)}.saved-server-icon svg,.saved-server-remove svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.saved-server-remove{width:28px!important;height:28px!important;margin:0!important;padding:0!important;display:grid!important;place-items:center!important;background:transparent!important;color:var(--muted)!important}.saved-server-remove:hover{color:var(--coral)!important;background:color-mix(in srgb,var(--coral) 10%,transparent)!important}
+.host-name-label{display:grid;gap:7px;font-size:12px;font-weight:600;color:var(--muted)}.saved-servers{display:grid;gap:10px;margin-top:4px;padding:12px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--surface) 70%,transparent)}.saved-servers-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.saved-servers-heading>div:first-child{display:grid;gap:2px}.saved-servers-heading small{color:var(--muted);font-size:10px}.saved-servers-actions{display:flex!important;align-items:center;gap:6px!important}.saved-servers-actions>button{min-height:34px!important;margin:0!important;padding:7px 10px!important;display:block!important;background:var(--surface-2)!important;color:var(--ink)!important;border:1px solid var(--line)!important}.saved-servers-actions>#save-current-server{background:var(--focus)!important;color:var(--focus-contrast)!important;border-color:transparent!important}.saved-servers-list{display:grid;gap:6px;max-height:186px;overflow:auto}.saved-servers-list>p{margin:3px;color:var(--muted);font-size:11px;line-height:1.45}.saved-server{display:grid;grid-template-columns:minmax(0,1fr) 31px;align-items:center;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:var(--surface)}.saved-server.selected{border-color:var(--focus);box-shadow:0 0 0 2px color-mix(in srgb,var(--focus) 14%,transparent)}.saved-server-open{min-width:0!important;min-height:50px!important;margin:0!important;padding:7px 9px!important;display:grid!important;grid-template-columns:34px minmax(0,1fr)!important;align-items:center!important;justify-content:initial!important;gap:9px!important;text-align:left!important;background:transparent!important;color:var(--ink)!important}.saved-server-open>span:last-child{display:grid;gap:2px;min-width:0}.saved-server-open strong,.saved-server-open small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.saved-server-open strong{font-size:12px}.saved-server-open small{color:var(--muted);font-size:9px}.saved-server-icon{width:34px;height:34px;display:grid;place-items:center;overflow:hidden;border-radius:9px;background:color-mix(in srgb,var(--focus) 12%,var(--night2));color:var(--focus)}.saved-server-icon img{width:100%;height:100%;object-fit:cover}.saved-server-icon svg,.saved-server-remove svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.saved-server-remove{width:28px!important;height:28px!important;margin:0!important;padding:0!important;display:grid!important;place-items:center!important;background:transparent!important;color:var(--muted)!important}.saved-server-remove:hover{color:var(--coral)!important;background:color-mix(in srgb,var(--coral) 10%,transparent)!important}
 @media(max-width:1280px){body[data-panel-width="narrow"] .app,body[data-panel-width="normal"] .app,body[data-panel-width="wide"] .app{grid-template-columns:224px minmax(380px,1fr) 276px}}@media(max-width:980px){body[data-panel-width] .app{grid-template-columns:218px minmax(0,1fr)}body.server-lobby-mode .content{grid-row:1!important}#server-lobby>header>small{display:none}}@media(max-width:700px){.appearance-options-grid{grid-template-columns:1fr}body.server-lobby-mode .content{grid-row:2!important}body.server-lobby-mode #right-panel{display:grid!important}body.server-lobby-mode .app{grid-template-rows:auto minmax(520px,72dvh) 250px}body.server-lobby-mode #right-panel{grid-row:3!important;height:250px!important;min-height:250px!important;max-height:250px!important}}@media(max-width:520px){#settings-tabs{display:grid;grid-template-columns:1fr 1fr;width:100%}.settings-tab{min-width:0}.saved-servers-heading{align-items:stretch;flex-direction:column}.saved-servers-actions{width:100%}.saved-servers-actions>button{flex:1}}
 </style>`);

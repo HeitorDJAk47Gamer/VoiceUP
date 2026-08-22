@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VoiceUP Server</title>
   <link rel="stylesheet" href="./style.css">
+  <style>
+    .host-server-icon-setting>div{grid-column:2;grid-row:1/3;display:flex;align-items:center;gap:10px;min-width:0}.host-server-icon-setting>div>span:last-child{display:grid;gap:6px;min-width:0}.host-server-icon-setting input[type=file]{width:100%;min-width:0;color:var(--muted);font-size:10px}.host-server-icon-preview{width:52px;height:52px;display:grid;place-items:center;overflow:hidden;flex:0 0 52px;border-radius:14px;background:var(--surface-3);color:var(--accent);font-size:18px;font-weight:900;border:1px solid var(--line)}.host-server-icon-preview img{width:100%;height:100%;object-fit:cover}@media(max-width:620px){.host-server-icon-setting>div{grid-column:1;grid-row:auto;margin-top:8px}}
+  </style>
 </head>
 <body data-theme="ocean">
   <div class="app-shell">
@@ -29,7 +32,7 @@
       </nav>
 
       <div class="sidebar-footer">
-        <span>VoiceUP Server</span><strong id="app-version">1.1.1</strong>
+        <span>VoiceUP Server</span><strong id="app-version">1.1.2</strong>
       </div>
     </aside>
 
@@ -62,7 +65,7 @@
 
         <div class="metric-grid">
           <article class="metric"><span>Participantes</span><strong id="participants">0</strong><small>conexões ativas</small></article>
-          <article class="metric"><span>Salas de voz</span><strong id="rooms">0</strong><small>canais em uso</small></article>
+          <article class="metric"><span>Salas de voz</span><strong id="rooms">0</strong><small id="call-limit">canais em uso · 12 pessoas/call</small></article>
           <article class="metric"><span>Ping médio</span><strong id="ping">—</strong><small>latência do host</small></article>
           <article class="metric"><span>CPU</span><strong id="cpu">0%</strong><small>processo do servidor</small></article>
           <article class="metric"><span>Memória</span><strong id="memory">0 MB</strong><small>memória total</small></article>
@@ -73,7 +76,8 @@
           <article class="panel">
             <div class="panel-heading"><div><p class="eyebrow">CONEXÃO</p><h2>Endereços do host</h2></div></div>
             <div id="urls" class="copy-list"></div>
-            <p class="helper">Compartilhe um endereço acessível pela mesma rede, Radmin VPN ou encaminhamento de porta configurado.</p>
+            <div id="public-access-status" class="public-access-status checking"><i></i><span>Verificando acesso público automático…</span></div>
+            <p class="helper">O ServerHost tenta abrir a porta automaticamente. Em CGNAT, ainda será necessário pedir IP público à operadora ou usar um relay/VPN.</p>
           </article>
           <article class="panel">
             <div class="panel-heading"><div><p class="eyebrow">CONVITE RÁPIDO</p><h2>Código de conexão</h2></div></div>
@@ -81,6 +85,10 @@
             <p class="helper">O ServerHost coordena a sala; voz, vídeo e tela continuam em WebRTC entre os participantes.</p>
           </article>
         </div>
+        <article class="panel storage-panel">
+          <div class="panel-heading"><div><p class="eyebrow">ARMAZENAMENTO EM DISCO</p><h2>Uso por categoria</h2></div><span id="storage-total" class="pill">0 B</span></div>
+          <div id="storage-categories" class="storage-categories"><div class="empty">Calculando arquivos do servidor…</div></div>
+        </article>
       </section>
 
       <section class="view" data-page="people">
@@ -104,6 +112,7 @@
             <input id="room-previous-id" type="hidden">
             <label><span>Nome da sala</span><small>Nome visível no painel e nos Clients compatíveis.</small><input id="room-name" maxlength="48" placeholder="Ex.: Goat Gank"></label>
             <label><span>Código para entrar</span><small>Use letras, números, hífen ou underline.</small><input id="room-id" maxlength="48" placeholder="Ex.: ggk"></label>
+            <label><span>Sala privada</span><small>Deixe vazio para manter a senha atual. Marque remover para tornar pública.</small><span class="room-password-field"><input id="room-password" type="password" maxlength="128" placeholder="Nova senha (opcional)"><label><input id="room-password-clear" type="checkbox"> Remover senha</label></span></label>
             <textarea id="room-voice-channels" class="hidden" aria-hidden="true"></textarea><textarea id="room-text-channels" class="hidden" aria-hidden="true"></textarea>
             <section class="channel-designer"><header><span><b>Canais de voz</b><small>Limite, bitrate, região e acesso de cada call.</small></span><button class="button secondary" type="button" data-add-channel="voice">+ Canal de voz</button></header><div id="voice-channel-editor" class="channel-editor-list"></div></section>
             <section class="channel-designer"><header><span><b>Canais de texto</b><small>Tópico, modo lento e permissão de escrita.</small></span><button class="button secondary" type="button" data-add-channel="text">+ Canal de texto</button></header><div id="text-channel-editor" class="channel-editor-list"></div></section>
@@ -138,8 +147,27 @@
         <div class="section-intro"><div><p class="eyebrow">PREFERÊNCIAS</p><h2>Configurações do ServerHost</h2><p>Estas opções ficam salvas somente neste computador.</p></div></div>
         <article class="panel settings-panel">
           <label><span>Tema do painel</span><small>Altera apenas a aparência do ServerHost.</small><select id="host-theme"><option value="ocean">Oceano</option><option value="violet">Violeta</option><option value="forest">Floresta</option><option value="graphite">Grafite</option></select></label>
+          <label class="host-server-icon-setting"><span>Imagem do servidor</span><small>É exibida para quem entrar e nos atalhos salvos do VoiceUP. Arquivos de imagem são convertidos automaticamente, mesmo sem extensão.</small><div><span id="host-server-icon-preview" class="host-server-icon-preview" aria-hidden="true">V</span><span><input id="host-server-icon" type="file"><button id="host-server-icon-clear" class="button secondary" type="button">Usar ícone padrão</button></span></div></label>
           <label><span>Ao clicar no X</span><small>Defina se o servidor continua ativo na bandeja.</small><select id="host-close-behavior"><option value="tray">Manter ativo na bandeja</option><option value="ask">Perguntar o que fazer</option><option value="quit">Encerrar o programa</option></select></label>
+          <label><span>Acesso público automático</span><small>Tenta abrir a porta deste ServerHost no roteador por UPnP ou NAT-PMP. Não contorna CGNAT da operadora.</small><span class="switch"><input id="public-access-automatic" type="checkbox" checked><i></i></span></label>
+          <label><span>Guardar mensagens por</span><small>0 mantém até o limite por sala sem apagar por idade.</small><input id="chat-retention-days" type="number" min="0" max="3650" value="30"><em>dias</em></label>
+          <label><span>Máximo por sala</span><small>Mensagens antigas excedentes são removidas automaticamente.</small><input id="chat-max-per-room" type="number" min="50" max="5000" value="300"><em>mensagens</em></label>
           <div class="settings-action"><span class="autosave-status">● Salvamento automático</span><button id="save-settings" class="button primary" type="button">Salvar configurações</button></div>
+        </article>
+        <article class="panel maintenance-panel">
+          <div class="panel-heading"><div><p class="eyebrow">MANUTENÇÃO</p><h2>Mensagens e relatórios</h2></div></div>
+          <div class="maintenance-actions"><button id="cleanup-expired-messages" class="button secondary" type="button">Limpar mensagens expiradas</button><button id="clear-all-messages" class="button danger" type="button">Limpar todos os chats</button><button id="clear-bug-reports" class="button secondary" type="button">Limpar relatórios de erros</button></div>
+          <div id="bug-report-list" class="report-list"><div class="empty">Nenhum relatório recebido.</div></div>
+        </article>
+        <article id="host-support-panel" class="panel host-support-panel">
+          <div class="panel-heading"><div><p class="eyebrow">SUPORTE</p><h2>Enviar relatório do ServerHost</h2><p class="helper">O relatório vai para o servidor oficial do VoiceUP. Senhas, endereços, mensagens e arquivos não são enviados.</p></div></div>
+          <div class="host-report-form">
+            <label><span>Categoria</span><select id="host-report-category"><option value="erro">Erro ou travamento</option><option value="conexao">Conexão</option><option value="plugin">Plugin</option><option value="desempenho">Desempenho</option><option value="outro">Outro</option></select></label>
+            <label><span>O que aconteceu?</span><textarea id="host-report-description" maxlength="2000" rows="4" placeholder="Descreva o problema e o resultado esperado."></textarea></label>
+            <label><span>Como reproduzir?</span><textarea id="host-report-steps" maxlength="2000" rows="3" placeholder="Informe os passos, se souber."></textarea></label>
+            <label class="host-report-diagnostics"><input id="host-report-diagnostics" type="checkbox" checked><span>Incluir versão, uso de CPU/memória e estado do acesso público</span></label>
+            <div class="host-report-action"><button id="send-host-report" class="button primary" type="button">Enviar relatório</button><span id="host-report-status" aria-live="polite"></span></div>
+          </div>
         </article>
         <article class="panel cluster-panel">
           <div class="panel-heading"><div><p class="eyebrow">CLUSTER E FAILOVER</p><h2>Dois ServerHosts coordenados</h2></div><span id="cluster-status" class="pill">Desativado</span></div>

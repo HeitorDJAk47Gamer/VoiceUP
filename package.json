@@ -1,6 +1,6 @@
 {
   "name": "voiceup",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "author": "Goat Gank",
   "description": "Comunicação P2P simples por voz e texto",
@@ -8,11 +8,16 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-process-audio.ps1",
+    "predist": "npm run build:native",
     "dist": "electron-builder --win nsis",
+    "predist:store": "npm run build:native",
     "dist:store": "electron-builder --win appx --publish never",
+    "predist:server": "npm run build:native",
     "dist:server": "electron-builder --win nsis --config.appId=com.goatgank.voiceup.server --config.extraMetadata.main=server-host-main.js --config.productName=VoiceUPServer --config.directories.output=release-server"
   },
   "dependencies": {
+    "@achingbrain/nat-port-mapper": "^4.0.5",
     "express": "^4.21.2",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1"
@@ -36,12 +41,20 @@
       "host-preload.js",
       "music-bot-preload.js",
       "signaling-server.js",
+      "persistent-storage.js",
+      "network-access.js",
       "assets/**/*",
       "host/**/*",
       "public/**/*",
       "plugins/**/*",
       "music/README.md",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "native/voiceup-process-audio.exe",
+        "to": "native/voiceup-process-audio.exe"
+      }
     ],
     "win": {
       "target": "nsis",
