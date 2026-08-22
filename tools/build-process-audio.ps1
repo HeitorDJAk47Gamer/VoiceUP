@@ -16,14 +16,12 @@ if (-not $visualStudio) {
 }
 
 $developerCommand = Join-Path $visualStudio 'Common7\Tools\VsDevCmd.bat'
-$arguments = @(
-  '/d', '/s', '/c',
-  ('""{0}" -no_logo -arch=x64 -host_arch=x64 >nul && cl.exe /nologo /std:c++17 /EHsc /O2 /MT /DUNICODE /D_UNICODE "{1}" /Fo:"{2}" /Fe:"{3}" /link Ole32.lib Mmdevapi.lib User32.lib"' -f $developerCommand, $source, $object, $output)
-)
+$command = ('call "{0}" -no_logo -arch=x64 -host_arch=x64 >nul && cl.exe /nologo /std:c++17 /EHsc /O2 /MT /DUNICODE /D_UNICODE "{1}" /Fo:"{2}" /Fe:"{3}" /link Ole32.lib Mmdevapi.lib User32.lib' -f $developerCommand, $source, $object, $output)
 
-$process = Start-Process -FilePath $env:ComSpec -ArgumentList $arguments -NoNewWindow -PassThru -Wait
-if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $output)) {
-  throw "Falha ao compilar o capturador nativo (código $($process.ExitCode))."
+& $env:ComSpec /d /s /c $command
+$compilerExitCode = $LASTEXITCODE
+if ($compilerExitCode -ne 0 -or -not (Test-Path -LiteralPath $output)) {
+  throw "Falha ao compilar o capturador nativo (código $compilerExitCode)."
 }
 
 Write-Output "Capturador nativo criado: $output"
