@@ -68,7 +68,10 @@ function latestReleaseVersion() {
 
 function assetFor(assetPrefix, version) {
   const baseName = String(assetPrefix || '').trim();
-  const assetName = `${baseName} ${version}.exe`;
+  // GitHub Releases normalizes spaces in uploaded asset names to dots.
+  // Use the public name that is actually stored by GitHub so both the
+  // Client and ServerHost updater can download the current installer.
+  const assetName = `${baseName} ${version}.exe`.replace(/\s+/g, '.');
   return { assetName, url: `https://github.com/${OWNER}/${REPOSITORY}/releases/download/v${version}/${encodeURIComponent(assetName)}` };
 }
 
