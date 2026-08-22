@@ -6,6 +6,7 @@ const https = require('https');
 const OWNER = 'HeitorDJAk47Gamer';
 const REPOSITORY = 'VoiceUP';
 const RELEASE_LATEST = `https://github.com/${OWNER}/${REPOSITORY}/releases/latest`;
+const RELEASE_API_LATEST = `https://api.github.com/repos/${OWNER}/${REPOSITORY}/releases/latest`;
 
 function parseVersion(value) {
   const clean = String(value || '').trim().replace(/^v/i, '').split('+')[0];
@@ -66,12 +67,45 @@ function latestReleaseVersion() {
   });
 }
 
-function assetFor(assetPrefix, version) {
+function latestReleaseMetadata() {
+  return new Promise((resolve, reject) => {
+    const request = https.get(RELEASE_API_LATEST, { headers: { 'User-Agent': 'VoiceUP-Desktop-Updater', Accept: 'application/vnd.github+json' } }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        if (body.length < 1024 * 1024) body += chunk;
+      });
+      response.on('end', () => {
+        if (response.statusCode !== 200) return reject(new Error(`GitHub respondeu ${response.statusCode}.`));
+        try {
+          const release = JSON.parse(body);
+          const version = String(release.tag_name || '').replace(/^v/i, '');
+          if (!/^\d+(?:\.\d+)*(?:-[0-9a-z.-]+)?$/i.test(version)) throw new Error('Versao invalida na Release.');
+          return resolve({ version, assets: Array.isArray(release.assets) ? release.assets : [] });
+        } catch (error) {
+          return reject(error);
+        }
+      });
+    }).on('error', reject);
+    request.setTimeout(10000, () => request.destroy(new Error('A consulta de atualizacao demorou demais. Tente novamente depois.')));
+  });
+}
+
+function comparableAssetName(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function assetFor(assetPrefix, version, releaseAssets = []) {
   const baseName = String(assetPrefix || '').trim();
   // GitHub Releases normalizes spaces in uploaded asset names to dots.
   // Use the public name that is actually stored by GitHub so both the
   // Client and ServerHost updater can download the current installer.
   const assetName = `${baseName} ${version}.exe`.replace(/\s+/g, '.');
+  const expected = comparableAssetName(assetName);
+  const published = releaseAssets.find((asset) => comparableAssetName(asset && asset.name) === expected);
+  if (published && published.browser_download_url) {
+    return { assetName: String(published.name || assetName), url: String(published.browser_download_url) };
+  }
   return { assetName, url: `https://github.com/${OWNER}/${REPOSITORY}/releases/download/v${version}/${encodeURIComponent(assetName)}` };
 }
 
@@ -99,8 +133,11 @@ function registerUpdateHandlers(ipcMain, assetPrefix) {
   function check() {
     if (checkInFlight) return checkInFlight;
     checkInFlight = (async () => {
-      const version = await latestReleaseVersion();
-      const asset = assetFor(assetPrefix, version);
+      let metadata;
+      try { metadata = await latestReleaseMetadata(); }
+      catch (_error) { metadata = { version: await latestReleaseVersion(), assets: [] }; }
+      const { version } = metadata;
+      const asset = assetFor(assetPrefix, version, metadata.assets);
       return {
         installedVersion: app.getVersion(),
         version,
@@ -129,4 +166,4 @@ function registerUpdateHandlers(ipcMain, assetPrefix) {
   });
 }
 
-module.exports = { registerUpdateHandlers, isNewer };
+module.exports = { registerUpdateHandlers, isNewer, assetFor };
