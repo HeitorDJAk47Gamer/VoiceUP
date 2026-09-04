@@ -54,7 +54,7 @@ jobs:
         run: |
           node tools/validate-release-version.js
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node --test tools/test-release-integrity.js tools/test-release-history.js
+          node --test tools/test-release-integrity.js tools/test-release-history.js tools/test-release-publisher.js
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:update-compat
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -100,7 +100,7 @@ jobs:
       - name: Validar Linux
         run: |
           node tools/validate-release-version.js
-          node --test tools/test-release-integrity.js tools/test-release-history.js
+          node --test tools/test-release-integrity.js tools/test-release-history.js tools/test-release-publisher.js
           npm run test:update-compat
           npm run test:linux
           npm run test:hardware-acceleration
