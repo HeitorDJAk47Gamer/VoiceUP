@@ -69,3 +69,14 @@ pelo Android. SelfWeb não executa um instalador nem atualiza seu HTML sozinho.
 Plugins externos são código do administrador do ServerHost. Eles ficam
 bloqueados até aprovação explícita do hash do arquivo e devem ser tratados como
 código com acesso aos dados e recursos do processo do servidor.
+
+## Dependências da publicação
+
+`node tools/audit-dependencies.js` confere todas as versões dos lockfiles de
+Desktop, Mobile e Cloud na API pública OSV, incluindo dependências de build.
+Avisos moderados, altos, críticos ou sem gravidade definida bloqueiam o processo;
+falhas de consulta também não são tratadas como aprovação. A consulta usa apenas
+nomes e versões de pacotes, sem enviar código, chaves ou dados de usuários.
+
+O workflow usa essa verificação no lugar do endpoint npm audit, indisponível na
+preparação da 1.2.0. Detalhes da API: https://google.github.io/osv.dev/post-v1-querybatch/

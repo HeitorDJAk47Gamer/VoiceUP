@@ -46,10 +46,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm audit --audit-level=moderate
-      - run: npm --prefix deploy/shardcloud ci
-      - run: npm --prefix deploy/shardcloud audit --audit-level=moderate
+      - run: npm ci --no-audit
+      - run: node tools/audit-dependencies.js
+      - run: npm --prefix deploy/shardcloud ci --no-audit
       - name: Validar protocolo e segurança
         shell: pwsh
         run: |
@@ -95,8 +94,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm audit --audit-level=moderate
+      - run: npm ci --no-audit
+      - run: node tools/audit-dependencies.js
       - name: Validar Linux
         run: |
           node tools/validate-release-version.js
@@ -131,8 +130,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: mobile/package-lock.json
-      - run: npm --prefix mobile ci
-      - run: npm --prefix mobile audit --audit-level=moderate
+      - run: npm --prefix mobile ci --no-audit
+      - run: node tools/audit-dependencies.js mobile/package-lock.json
       - run: npm --prefix mobile test
       - run: npm --prefix mobile run sync
       - name: Preparar chave existente e Java 21
@@ -170,7 +169,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --no-audit
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: release-assets
