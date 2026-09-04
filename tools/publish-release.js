@@ -70,7 +70,7 @@ async function main() {
  verifyUploadedArtifacts(release,payload);
  for(const prefix of ['VoiceUP Setup ','VoiceUPServer Setup ']){const asset=assetFor(prefix,version,release.assets,{platform:'win32',arch:'x64'});if(!asset.published||!asset.digest)throw new Error('Compatibilidade do atualizador não validada.');}
  if(flags.includes('--publish')) {
-   const published=await json(`${repo}/releases/${release.id}`,'PATCH',{draft:false,prerelease:false,make_latest:'true'});
+   const published=await json(`${repo}/releases/${release.id}`,'PATCH',{tag_name:`v${version}`,target_commitish:release.target_commitish,name:`VoiceUP ${version}`,body:release.body,draft:false,prerelease:false,make_latest:'true'});
    if(published.draft)throw new Error('A publicação não foi confirmada pelo GitHub.');
    verifyUploadedArtifacts(published,payload);
    console.log(`Publicada: https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/tag/v${version}`);
