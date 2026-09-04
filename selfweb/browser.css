@@ -1,0 +1,19 @@
+/* Extends the existing VoiceUP theme without altering the Desktop styles. */
+body.selfweb { font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
+.selfweb [hidden] { display:none!important; }
+.selfweb button:disabled { opacity:.5;cursor:not-allowed;transform:none; }
+.selfweb-heading { display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px; }
+.selfweb-edition { color:var(--focus,var(--cyan));font-weight:800;font-size:22px;letter-spacing:-.5px; }
+.selfweb-edition small { font-size:12px;font-weight:700;letter-spacing:1px;border:1px solid var(--line);border-radius:6px;padding:4px 6px;vertical-align:middle;margin-left:8px; }
+.selfweb #selfweb-settings { font-size:14px;padding:9px 13px;margin:0;background:var(--surface);border:1px solid var(--line);color:var(--ink); }
+.selfweb-description { font-size:16px!important;line-height:1.5!important;color:var(--muted);margin:0 0 20px!important; }
+.selfweb .selfweb-notice { display:block;font-size:14px!important;line-height:1.55!important;color:var(--muted)!important;background:var(--surface);border:1px solid var(--line);padding:12px;border-radius:10px;margin:10px 0;max-width:none; }
+.selfweb-help { margin-top:20px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--surface); }
+.selfweb-help summary { cursor:pointer;font-size:14px;font-weight:700;color:var(--focus,var(--cyan)); }
+.selfweb-help p { font-size:14px;line-height:1.6;color:var(--muted);margin:14px 0; }
+.selfweb-help p:last-child { margin-bottom:0; }
+.selfweb .join-card input,.selfweb .join-card textarea,.selfweb .join-card label,.selfweb .join-card button { font-size:16px; }
+.selfweb .join-card small { font-size:13px!important;line-height:1.5; }
+.selfweb .room-channel,.selfweb .channel-member-name,.selfweb #message-input,.selfweb .message { font-size:14px!important; }
+.selfweb #direct-room-create,.selfweb #hardware-acceleration-setting,.selfweb #check-update { display:none!important; }
+@media (prefers-reduced-motion:reduce) { .selfweb *, .selfweb *:before, .selfweb *:after { scroll-behavior:auto!important;transition:none!important;animation:none!important; } }

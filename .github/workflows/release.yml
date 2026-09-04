@@ -1,68 +1,193 @@
-name: Publicar instaladores VoiceUP
-
+name: Publicar VoiceUP
 on:
+  workflow_dispatch:
+    inputs:
+      linux_only:
+        description: Gerar somente os pacotes Linux
+        type: boolean
+        default: false
+      publish:
+        description: Publicar após validar todos os pacotes
+        type: boolean
+        default: false
   push:
-    tags:
-      - 'v*'
-
+    tags: ['v*']
 permissions:
-  contents: write
-
+  contents: read
+concurrency:
+  group: voiceup-release-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  build-and-release:
-    runs-on: windows-latest
+  signing:
+    runs-on: ubuntu-24.04
+    outputs:
+      ready: ${{ steps.keys.outputs.ready }}
     steps:
-      - name: Baixar codigo
-        uses: actions/checkout@v4
-
-      - name: Preparar Node.js
-        uses: actions/setup-node@v4
+      - id: keys
+        env:
+          RELEASE_KEY: ${{ secrets.VOICEUP_RELEASE_PRIVATE_KEY }}
+          ANDROID_KEY: ${{ secrets.VOICEUP_ANDROID_KEYSTORE }}
+        run: |
+          if [ -n "$RELEASE_KEY" ] && [ -n "$ANDROID_KEY" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo 'Chaves mantidas fora do GitHub: assinatura e publicação realizadas localmente.'
+          fi
+  windows:
+    if: inputs.linux_only != true
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
-
-      - name: Instalar dependencias
-        run: npm ci
-
-      - name: Validar compatibilidade do atualizador
-        run: npm run test:update-compat
-
-      - name: Gerar instalador do cliente
-        run: npm run dist -- --publish never
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-          CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-
-      - name: Gerar instalador do Server Host
-        run: npm run dist:server -- --publish never
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-          CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-
-      - name: Gerar pacote do servidor Cloud
-        shell: powershell
+      - run: npm ci
+      - run: npm audit --audit-level=moderate
+      - run: npm --prefix deploy/shardcloud ci
+      - run: npm --prefix deploy/shardcloud audit --audit-level=moderate
+      - name: Validar protocolo e segurança
+        shell: pwsh
         run: |
-          $version = $env:GITHUB_REF_NAME -replace '^v', ''
-          Compress-Archive -Path deploy/shardcloud/* -DestinationPath "deploy/VoiceUP-Server-Cloud-$version.zip" -CompressionLevel Optimal
-
-      - name: Validar pacotes da Release
-        shell: powershell
-        run: |
-          $version = $env:GITHUB_REF_NAME -replace '^v', ''
-          $client = "release/VoiceUP Setup $version.exe"
-          $server = "release-server/VoiceUPServer Setup $version.exe"
-          if (-not (Test-Path -LiteralPath $client)) { throw "Instalador do Cliente ausente: $client" }
-          if (-not (Test-Path -LiteralPath $server)) { throw "Instalador do ServerHost ausente: $server" }
-          Write-Output "Cliente publicado como: $(Split-Path -Leaf $client -replace '\s+', '.')"
-          Write-Output "ServerHost publicado como: $(Split-Path -Leaf $server -replace '\s+', '.')"
-
-      - name: Criar Release no GitHub
-        uses: softprops/action-gh-release@v2
+          node tools/validate-release-version.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tools/test-release-integrity.js tools/test-release-history.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:update-compat
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:security
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:session-dedup
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:cloud-session-dedup
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:hardware-acceleration
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:fullscreen-game-capture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/test-plugin-runtime.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/cluster-smoke-test.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: npm run dist -- --publish never
+      - run: npm run dist:server -- --publish never
+      - run: npm run dist:store -- --config.directories.output=.store-build
+      - run: powershell -NoProfile -File tools/test-store-package.ps1 -ClientBuildDirectory release
+      - run: node selfweb/build.js
+      - run: node --test selfweb/tests/*.test.js
+      - run: node tools/prepare-release-assets.js windows release-assets
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          generate_release_notes: true
-          files: |
-            release/*.exe
-            release-server/*.exe
-            deploy/VoiceUP-Server-Cloud-*.zip
+          name: windows-selfweb
+          path: release-assets/
+          if-no-files-found: error
+          compression-level: 0
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=moderate
+      - name: Validar Linux
+        run: |
+          node tools/validate-release-version.js
+          node --test tools/test-release-integrity.js tools/test-release-history.js
+          npm run test:update-compat
+          npm run test:linux
+          npm run test:hardware-acceleration
+          npm run test:fullscreen-game-capture
+      - run: npm run dist:linux
+      - run: npm run dist:linux:server
+      - run: npm run test:linux-package -- --release
+      - run: node tools/prepare-release-assets.js linux release-assets
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-x64
+          path: release-assets/
+          if-no-files-found: error
+          compression-level: 0
+  android:
+    needs: signing
+    if: inputs.linux_only != true && needs.signing.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      VOICEUP_ANDROID_STORE_PASSWORD: ${{ secrets.VOICEUP_ANDROID_STORE_PASSWORD }}
+      VOICEUP_ANDROID_KEY_PASSWORD: ${{ secrets.VOICEUP_ANDROID_KEY_PASSWORD }}
+      VOICEUP_ANDROID_KEY_ALIAS: ${{ secrets.VOICEUP_ANDROID_KEY_ALIAS }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm --prefix mobile ci
+      - run: npm --prefix mobile audit --audit-level=moderate
+      - run: npm --prefix mobile test
+      - run: npm --prefix mobile run sync
+      - name: Preparar chave existente e Java 21
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.VOICEUP_ANDROID_KEYSTORE }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/voiceup-android.keystore"
+          chmod 600 "$RUNNER_TEMP/voiceup-android.keystore"
+          echo "VOICEUP_ANDROID_KEYSTORE=$RUNNER_TEMP/voiceup-android.keystore" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+      - name: Gerar APK release não depurável
+        working-directory: mobile/android
+        run: bash gradlew assembleRelease --no-daemon
+      - run: node tools/prepare-release-assets.js android release-assets
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android
+          path: release-assets/
+          if-no-files-found: error
+          compression-level: 0
+  publish:
+    if: (github.event_name == 'push' || inputs.publish == true) && needs.signing.outputs.ready == 'true'
+    needs: [signing, windows, linux, android]
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    env:
+      VOICEUP_RELEASE_PRIVATE_KEY: ${{ secrets.VOICEUP_RELEASE_PRIVATE_KEY }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Assinar catálogo, montar Cloud e publicar de forma completa
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          node tools/release-artifacts.js sign release-assets $version "release-assets/VoiceUP-Downloads-$version.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/stage-cloud-downloads.js release-assets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./tools/package-cloud.ps1 -Version $version
+          Copy-Item -LiteralPath "deploy/VoiceUP-Server-Cloud-$version.zip" -Destination release-assets
+          node tools/release-artifacts.js sign release-assets $version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/prepare-release-assets.js checksums release-assets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/publish-release.js $version release-assets --publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

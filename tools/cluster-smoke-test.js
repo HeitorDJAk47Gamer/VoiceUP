@@ -31,7 +31,7 @@ const closeServer = (running) => new Promise((resolve) => {
     await event(alice, 'connect');
     const aliceInitialRoute = event(alice, 'cluster-route');
     const aliceJoin = event(alice, 'room-joined');
-    alice.emit('join-room', { roomId: 'cluster-room', voiceChannel: '__lobby__', name: 'Alice', clientId: 'cluster-alice', capabilities: ['cluster-routing', 'webrtc-telemetry'] });
+    alice.emit('join-room', { roomId: 'cluster-room', voiceChannel: '__lobby__', name: 'Alice', clientId: 'cluster-alice', platform: 'windows', status: 'dnd', capabilities: ['cluster-routing', 'webrtc-telemetry'] });
     await aliceJoin;
     if ((await aliceInitialRoute).alternates?.length) throw new Error('Primário anunciou um alternativo antes do secundário existir');
     const aliceUpdatedRoute = event(alice, 'cluster-route');
@@ -45,17 +45,38 @@ const closeServer = (running) => new Promise((resolve) => {
     bob = io(`http://127.0.0.1:${ports.secondary}`, { transports: ['websocket'], reconnection: false });
     await event(bob, 'connect');
     const bobJoin = event(bob, 'room-joined');
-    bob.emit('join-room', { roomId: 'cluster-room', voiceChannel: '__lobby__', name: 'Bob', clientId: 'cluster-bob', capabilities: ['cluster-routing', 'webrtc-telemetry'] });
+    bob.emit('join-room', { roomId: 'cluster-room', voiceChannel: '__lobby__', name: 'Bob', clientId: 'cluster-bob', platform: 'android', status: 'idle', capabilities: ['cluster-routing', 'webrtc-telemetry'] });
     await bobJoin; await wait(250);
     const aliceCall = event(alice, 'room-joined'); alice.emit('switch-voice-channel', { voiceChannel: 'Geral' }); await aliceCall;
     const bobCall = event(bob, 'room-joined'); bob.emit('switch-voice-channel', { voiceChannel: 'Geral' });
     const bobPeers = (await bobCall).peers || [];
     const aliceRemote = bobPeers.find((peer) => peer.name === 'Alice');
     if (!aliceRemote?.id?.startsWith('fed:primary-smoke:')) throw new Error('Presença P2P do host primário não chegou ao secundário');
+    if (aliceRemote.platform !== 'windows' || aliceRemote.status !== 'dnd') throw new Error('Plataforma/status do primário não chegou ao secundário');
     await wait(180);
     const primaryStats = primary.getStats();
     const bobRemote = primaryStats.members.find((member) => member.name === 'Bob' && member.remote);
     if (!bobRemote?.id?.startsWith('fed:secondary-smoke:')) throw new Error('Presença do host secundário não chegou ao primário');
+    if (bobRemote.platform !== 'android' || bobRemote.status !== 'idle') throw new Error('Plataforma/status do secundário não chegou ao primário');
+    const platformUpdate = event(bob, 'room-presence');
+    alice.emit('presence-update', {status:'idle'});
+    const remotePlatform = (await platformUpdate).members?.find((member) => member.clientId === 'cluster-alice');
+    if (remotePlatform?.platform !== 'windows' || remotePlatform?.status !== 'idle') throw new Error('Mudança de status perdeu a plataforma no cluster');
+    const primaryPresence = event(alice, 'room-presence'); alice.emit('request-room-presence');
+    const secondaryPresence = event(bob, 'room-presence'); bob.emit('request-room-presence');
+    const primaryCallStart = (await primaryPresence).voiceActivity?.find((entry) => entry.voiceChannel === 'Geral')?.startedAt;
+    const secondaryCallStart = (await secondaryPresence).voiceActivity?.find((entry) => entry.voiceChannel === 'Geral')?.startedAt;
+    if (!primaryCallStart || primaryCallStart !== secondaryCallStart) throw new Error('O início da call não foi compartilhado entre hosts');
+    const remoteMutePresence = event(bob, 'room-presence');
+    alice.emit('audio-state-update', { micMuted: true, outputMuted: true });
+    const remoteMuteState = (await remoteMutePresence).members?.find((member) => member.clientId === 'cluster-alice')?.voiceupAudioState;
+    if (!remoteMuteState?.micMuted || !remoteMuteState?.outputMuted) throw new Error('Os indicadores de mute não chegaram ao outro host');
+    for (const state of [{ screen: true, camera: true }, { screen: false, camera: true }, { screen: false, camera: false }]) {
+      const remoteMediaPresence = event(bob, 'room-presence');
+      alice.emit('media-state-update', state);
+      const remoteMediaState = (await remoteMediaPresence).members?.find((member) => member.clientId === 'cluster-alice')?.voiceupMediaState;
+      if (!remoteMediaState || remoteMediaState.screen !== state.screen || remoteMediaState.camera !== state.camera) throw new Error('Os indicadores independentes de live e câmera não chegaram ao outro host');
+    }
     const receivedSignal = event(bob, 'signal');
     alice.emit('signal', { target: bobRemote.id, data: { clusterSmoke: true } });
     if (!(await receivedSignal).data?.clusterSmoke) throw new Error('Sinal WebRTC não atravessou o cluster');
@@ -78,7 +99,7 @@ const closeServer = (running) => new Promise((resolve) => {
     alice = io(redirect.url, { transports: ['websocket'], reconnection: false });
     await event(alice, 'connect');
     const migratedJoin = event(alice, 'room-joined');
-    alice.emit('join-room', { roomId: 'cluster-room', voiceChannel: 'Geral', name: 'Alice', clientId: 'cluster-alice', capabilities: ['cluster-routing', 'webrtc-telemetry'] });
+    alice.emit('join-room', { roomId: 'cluster-room', voiceChannel: 'Geral', name: 'Alice', clientId: 'cluster-alice', platform: 'windows', status: 'dnd', capabilities: ['cluster-routing', 'webrtc-telemetry'] });
     await migratedJoin;
     await closeServer(primary); primary = null; await wait(1300);
     if (secondary.getStats().cluster.state !== 'failover ativo') throw new Error('Host secundário não entrou em failover');

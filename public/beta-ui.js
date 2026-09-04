@@ -177,12 +177,16 @@ function bindHostedChannel(p, channel) {
   p.channel = channel;
   channel.onmessage = ({ data }) => receiveHostedData(p, data);
   channel.onopen = () => {
-    channel.send(JSON.stringify({ type: 'intro', name: myName, color: myColor, avatar: myAvatar }));
+    channel.send(JSON.stringify({ type: 'intro', name: myName, color: myColor, avatar: myAvatar, clientId, status: effectivePresenceStatus, platform: globalThis.voiceupPlatform.local() }));
+    syncLiveViewerStateForParticipant(p);
     scheduleHostedVideoSync(p, 'camera');
     scheduleHostedVideoSync(p, 'screen');
     markHostedConnected(p);
   };
-  channel.onclose = () => { if (!p.left) { p.connected = false; renderHostedParticipants(); } };
+  channel.onclose = () => {
+    setLocalLiveViewerState(p.id, false, { silent: true });
+    if (!p.left) { p.connected = false; renderHostedParticipants(); }
+  };
 }
 
 function attachHostedTrack(p, track, streams) {
@@ -410,6 +414,7 @@ const betaStopVideo = stopVideo;
 stopVideo = async function stopVideoBeta() {
   betaVideoRevision.camera += 1; betaVideoRevision.screen += 1;
   const result = await betaStopVideo();
+  clearLocalLiveViewers();
   if (currentMode === 'hosted') [...hostedPeers.values()].filter((participant) => !participant.left).forEach((participant) => { scheduleHostedVideoSync(participant, 'camera'); scheduleHostedVideoSync(participant, 'screen'); });
   else {
     await Promise.allSettled([
@@ -427,6 +432,7 @@ function refreshLocalVideoPreview() {
   preview.srcObject = stream;
   preview.classList.toggle('visible', Boolean(stream));
   if (stream) preview.play().catch(() => {});
+  renderLocalLiveViewerCount();
 }
 
 async function stopCamera() {
@@ -450,6 +456,7 @@ async function stopScreenShare() {
   if (!track) return;
   track.onended = null;
   screenStream.getTracks().forEach((item) => item.stop()); screenStream = null;
+  clearLocalLiveViewers();
   await stopSharedSystemAudio(); betaVideoRevision.screen += 1;
   if (currentMode === 'hosted') {
     const peers = [...hostedPeers.values()].filter((participant) => !participant.left);
@@ -510,7 +517,7 @@ makePeer = function makePeerBeta(role = 'offerer') {
     event.track.onunmute = reveal;
     event.track.onended = () => {
       peer.videoExpectedKinds[kind] = false;
-      if (kind === 'screen') { peer.mediaViewKinds.screen = false; applyLiveAudioLevels(); }
+      if (kind === 'screen') setParticipantScreenView(peer, false, { announce: false });
       hideVideoTile(`manual-${kind}`); renderIncomingMediaOffers();
     };
     reveal();
@@ -526,8 +533,10 @@ const betaBindChannel = bindChannel;
 bindChannel = function bindChannelBeta(channel) {
   betaBindChannel(channel);
   const originalOpen = channel.onopen;
+  const originalClose = channel.onclose;
   channel.onopen = async (...args) => {
     originalOpen?.apply(channel, args);
+    syncLiveViewerStateForParticipant(peer);
     for (const kind of ['camera', 'screen']) {
       const track = betaActiveVideoTrack(kind); const sender = peer?.[`${kind}Sender`];
       if (track && sender) {
@@ -537,6 +546,10 @@ bindChannel = function bindChannelBeta(channel) {
         if (channel.readyState === 'open') channel.send(JSON.stringify({ type: 'video-on', description: kind, revision: betaVideoRevision[kind] }));
       }
     }
+  };
+  channel.onclose = (...args) => {
+    setLocalLiveViewerState('manual-peer', false, { silent: true });
+    return originalClose?.apply(channel, args);
   };
 };
 
@@ -725,11 +738,11 @@ const betaMessageInput = document.querySelector('#message-input');
 const betaSendButton = betaMessageForm?.querySelector('button[type="submit"], button:not([type])');
 const betaEmojiButton = document.createElement('button');
 betaEmojiButton.type = 'button'; betaEmojiButton.id = 'emoji-button'; betaEmojiButton.className = 'emoji-button';
-betaEmojiButton.title = 'Escolher emoji · no Windows também use Win + .'; betaEmojiButton.setAttribute('aria-label', 'Escolher emoji');
+betaEmojiButton.title = 'Escolher emoji · use o seletor de emojis do sistema'; betaEmojiButton.setAttribute('aria-label', 'Escolher emoji');
 betaEmojiButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9h.01M15 9h.01"/></svg>';
 const betaEmojiPicker = document.createElement('section');
 betaEmojiPicker.id = 'emoji-picker'; betaEmojiPicker.className = 'emoji-picker hidden'; betaEmojiPicker.setAttribute('aria-label', 'Emojis e GIFs');
-betaEmojiPicker.innerHTML = '<header><strong>Emojis e GIFs</strong><small>Win + . também funciona</small></header><nav class="emoji-tabs"><button type="button" class="active" data-picker-tab="emoji">Emojis</button><button type="button" data-picker-tab="gif">GIFs</button></nav><label class="emoji-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input id="emoji-search-input" type="search" placeholder="Pesquisar emojis" autocomplete="off"/></label><div id="emoji-picker-results"></div><footer><span>Formatação:</span> <code>**negrito**</code> <code>*itálico*</code> <code>`código`</code></footer>';
+betaEmojiPicker.innerHTML = '<header><strong>Emojis e GIFs</strong><small>Use o seletor de emojis do sistema</small></header><nav class="emoji-tabs"><button type="button" class="active" data-picker-tab="emoji">Emojis</button><button type="button" data-picker-tab="gif">GIFs</button></nav><label class="emoji-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input id="emoji-search-input" type="search" placeholder="Pesquisar emojis" autocomplete="off"/></label><div id="emoji-picker-results"></div><footer><span>Formatação:</span> <code>**negrito**</code> <code>*itálico*</code> <code>`código`</code></footer>';
 if (betaMessageForm && betaMessageInput && betaSendButton) { betaMessageForm.insertBefore(betaEmojiButton, betaSendButton); document.body.append(betaEmojiPicker); }
 let betaPickerTab = 'emoji';
 const normalizePickerSearch = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -782,6 +795,7 @@ receiveData = async function receiveDataBetaTyping(raw) {
   try {
     const msg = JSON.parse(raw);
     if (msg.type === 'typing-state') { applyRemoteTyping('manual-peer', msg, peer || {}); return; }
+    if (msg.type === 'live-view-state') { setLocalLiveViewerState('manual-peer', Boolean(msg.viewing)); return; }
     if (msg.type === 'media-view-request' && ['camera', 'screen'].includes(msg.kind)) {
       const track = betaActiveVideoTrack(msg.kind);
       const sender = peer?.[`${msg.kind}Sender`] || (msg.kind === 'camera' ? peer?.videoSender : null);
@@ -804,7 +818,7 @@ receiveData = async function receiveDataBetaTyping(raw) {
     if (msg.type === 'video-off' && ['camera', 'screen'].includes(msg.description)) {
       peer.videoExpectedKinds ||= {}; peer.mediaViewKinds ||= { camera: true, screen: false };
       peer.videoExpectedKinds[msg.description] = false;
-      if (msg.description === 'screen') { peer.mediaViewKinds.screen = false; applyLiveAudioLevels(); }
+      if (msg.description === 'screen') setParticipantScreenView(peer, false, { announce: false });
       hideVideoTile(`manual-${msg.description}`); renderIncomingMediaOffers(); return;
     }
   } catch { /* normal receiver reports malformed connection data */ }
@@ -815,6 +829,93 @@ const mediaViewState = (participant) => {
   participant.mediaViewKinds ||= { camera: true, screen: false };
   return participant.mediaViewKinds;
 };
+
+// A viewer announcement travels through the already-private WebRTC data
+// channel. This keeps the count independent from the host/cloud and makes
+// manual P2P and hosted rooms behave identically.
+const betaLocalLiveViewers = new Set();
+const betaLocalLiveViewerBadge = document.createElement('span');
+const betaLocalLiveViewerText = document.createElement('span');
+betaLocalLiveViewerBadge.id = 'local-live-viewers';
+betaLocalLiveViewerBadge.className = 'local-live-viewers';
+betaLocalLiveViewerBadge.hidden = true;
+betaLocalLiveViewerBadge.setAttribute('aria-live', 'polite');
+betaLocalLiveViewerBadge.setAttribute('aria-label', 'Pessoas assistindo à sua live');
+betaLocalLiveViewerBadge.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.3-5.5 9.5-5.5S21.5 12 21.5 12 18.2 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.6"/></svg>');
+betaLocalLiveViewerBadge.append(betaLocalLiveViewerText);
+document.body.append(betaLocalLiveViewerBadge);
+// The preview can move, resize, or be resized by a responsive layout without
+// producing a media event, so keep the counter attached to it in those cases.
+const betaLocalPreview = document.querySelector('#local-video');
+if (typeof ResizeObserver === 'function' && betaLocalPreview) {
+  new ResizeObserver(() => renderLocalLiveViewerCount()).observe(betaLocalPreview);
+}
+window.addEventListener('resize', renderLocalLiveViewerCount);
+
+function localLiveViewerKey(participantOrId) {
+  if (typeof participantOrId === 'string') return participantOrId;
+  return String(participantOrId?.clientId || participantOrId?.id || '');
+}
+
+function localScreenShareIsLive() {
+  return Boolean(screenStream?.getVideoTracks?.().some((track) => track.readyState === 'live'));
+}
+
+function renderLocalLiveViewerCount() {
+  const preview = document.querySelector('#local-video');
+  if (!preview) return;
+  const shouldShow = localScreenShareIsLive() && preview.classList.contains('visible');
+  betaLocalLiveViewerBadge.hidden = !shouldShow;
+  if (!shouldShow) return;
+  const count = betaLocalLiveViewers.size;
+  betaLocalLiveViewerText.textContent = `${count} assistindo`;
+  const box = preview.getBoundingClientRect();
+  betaLocalLiveViewerBadge.style.left = `${Math.max(8, Math.round(box.left + 8))}px`;
+  betaLocalLiveViewerBadge.style.top = `${Math.max(8, Math.round(box.bottom - 33))}px`;
+}
+
+function setLocalLiveViewerState(participantOrId, viewing, { silent = false } = {}) {
+  const key = localLiveViewerKey(participantOrId);
+  if (!key) return false;
+  const next = Boolean(viewing);
+  const changed = next ? !betaLocalLiveViewers.has(key) : betaLocalLiveViewers.has(key);
+  if (!changed) return false;
+  if (next) betaLocalLiveViewers.add(key); else betaLocalLiveViewers.delete(key);
+  renderLocalLiveViewerCount();
+  if (!silent && localScreenShareIsLive()) playNotification(next ? 'live-viewer-in' : 'live-viewer-out');
+  return true;
+}
+
+function clearLocalLiveViewers() {
+  if (!betaLocalLiveViewers.size) { renderLocalLiveViewerCount(); return; }
+  betaLocalLiveViewers.clear();
+  renderLocalLiveViewerCount();
+}
+
+function sendLiveViewerState(participant, viewing) {
+  const channel = participant?.channel;
+  if (channel?.readyState !== 'open') return false;
+  try {
+    channel.send(JSON.stringify({ type: 'live-view-state', viewing: Boolean(viewing) }));
+    return true;
+  } catch { return false; }
+}
+
+function syncLiveViewerStateForParticipant(participant) {
+  if (!participant || !mediaViewState(participant).screen) return false;
+  return sendLiveViewerState(participant, true);
+}
+
+function setParticipantScreenView(participant, viewing, { announce = true } = {}) {
+  if (!participant) return false;
+  const state = mediaViewState(participant);
+  const next = Boolean(viewing);
+  const changed = state.screen !== next;
+  state.screen = next;
+  if (!next) applyLiveAudioLevels();
+  if (changed && announce) sendLiveViewerState(participant, next);
+  return changed;
+}
 
 const mediaStreamFor = (participant, kind) => participant?.videoStreams?.[kind]
   || (kind === 'camera'
@@ -845,13 +946,21 @@ function decorateRemoteMediaTile(id, kind, participant) {
   tile.dataset.mediaKind = kind;
   tile.dataset.mediaOwner = participant === peer ? 'manual-peer' : String(participant?.id || '');
   tile.querySelector('.media-tile-controls')?.remove();
+  tile.querySelector('[data-media-tile-fullscreen]')?.remove();
   const volume = kind === 'screen'
     ? (participant === peer ? Number(manualLiveVolume ?? 100) : Number(participant?.liveVolume ?? 100))
     : (participant === peer ? Number(manualParticipantVolume || 100) : Number(participant?.volume ?? 100));
   const controls = document.createElement('div');
   controls.className = 'media-tile-controls';
   controls.innerHTML = `${kind === 'screen' ? `<label title="Volume da transmissão"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4zM15.5 9.5a4 4 0 0 1 0 5M18 7a7.5 7.5 0 0 1 0 10"/></svg><input data-media-volume type="range" min="0" max="200" step="1" value="${Math.round(volume)}"/><b>${Math.round(volume)}%</b></label>` : ''}<button type="button" data-media-view-close title="${kind === 'screen' ? 'Sair da transmissão' : 'Ocultar esta câmera'}" aria-label="${kind === 'screen' ? 'Sair da transmissão' : 'Ocultar esta câmera'}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4l16 16M10.7 10.7a2 2 0 0 0 2.6 2.6M9.9 4.2A10.8 10.8 0 0 1 21 12a12.7 12.7 0 0 1-3.1 4.4M6.2 6.2A12.8 12.8 0 0 0 3 12a11.7 11.7 0 0 0 7.6 6.6"/></svg></button>`;
-  tile.append(controls);
+  const fullscreen = document.createElement('button');
+  fullscreen.type = 'button';
+  fullscreen.className = 'media-tile-fullscreen';
+  fullscreen.dataset.mediaTileFullscreen = '';
+  fullscreen.title = `Abrir ${kind === 'screen' ? 'esta live' : 'esta câmera'} em tela cheia`;
+  fullscreen.setAttribute('aria-label', fullscreen.title);
+  fullscreen.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5"/></svg>';
+  tile.append(fullscreen, controls);
 }
 
 function showManualMedia(kind = 'camera') {
@@ -885,8 +994,9 @@ document.addEventListener('click', (event) => {
   if (offer) {
     event.preventDefault(); event.stopPropagation();
     const participant = mediaParticipantByOwner(offer.dataset.mediaOfferOwner); if (!participant) return;
-    const kind = offer.dataset.mediaOfferKind; mediaViewState(participant)[kind] = true;
-    if (kind === 'screen') applyLiveAudioLevels();
+    const kind = offer.dataset.mediaOfferKind;
+    if (kind === 'screen') setParticipantScreenView(participant, true);
+    else mediaViewState(participant)[kind] = true;
     if (participant === peer) showManualMedia(kind); else showHostedVideo(participant, kind === 'screen' ? 'Tela compartilhada' : 'Câmera', kind);
     renderIncomingMediaOffers(); return;
   }
@@ -894,8 +1004,8 @@ document.addEventListener('click', (event) => {
   if (close) {
     const tile = close.closest('.video-tile'); const participant = mediaParticipantByOwner(tile?.dataset.mediaOwner); const kind = tile?.dataset.mediaKind;
     if (!participant || !kind) return;
-    mediaViewState(participant)[kind] = false;
-    if (kind === 'screen') applyLiveAudioLevels();
+    if (kind === 'screen') setParticipantScreenView(participant, false);
+    else mediaViewState(participant)[kind] = false;
     hideVideoTile(participant === peer ? `manual-${kind}` : `${participant.id}-${kind}`);
     renderIncomingMediaOffers(); return;
   }
@@ -916,7 +1026,7 @@ function applyHostedVideoState(p, active, description, revision) {
   p.videoExpectedKinds[kind] = Boolean(active);
   mediaViewState(p);
   if (!p.videoExpectedKinds[kind]) {
-    if (kind === 'screen') { p.mediaViewKinds.screen = false; applyLiveAudioLevels(); }
+    if (kind === 'screen') setParticipantScreenView(p, false, { announce: false });
     clearTimeout(p.videoMuteTimers[kind]); hideVideoTile(`${p.id}-${kind}`); renderIncomingMediaOffers(); return;
   }
   // Some Windows WebRTC builds dispatch the incoming video track before the
@@ -1016,6 +1126,18 @@ document.head.insertAdjacentHTML('beforeend', `<style id="voiceup-beta-final">
 .local-video:not(.visible){display:none!important}.local-video.visible{display:block!important;object-fit:cover}.round-control.muted,#output-button.muted{background:#542b34!important;color:#ffaaa0!important}
 </style>`);
 
+// Mantém os atalhos dos servidores salvos compactos no desktop. O CSS acima
+// também possui uma versão móvel, que continua empilhando os botões quando não
+// há largura suficiente.
+document.head.insertAdjacentHTML('beforeend', `<style id="voiceup-saved-server-actions-layout">
+.saved-servers-heading{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;align-items:center!important;gap:12px!important}
+.saved-servers-heading>div:first-child{display:grid!important;gap:2px!important;min-width:0!important}
+.saved-servers-heading>div:first-child>strong,.saved-servers-heading>div:first-child>small{display:block!important}
+.saved-servers-actions{display:flex!important;flex-flow:row nowrap!important;flex:0 0 auto!important;width:auto!important;align-items:center!important;gap:8px!important}
+.saved-servers-actions>button{display:inline-flex!important;align-items:center!important;justify-content:center!important;flex:0 0 auto!important;white-space:nowrap!important}
+@media(max-width:520px){.saved-servers-heading{grid-template-columns:1fr!important;align-items:stretch!important}.saved-servers-actions{width:100%!important}.saved-servers-actions>button{flex:1 1 0!important}}
+</style>`);
+
 // Compact connection-quality display kept beside the local profile.  The
 // numeric sample still updates the legacy participant row when it exists.
 const betaLegacyUpdatePingBadge = updatePingBadge;
@@ -1069,6 +1191,11 @@ let betaMicGainContext = null;
 let betaMicGainNode = null;
 let betaMicGainTrack = null;
 let betaMicGainSourceTrack = null;
+let betaRnnoiseSession = null;
+let betaRnnoiseSourceTrack = null;
+let betaRnnoiseInit = null;
+let betaRnnoiseGeneration = 0;
+let betaRnnoiseFallbackNotified = false;
 let manualAudioGainContext = null;
 let manualAudioGainNode = null;
 let manualParticipantVolume = 100;
@@ -1121,13 +1248,67 @@ const closeMicGain = () => {
   betaMicGainContext?.close?.().catch(() => {});
   betaMicGainContext = null; betaMicGainNode = null; betaMicGainTrack = null; betaMicGainSourceTrack = null;
 };
+const closeRnnoise = () => {
+  betaRnnoiseGeneration += 1;
+  const active = betaRnnoiseSession;
+  betaRnnoiseSession = null;
+  betaRnnoiseSourceTrack = null;
+  betaRnnoiseInit = null;
+  active?.close?.().catch?.(() => {});
+};
+const prepareRnnoiseTrack = async () => {
+  const rawTrack = localStream?.getAudioTracks?.()[0];
+  if (noiseMode !== 'rnnoise' || !rawTrack || rawTrack.readyState !== 'live') {
+    closeRnnoise();
+    return null;
+  }
+  if (betaRnnoiseSession && betaRnnoiseSourceTrack === rawTrack && betaRnnoiseSession.track?.readyState === 'live') {
+    betaRnnoiseSession.setGain(betaInputVolume / 100);
+    return betaRnnoiseSession.track;
+  }
+  if (betaRnnoiseInit && betaRnnoiseSourceTrack === rawTrack) return betaRnnoiseInit;
+
+  closeRnnoise();
+  const generation = betaRnnoiseGeneration;
+  betaRnnoiseSourceTrack = rawTrack;
+  const initialization = (async () => {
+    await rawTrack.applyConstraints?.({ echoCancellation: true, noiseSuppression: false, autoGainControl: true }).catch(() => {});
+    const session = await window.voiceupRnnoise?.create?.(rawTrack, { gain: betaInputVolume / 100 });
+    if (!session) throw new Error('O componente RNNoise não está disponível.');
+    if (generation !== betaRnnoiseGeneration || noiseMode !== 'rnnoise' || betaRnnoiseSourceTrack !== rawTrack || rawTrack.readyState !== 'live') {
+      await session.close?.();
+      return null;
+    }
+    betaRnnoiseSession = session;
+    betaRnnoiseInit = null;
+    betaRnnoiseFallbackNotified = false;
+    return session.track;
+  })();
+  betaRnnoiseInit = initialization;
+  try { return await initialization; }
+  catch (error) {
+    if (generation === betaRnnoiseGeneration) {
+      betaRnnoiseInit = null;
+      betaRnnoiseSourceTrack = null;
+    }
+    throw error;
+  }
+};
 const gainedMicrophoneTrack = () => {
   const rawTrack = localStream?.getAudioTracks?.()[0];
   if (!rawTrack) return null;
+  if (noiseMode === 'rnnoise') {
+    closeMicGain();
+    if (betaRnnoiseSourceTrack === rawTrack && betaRnnoiseSession?.track?.readyState === 'live') {
+      betaRnnoiseSession.setGain(betaInputVolume / 100);
+      return betaRnnoiseSession.track;
+    }
+    return rawTrack;
+  }
   // At the default gain, publish the physical track directly. Besides avoiding
   // needless processing, this preserves one-way audio compatibility with old
   // VoiceUP builds that expect the original getUserMedia stream.
-  if (Math.abs(betaInputVolume - 100) < 0.01 && noiseMode !== 'enhanced') {
+  if (Math.abs(betaInputVolume - 100) < 0.01 && !['enhanced', 'studio'].includes(noiseMode)) {
     closeMicGain();
     return rawTrack;
   }
@@ -1139,10 +1320,11 @@ const gainedMicrophoneTrack = () => {
     betaMicGainNode = betaMicGainContext.createGain();
     betaMicGainNode.gain.value = betaInputVolume / 100;
     let microphoneNode = betaMicGainContext.createMediaStreamSource(new MediaStream([rawTrack]));
-    if (noiseMode === 'enhanced') {
-      const highpass = betaMicGainContext.createBiquadFilter(); highpass.type = 'highpass'; highpass.frequency.value = 82; highpass.Q.value = .72;
-      const lowpass = betaMicGainContext.createBiquadFilter(); lowpass.type = 'lowpass'; lowpass.frequency.value = 12000; lowpass.Q.value = .45;
-      const compressor = betaMicGainContext.createDynamicsCompressor(); compressor.threshold.value = -42; compressor.knee.value = 22; compressor.ratio.value = 3; compressor.attack.value = .006; compressor.release.value = .22;
+    if (['enhanced', 'studio'].includes(noiseMode)) {
+      const studio = noiseMode === 'studio';
+      const highpass = betaMicGainContext.createBiquadFilter(); highpass.type = 'highpass'; highpass.frequency.value = studio ? 105 : 82; highpass.Q.value = studio ? .9 : .72;
+      const lowpass = betaMicGainContext.createBiquadFilter(); lowpass.type = 'lowpass'; lowpass.frequency.value = studio ? 9000 : 12000; lowpass.Q.value = studio ? .58 : .45;
+      const compressor = betaMicGainContext.createDynamicsCompressor(); compressor.threshold.value = studio ? -48 : -42; compressor.knee.value = studio ? 16 : 22; compressor.ratio.value = studio ? 4.2 : 3; compressor.attack.value = studio ? .004 : .006; compressor.release.value = studio ? .16 : .22;
       microphoneNode = microphoneNode.connect(highpass).connect(lowpass).connect(compressor);
     }
     microphoneNode.connect(betaMicGainNode).connect(destination);
@@ -1156,7 +1338,29 @@ const betaRawOutgoingAudioTrack = outgoingAudioTrack;
 outgoingAudioTrack = function outgoingAudioTrackBetaGain() { return gainedMicrophoneTrack() || localStream?.getAudioTracks?.()[0] || (sharedAudioTrack ? null : betaRawOutgoingAudioTrack()); };
 const refreshOutgoingMicrophone = async () => {
   closeMicGain();
-  const track = outgoingAudioTrack();
+  let track = null;
+  if (noiseMode === 'rnnoise') {
+    try {
+      track = await prepareRnnoiseTrack();
+      const state = document.querySelector('#connection-state');
+      if (track && state) state.textContent = 'Microfone · RNNoise (ML local)';
+    } catch (error) {
+      closeRnnoise();
+      track = localStream?.getAudioTracks?.()[0] || null;
+      await track?.applyConstraints?.({ echoCancellation: true, noiseSuppression: true, autoGainControl: true }).catch(() => {});
+      window.voiceupAddDiagnostic?.('RNNoise', error?.message || error, 'rnnoise-engine.js');
+      const state = document.querySelector('#connection-state');
+      if (state) state.textContent = 'RNNoise indisponível · filtro padrão';
+      if (!betaRnnoiseFallbackNotified) {
+        betaRnnoiseFallbackNotified = true;
+        toast('RNNoise não pôde iniciar. O microfone continua ativo com o filtro padrão.');
+      }
+    }
+  } else {
+    closeRnnoise();
+    betaRnnoiseFallbackNotified = false;
+    track = outgoingAudioTrack();
+  }
   if (track) await Promise.allSettled(audioSenders().map((sender) => sender.replaceTrack(track)));
 };
 const betaRequestAudioForGain = requestAudio;
@@ -1260,8 +1464,8 @@ const startNativeShareAudio = async (sourceId) => {
     const reason = result?.reason === 'invalid-capture-source'
       ? 'A fonte escolhida não está mais disponível.'
       : result?.reason === 'startup-timeout'
-        ? 'O Windows demorou demais para liberar o áudio protegido.'
-        : 'A captura protegida de áudio não está disponível neste Windows.';
+        ? 'O sistema demorou demais para liberar o áudio protegido.'
+        : 'A captura protegida de áudio não está disponível neste sistema.';
     throw new Error(reason);
   }
   await nativeShareAudioContext.resume();
@@ -1390,8 +1594,8 @@ function showHostedVideo(p, label = 'Video recebido', kind = 'camera') {
 
 function requestParticipantMediaView(participant, kind = 'screen') {
   if (!participant) return false;
-  mediaViewState(participant)[kind] = true;
-  if (kind === 'screen') applyLiveAudioLevels();
+  if (kind === 'screen') setParticipantScreenView(participant, true);
+  else mediaViewState(participant)[kind] = true;
   // Ask the broadcaster to reattach this exact sender. This also recovers
   // when both sides start a live at the same time or one side joined late.
   if (participant === peer) {
@@ -1501,13 +1705,14 @@ function attachHostedTrack(p, track, streams, kind = 'camera') {
   // replaceTrack may mute the receiver momentarily while Chromium switches the
   // source. The explicit, reliable video-off message owns removal of the tile.
   track.onmute = () => { clearTimeout(p.videoMuteTimers[kind]); p.videoMuteTimers[kind] = setTimeout(reveal, 900); };
-  track.onended = () => { p.videoExpectedKinds[kind] = false; if (kind === 'screen') { mediaViewState(p).screen = false; applyLiveAudioLevels(); } hideVideoTile(`${p.id}-${kind}`); renderIncomingMediaOffers(); };
+  track.onended = () => { p.videoExpectedKinds[kind] = false; if (kind === 'screen') setParticipantScreenView(p, false, { announce: false }); hideVideoTile(`${p.id}-${kind}`); renderIncomingMediaOffers(); };
   reveal();
 }
 
 const betaRemoveHostedPeerForVoice = removeHostedPeer;
 removeHostedPeer = function removeHostedPeerBetaVoice(id, name) {
   const participant = hostedPeers.get(id);
+  setLocalLiveViewerState(id, false, { silent: true });
   stopRemoteVoiceDetection(participant);
   participant?.audioGainContext?.close?.().catch(() => {});
   participant?.screenAudio?.pause?.();
@@ -1517,13 +1722,14 @@ removeHostedPeer = function removeHostedPeerBetaVoice(id, name) {
 };
 const betaClearHostedVoiceForVoice = clearHostedVoice;
 clearHostedVoice = function clearHostedVoiceBetaVoice() {
-  hostedPeers.forEach((participant) => { stopRemoteVoiceDetection(participant); participant.audioGainContext?.close?.().catch(() => {}); hideVideoTile(`${participant.id}-camera`); hideVideoTile(`${participant.id}-screen`); });
+  hostedPeers.forEach((participant) => { setLocalLiveViewerState(participant.id, false, { silent: true }); stopRemoteVoiceDetection(participant); participant.audioGainContext?.close?.().catch(() => {}); hideVideoTile(`${participant.id}-camera`); hideVideoTile(`${participant.id}-screen`); });
   const result = betaClearHostedVoiceForVoice(); renderIncomingMediaOffers(); return result;
 };
 function receiveHostedData(p, raw) {
   try {
     const msg = JSON.parse(raw);
     if (msg.type === 'chat') { playNotification('message'); return addMessage(msg.text, msg.name || p.name, false, msg.color || p.color); }
+    if (msg.type === 'live-view-state') { setLocalLiveViewerState(p.id, Boolean(msg.viewing)); return; }
     if (msg.type === 'intro') { p.name = msg.name || p.name; p.color = safeColor(msg.color || p.color); p.avatar = safeAvatar(msg.avatar || p.avatar); return markHostedConnected(p); }
     if (msg.type === 'video-on') return applyHostedVideoState(p, true, msg.description, msg.revision);
     if (msg.type === 'video-off') return applyHostedVideoState(p, false, msg.description || 'camera', msg.revision);
@@ -1674,15 +1880,20 @@ if (selfCard && !document.querySelector('#presence-status-button')) {
   (selfCard.querySelector('.self-avatar-control') || selfCard).append(button);
 }
 if (selfCard && !document.querySelector('#presence-menu')) {
-  document.body.insertAdjacentHTML('beforeend', `<aside id="presence-menu" class="presence-menu hidden" role="dialog" aria-label="Definir status">${['online', 'idle', 'dnd'].map((status) => `<button type="button" data-presence-status="${status}"><i class="presence-dot status-${status}"></i><span><strong>${presenceText(status)}</strong><small>${status === 'dnd' ? 'Silencia sons e notificações de mensagens' : status === 'idle' ? 'Mantém você como ausente' : 'Ausência automática após 10 minutos'}</small></span></button>`).join('')}</aside>`);
+  document.body.insertAdjacentHTML('beforeend', `<aside id="presence-menu" class="presence-menu hidden" role="dialog" aria-label="Definir status">${['online', 'idle', 'dnd'].map((status) => `<button type="button" data-presence-status="${status}">${globalThis.voiceupPlatform.badge(globalThis.voiceupPlatform.local(), status, presenceText(status))}<span><strong>${presenceText(status)}</strong><small>${status === 'dnd' ? 'Silencia sons e notificações de mensagens' : status === 'idle' ? 'Mantém você como ausente' : 'Ausência automática após 10 minutos'}</small></span></button>`).join('')}</aside>`);
 }
 const presenceButton = document.querySelector('#presence-status-button');
 const presenceMenu = document.querySelector('#presence-menu');
 const paintPresenceControl = () => {
   if (!presenceButton) return;
   presenceButton.className = `status-${effectivePresenceStatus}`;
+  const iconMarkup = globalThis.voiceupPlatform.badge(globalThis.voiceupPlatform.local(), effectivePresenceStatus, presenceText(effectivePresenceStatus));
+  if (presenceButton.dataset.platformMarkup !== iconMarkup) {
+    presenceButton.dataset.platformMarkup = iconMarkup;
+    presenceButton.innerHTML = iconMarkup;
+  }
   const label = presenceAutoIdle ? (presenceLabels[language] || presenceLabels['pt-BR']).automatic : presenceText(effectivePresenceStatus);
-  presenceButton.title = label; presenceButton.setAttribute('aria-label', `Status: ${label}`);
+  presenceButton.title = globalThis.voiceupPlatform.label(globalThis.voiceupPlatform.local(), effectivePresenceStatus, label); presenceButton.setAttribute('aria-label', `Status: ${presenceButton.title}`);
   selfCard?.setAttribute('data-presence-status', effectivePresenceStatus);
   const statusLabel = document.querySelector('#presence-status-label');
   if (statusLabel) statusLabel.textContent = presenceText(effectivePresenceStatus);
@@ -1798,6 +2009,7 @@ function channelAvatar(member) {
   const initialsText = initials(member.name);
   return `<span class="channel-avatar" data-nickname="${nickname}" data-member-id="${escapeHtml(member.id)}" aria-label="${nickname}" style="background:${safeColor(member.color)}${photo ? `;background-image:url('${photo}');background-size:cover;background-position:center` : ''}">${photo ? '' : initialsText}${mediaOfferBadge(member)}</span>`;
 }
+globalThis.voiceupChannelMemberBadge = mediaOfferBadge;
 const betaMemberAvatar = (member) => avatar(member.name, member.color, member.avatar);
 const betaT = (key, values = {}) => globalThis.voiceupI18n?.t(key, values);
 const betaChannelName = (name, type) => globalThis.voiceupI18n?.channel(name, type) || name;
@@ -1821,16 +2033,16 @@ const renderBetaMembers = () => {
     return;
   }
   const members = [...serverMembers.values()].map((member) => member.id === hostedSocket?.id
-    ? { ...member, name: myName, color: myColor, avatar: myAvatar, status: effectivePresenceStatus, voiceChannel: activeVoiceChannel }
+    ? { ...member, name: myName, color: myColor, avatar: myAvatar, status: effectivePresenceStatus, platform: globalThis.voiceupPlatform.local(), voiceChannel: activeVoiceChannel }
     : member);
-  if (!members.some((member) => member.id === hostedSocket?.id)) members.unshift({ id: hostedSocket?.id || 'self', name: myName, color: myColor, avatar: myAvatar, status: effectivePresenceStatus, voiceChannel: activeVoiceChannel });
+  if (!members.some((member) => member.id === hostedSocket?.id)) members.unshift({ id: hostedSocket?.id || 'self', name: myName, color: myColor, avatar: myAvatar, status: effectivePresenceStatus, platform: globalThis.voiceupPlatform.local(), voiceChannel: activeVoiceChannel });
   const markup = members.length ? members.map((member) => {
     const isSelf = member.id === hostedSocket?.id || member.id === 'self';
     const peerItem = hostedPeers.get(member.id);
     const inCall = Boolean(member.voiceChannel) && member.voiceChannel === activeVoiceChannel;
     const visibleChannel = member.voiceChannel ? betaChannelName(member.voiceChannel, 'voice') : (betaT('state.outside') || 'Fora da call');
     const status = normalizedPresenceStatus(member.status);
-    return `<div class="participant server-member${inCall ? ' in-active-call' : ''}${peerItem?.speaking ? ' speaking' : ''}" data-member-id="${escapeHtml(member.id)}"><span class="member-presence-avatar">${betaMemberAvatar(member)}<i class="presence-dot status-${status}" title="${escapeHtml(presenceText(status))}"></i>${mediaOfferBadge(member)}</span><div style="min-width:0;flex:1"><strong>${escapeHtml(member.name)}${isSelf ? ` (${escapeHtml(betaT('state.self') || 'você')})` : ''}</strong><small class="member-status-line"><b class="status-${status}">${escapeHtml(presenceText(status))}</b><span>· ${escapeHtml(visibleChannel)}</span></small></div>${peerItem ? `<button class="hosted-mute" data-peer-id="${escapeHtml(member.id)}" type="button" title="Silenciar somente para você">${audioIcon(Boolean(peerItem.muted))}</button>` : ''}</div>`;
+    return `<div class="participant server-member${inCall ? ' in-active-call' : ''}${peerItem?.speaking ? ' speaking' : ''}" data-member-id="${escapeHtml(member.id)}"><span class="member-presence-avatar">${betaMemberAvatar(member)}${globalThis.voiceupPlatform.badge(member.platform, status, presenceText(status))}${mediaOfferBadge(member)}</span><div style="min-width:0;flex:1"><strong>${escapeHtml(member.name)}${isSelf ? ` (${escapeHtml(betaT('state.self') || 'você')})` : ''}</strong><small class="member-status-line"><b class="status-${status}">${escapeHtml(presenceText(status))}</b><span>· ${escapeHtml(visibleChannel)}</span></small></div>${peerItem ? `<button class="hosted-mute" data-peer-id="${escapeHtml(member.id)}" type="button" title="Silenciar somente para você">${audioIcon(Boolean(peerItem.muted))}</button>` : ''}</div>`;
   }).join('') : `<p class="system-message">${betaT('state.noMembers') || 'Nenhuma pessoa no servidor.'}</p>`;
   betaWritingMembers = true;
   if (!commitBetaMembersMarkup(target, markup)) {
@@ -1940,20 +2152,22 @@ const renderCentralCallMembers = () => {
     hostedMembers = [...visible.values()];
   }
   const participants = currentMode === 'hosted'
-    ? [{ id: 'self', name: myName, color: myColor, avatar: myAvatar, speaking: localSpeaking, connected: true }, ...hostedMembers]
-    : [{ id: 'self', name: myName, color: myColor, avatar: myAvatar, speaking: localSpeaking, connected: true }, ...(peer?.name ? [{ id: 'manual-peer', name: peer.name, color: peer.color, avatar: peer.avatar, connected: peer.channel?.readyState === 'open', speaking: document.querySelector('#peer-other')?.classList.contains('speaking') }] : [])];
-  const structureKey = participants.map((member) => { const media = mediaParticipantByOwner(member.id === 'self' ? '' : member.id); return [member.id, member.name, member.color, member.avatar?.length || 0, member.connected ? 1 : 0, media?.videoExpectedKinds?.screen ? 1 : 0, media?.videoExpectedKinds?.camera ? 1 : 0].join(':'); }).join('|');
+    ? [{ id: 'self', name: myName, color: myColor, avatar: myAvatar, status: effectivePresenceStatus, platform: globalThis.voiceupPlatform.local(), speaking: localSpeaking, connected: true }, ...hostedMembers]
+    : [{ id: 'self', name: myName, color: myColor, avatar: myAvatar, status: effectivePresenceStatus, platform: globalThis.voiceupPlatform.local(), speaking: localSpeaking, connected: true }, ...(peer?.name ? [{ id: 'manual-peer', name: peer.name, color: peer.color, avatar: peer.avatar, status: peer.status, platform: peer.platform, connected: peer.channel?.readyState === 'open', speaking: document.querySelector('#peer-other')?.classList.contains('speaking') }] : [])];
+  const structureKey = participants.map((member) => { const media = mediaParticipantByOwner(member.id === 'self' ? '' : member.id); return [member.id, member.name, member.color, member.platform, member.status, member.avatar?.length || 0, member.connected ? 1 : 0, media?.videoExpectedKinds?.screen ? 1 : 0, media?.videoExpectedKinds?.camera ? 1 : 0].join(':'); }).join('|');
   if (list.dataset.structureKey !== structureKey) {
     list.dataset.structureKey = structureKey;
-    list.innerHTML = participants.map((member) => `<article class="call-member" data-call-member="${escapeHtml(member.id)}"${member.id !== 'self' ? ' tabindex="0" role="button" aria-label="Ajustar volume deste participante"' : ''}>${betaMemberAvatar(member)}${mediaOfferBadge(member)}<strong>${escapeHtml(member.name || 'Você')}${member.id === 'self' ? ` (${escapeHtml(betaT('state.self') || 'você')})` : ''}</strong><small>${member.connected ? (currentMode === 'manual' ? (betaChannelName(activeVoiceChannel, 'voice') || 'Geral') : (betaT('state.inChannel') || 'No canal')) : (betaT('state.connecting') || 'Conectando...')}</small></article>`).join('');
+    list.innerHTML = participants.map((member) => `<article class="call-member" data-call-member="${escapeHtml(member.id)}"${member.id !== 'self' ? ` tabindex="0" role="button" aria-label="Abrir controles de ${escapeHtml(member.name || 'participante')}"` : ''}><span class="call-member-visual">${betaMemberAvatar(member)}${globalThis.voiceupPlatform.badge(member.platform, member.status)}</span>${mediaOfferBadge(member)}<span class="call-member-caption"><strong>${escapeHtml(member.name || 'Você')}${member.id === 'self' ? ` (${escapeHtml(betaT('state.self') || 'você')})` : ''}</strong><small>${member.connected ? (currentMode === 'manual' ? (betaChannelName(activeVoiceChannel, 'voice') || 'Geral') : (betaT('state.inChannel') || 'No canal')) : (betaT('state.connecting') || 'Conectando...')}</small></span></article>`).join('');
   }
+  list.dataset.memberCount = String(participants.length);
+  list.dataset.gridSize = participants.length <= 1 ? 'single' : participants.length <= 4 ? 'balanced' : 'many';
   // Toggle only the speaking state. Recreating the avatar would restart the
   // aura animation on every sample and make it look as if it never appeared.
   for (const member of participants) {
     const article = [...list.querySelectorAll('[data-call-member]')].find((item) => item.dataset.callMember === String(member.id));
     if (!article) continue;
     article.classList.toggle('speaking', Boolean(member.speaking));
-    const state = article.querySelector('small');
+    const state = article.querySelector('.call-member-caption small');
     if (state) state.textContent = member.speaking ? (betaT('state.speaking') || 'Falando...') : member.connected ? (currentMode === 'manual' ? (betaChannelName(activeVoiceChannel, 'voice') || 'Geral') : (betaT('state.inChannel') || 'No canal')) : (betaT('state.connecting') || 'Conectando...');
   }
   // Video tiles are the equivalent of the large participant cards. Give the
@@ -2086,7 +2300,7 @@ const defaultServerName = (url, roomId) => {
 if (hostConnect && !document.querySelector('#saved-servers')) {
   const firstHostLabel = hostConnect.querySelector('label');
   firstHostLabel?.insertAdjacentHTML('beforebegin', '<label class="host-name-label">Nome do servidor <input id="host-name" maxlength="36" placeholder="Ex.: VoiceUP dos amigos" autocomplete="off"/></label>');
-  hostConnect.querySelector('small')?.insertAdjacentHTML('beforebegin', `<section id="saved-servers" class="saved-servers"><div class="saved-servers-heading"><div><strong>Meus servidores</strong><small>Salvos somente neste computador.</small></div><div class="saved-servers-actions"><button id="new-saved-server" type="button">Novo</button><button id="save-current-server" type="button">Salvar atual</button></div></div><div id="saved-servers-list" class="saved-servers-list"></div></section>`);
+  (hostConnect.querySelector('.host-connect-hint') || hostConnect.querySelector(':scope > small'))?.insertAdjacentHTML('beforebegin', `<section id="saved-servers" class="saved-servers"><div class="saved-servers-heading"><div><strong>Meus servidores</strong><small>Salvos somente neste computador.</small></div><div class="saved-servers-actions"><button id="new-saved-server" type="button">Novo</button><button id="save-current-server" type="button">Salvar atual</button></div></div><div id="saved-servers-list" class="saved-servers-list"></div></section>`);
 }
 const hostNameInput = document.querySelector('#host-name');
 const savedServersList = document.querySelector('#saved-servers-list');
@@ -2095,7 +2309,7 @@ const renderSavedServers = () => {
   if (!savedServersList) return;
   const roomWord = betaT('saved.room') || 'sala';
   const removeLabel = betaT('saved.remove') || 'Remover servidor salvo';
-  savedServersList.innerHTML = savedServers.length ? savedServers.map((server) => `<article class="saved-server${server.id === selectedSavedServerId ? ' selected' : ''}" data-saved-server="${escapeHtml(server.id)}"><button class="saved-server-open" type="button"><span class="saved-server-icon" aria-hidden="true">${server.icon ? `<img src="${escapeHtml(server.icon)}" alt="">` : '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01M12 7h4M12 17h4"/></svg>'}</span><span><strong>${escapeHtml(server.name)}</strong><small>${escapeHtml(server.url)} · ${escapeHtml(roomWord)} ${escapeHtml(server.roomId)}</small></span></button><button class="saved-server-remove" type="button" title="${escapeHtml(removeLabel)}" aria-label="${escapeHtml(removeLabel)}: ${escapeHtml(server.name)}"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></article>`).join('') : `<p>${betaT('saved.empty') || 'Nenhum servidor salvo ainda. Preencha os dados acima e clique em “Salvar atual”.'}</p>`;
+  savedServersList.innerHTML = savedServers.length ? savedServers.map((server) => `<article class="saved-server${server.id === selectedSavedServerId ? ' selected' : ''}" data-saved-server="${escapeHtml(server.id)}"><button class="saved-server-open" type="button"><span class="saved-server-icon" aria-hidden="true">${server.icon && (/^data:image\//i.test(server.icon) || externalMediaAutoLoad) ? `<img src="${escapeHtml(server.icon)}" alt="" referrerpolicy="no-referrer">` : '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01M12 7h4M12 17h4"/></svg>'}</span><span><strong>${escapeHtml(server.name)}</strong><small>${escapeHtml(server.url)} · ${escapeHtml(roomWord)} ${escapeHtml(server.roomId)}</small></span></button><button class="saved-server-remove" type="button" title="${escapeHtml(removeLabel)}" aria-label="${escapeHtml(removeLabel)}: ${escapeHtml(server.name)}"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></article>`).join('') : `<p>${betaT('saved.empty') || 'Nenhum servidor salvo ainda. Preencha os dados acima e clique em “Salvar atual”.'}</p>`;
 };
 const selectSavedServer = (server) => {
   if (!server) return;
@@ -2167,6 +2381,7 @@ document.head.insertAdjacentHTML('beforeend', `<style>
 #accept-offer{display:flex!important;align-items:center!important;justify-content:center!important;min-height:48px!important;background:var(--focus)!important;color:var(--beta-button-ink)!important;border:0!important;font-weight:700!important}#accept-offer::before{content:'↗';margin-right:8px;font-size:16px}.beta-hosted #pair-panel{display:none!important}.beta-hosted .participant-heading,.beta-hosted #participants{display:none!important}.beta-hosted .self-card{margin-top:auto!important}.members-clone .server-member{margin:2px 0;border-radius:9px}.members-clone .server-member.in-active-call{background:color-mix(in srgb,var(--focus) 10%,transparent)}.members-clone .server-member small{color:var(--muted)}.members-clone .hosted-mute{width:31px;height:31px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);display:grid;place-items:center}.members-clone .hosted-mute svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 #call-members{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:28px;max-width:min(760px,90vw);margin:0 auto 22px}.call-member{display:grid;justify-items:center;gap:8px;min-width:136px;padding:13px 12px;color:var(--ink);text-align:center;border:2px solid transparent;border-radius:16px}.call-member .avatar{width:88px;height:88px;font-size:28px;border-radius:28px;box-shadow:var(--shadow);transition:outline-color .14s,box-shadow .14s,transform .14s}.call-member strong{font-size:14px;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.call-member small{color:var(--muted);font-size:11px}.call-member.speaking{border-color:transparent;background:transparent;box-shadow:none}.call-member.speaking .avatar{outline:3px solid var(--focus);outline-offset:5px;box-shadow:0 0 0 7px color-mix(in srgb,var(--focus) 20%,transparent),0 0 24px 7px color-mix(in srgb,var(--focus) 55%,transparent),var(--shadow);transform:scale(1.035);animation:voiceup-speaking-aura 1.15s ease-in-out infinite}.call-member.speaking small{color:var(--focus);font-weight:700}.video-tile.speaking{border:2px solid var(--focus)!important;box-shadow:0 0 19px color-mix(in srgb,var(--focus) 36%,transparent)}.video-frame:has(.video-tile.speaking){border-color:var(--focus)!important;box-shadow:0 0 21px color-mix(in srgb,var(--focus) 28%,transparent),var(--shadow)!important}@keyframes voiceup-speaking-aura{0%,100%{box-shadow:0 0 0 6px color-mix(in srgb,var(--focus) 17%,transparent),0 0 18px 5px color-mix(in srgb,var(--focus) 42%,transparent),var(--shadow)}50%{box-shadow:0 0 0 9px color-mix(in srgb,var(--focus) 23%,transparent),0 0 30px 9px color-mix(in srgb,var(--focus) 62%,transparent),var(--shadow)}}@media(prefers-reduced-motion:reduce){.call-member.speaking .avatar{animation:none}}@media(max-width:700px){#call-members{gap:17px}.call-member .avatar{width:68px;height:68px;border-radius:22px;font-size:22px}.call-member{min-width:94px;padding:9px}.call-member strong{font-size:12px}}
 #identity-stage:not(.group-call) #call-members:empty{display:none}#identity-stage.group-call>.wave-wrap,#identity-stage.group-call>#stage-name,#identity-stage.group-call>#stage-message{display:none}.pair-panel{position:relative!important;z-index:2}.pair-panel textarea{width:100%!important}.pair-panel .share-button{display:inline-flex!important;align-items:center;justify-content:center;min-width:138px}.pair-panel .answer-box{display:grid;gap:8px}.pair-panel .answer-box .share-button{justify-self:end;float:none!important}
+#identity-stage.group-call{display:grid;width:100%;height:100%;min-height:0;place-items:center}#identity-stage.group-call #call-members{display:grid;width:min(1180px,100%);height:min(700px,100%);max-width:none;max-height:100%;margin:auto;padding:4px;gap:10px;grid-auto-rows:minmax(160px,1fr);align-content:center;overflow:auto}#call-members[data-grid-size="single"]{grid-template-columns:minmax(280px,680px);justify-content:center}#call-members[data-grid-size="balanced"]{grid-template-columns:repeat(2,minmax(0,1fr))}#call-members[data-grid-size="many"]{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}#call-members[data-member-count="3"] .call-member:last-child{grid-column:1/-1;width:calc(50% - 5px);justify-self:center}.call-member{position:relative;width:100%;height:100%;min-width:0;min-height:160px;display:grid;place-items:center;overflow:hidden;padding:20px;border:1px solid var(--line);border-radius:14px;background:color-mix(in srgb,var(--surface-2) 86%,var(--night));color:var(--ink);text-align:left;box-shadow:0 8px 26px rgba(0,0,0,.12)}.call-member-visual{display:grid;place-items:center;min-width:0;min-height:0}.call-member-visual .avatar{width:96px;height:96px;border-radius:50%;font-size:30px}.call-member-caption{position:absolute;z-index:3;left:10px;bottom:10px;display:grid;gap:2px;max-width:calc(100% - 20px);padding:6px 9px;border:1px solid color-mix(in srgb,var(--line) 68%,transparent);border-radius:8px;background:color-mix(in srgb,var(--panel) 90%,transparent);box-shadow:0 7px 18px rgba(0,0,0,.2);backdrop-filter:blur(8px)}.call-member-caption strong,.call-member-caption small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.call-member-caption strong{font-size:12px}.call-member-caption small{color:var(--muted);font-size:9px}.call-member.speaking{border-color:var(--focus);background:color-mix(in srgb,var(--focus) 7%,var(--surface-2));box-shadow:0 0 0 1px color-mix(in srgb,var(--focus) 42%,transparent),0 0 22px color-mix(in srgb,var(--focus) 22%,transparent)}.call-member.speaking .call-member-caption small{color:var(--focus);font-weight:800}@media(max-width:700px){#identity-stage.group-call #call-members{height:auto;max-height:100%;grid-template-columns:1fr!important;grid-auto-rows:minmax(150px,1fr);gap:8px}#call-members[data-member-count="3"] .call-member:last-child{grid-column:auto;width:100%}.call-member{min-height:150px}.call-member-visual .avatar{width:72px;height:72px;font-size:23px}}
 .channel-avatars{overflow:visible!important}.channel-avatar{position:relative;cursor:default}.channel-avatar::after{content:attr(data-nickname);position:absolute;z-index:20;right:0;bottom:calc(100% + 8px);width:max-content;max-width:150px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--ink);font:600 11px/1.2 'DM Sans',sans-serif;box-shadow:var(--shadow);opacity:0;pointer-events:none;transform:translateY(3px);transition:opacity .14s,transform .14s}.channel-avatar:hover::after,.channel-avatar:focus-visible::after{opacity:1;transform:translateY(0)}
 </style>`);
 
@@ -2248,6 +2463,7 @@ const applyPreviewPosition = (position) => {
   localPreview.style.setProperty('top', `${position.y}px`, 'important');
   localPreview.style.setProperty('right', 'auto', 'important');
   localPreview.style.setProperty('bottom', 'auto', 'important');
+  renderLocalLiveViewerCount();
 };
 const placePreview = () => {
   if (!localPreview) return;
@@ -2402,6 +2618,7 @@ const bindHostedStatusAndPresence = (socket) => {
   if (!socket || betaBoundHostedSockets.has(socket)) return;
   betaBoundHostedSockets.add(socket);
   const mergePresence = (members) => {
+    if (hostedSocket !== socket) return;
     rememberCurrentMember();
     for (const member of members || []) {
       if (member?.id) rememberHostedMember(member, Object.prototype.hasOwnProperty.call(member, 'voiceChannel') ? member.voiceChannel : activeVoiceChannel);
@@ -2413,6 +2630,7 @@ const bindHostedStatusAndPresence = (socket) => {
   let reconnectTimer = 0;
   let failoverTimer = 0;
   socket.on('connect', () => {
+    if (hostedSocket !== socket) return;
     // Socket.IO reconnects automatically. A fresh signalling session needs
     // fresh peers as their old RTCPeerConnections belong to the prior socket.
     if (connectedOnce) {
@@ -2426,6 +2644,7 @@ const bindHostedStatusAndPresence = (socket) => {
     setStatus('Entrando na sala...', true);
   });
   socket.on('room-joined', ({ peers, voiceChannel }) => {
+    if (hostedSocket !== socket) return;
     betaClusterFailures = 0; betaClusterVisited.clear();
     activeVoiceChannel = ROOM_CHANNELS.voice.includes(voiceChannel) ? voiceChannel : '';
     mergePresence(peers);
@@ -2434,14 +2653,17 @@ const bindHostedStatusAndPresence = (socket) => {
     socket.emit('request-room-presence');
   });
   socket.on('room-presence', ({ members }) => {
+    if (hostedSocket !== socket) return;
     mergePresence(members);
     renderCentralCallMembers();
   });
   socket.on('peer-joined', (member) => {
+    if (hostedSocket !== socket) return;
     mergePresence([member]);
     renderCentralCallMembers();
   });
   socket.on('disconnect', (reason) => {
+    if (hostedSocket !== socket) return;
     if (reason !== 'io client disconnect') {
       clearHostedVoice();
       renderRoomChannels();
@@ -2463,6 +2685,7 @@ const bindHostedStatusAndPresence = (socket) => {
     setStatus(reason === 'io client disconnect' ? 'Servidor desconectado' : 'Reconectando ao servidor…');
   });
   socket.on('connect_error', (error) => {
+    if (hostedSocket !== socket) return;
     betaClusterFailures += 1;
     const reason = error?.message ? ` (${error.message})` : '';
     setStatus(`Não foi possível alcançar o host${reason}`);
@@ -2471,17 +2694,17 @@ const bindHostedStatusAndPresence = (socket) => {
       if (alternate) betaSwitchClusterHost(alternate.url, 'Host indisponível · ativando failover…');
     }
   });
-  socket.on('cluster-route', ({ alternates, failover } = {}) => { betaClusterAlternates = failover === false ? [] : (Array.isArray(alternates) ? alternates : []); });
-  socket.on('cluster-redirect', ({ url, reason } = {}) => { betaSwitchClusterHost(url, reason || 'Distribuindo a conexão para o host menos carregado…'); });
+  socket.on('cluster-route', ({ alternates, failover } = {}) => { if (hostedSocket === socket) betaClusterAlternates = failover === false ? [] : (Array.isArray(alternates) ? alternates : []); });
+  socket.on('cluster-redirect', ({ url, reason } = {}) => { if (hostedSocket === socket) betaSwitchClusterHost(url, reason || 'Distribuindo a conexão para o host menos carregado…'); });
   if (socket.connected) { setStatus(activeVoiceChannel ? `No canal ${activeVoiceChannel} · aguardando participantes` : 'No servidor · escolha um canal de voz', true); socket.emit('request-room-presence'); }
 };
 const betaJoinHostedRoom = joinHostedRoom;
 joinHostedRoom = async function joinHostedRoomBeta(...args) {
   try {
-    const result = await betaJoinHostedRoom(...args);
-    bindHostedStatusAndPresence(hostedSocket);
-    if (!hostedSocket) setStatus('Falha antes de abrir a conexao com o host');
-    return result;
+    const socket = await betaJoinHostedRoom(...args);
+    if (socket && socket === hostedSocket) bindHostedStatusAndPresence(socket);
+    if (!socket && !hostedSocket) setStatus('Falha antes de abrir a conexao com o host');
+    return socket;
   } catch (error) {
     console.error('[VoiceUP] Falha ao entrar na sala hospedada', error);
     setStatus('Nao foi possivel iniciar a sala hospedada');
@@ -2854,6 +3077,7 @@ if (audioSettingsPanel && !document.querySelector('#mic-test-panel')) {
   </section>`);
 }
 let micTestStream = null;
+let micTestRnnoiseSession = null;
 let micTestContext = null;
 let micTestFrame = 0;
 let micTestAudio = null;
@@ -2873,7 +3097,13 @@ const updateGlobalVolumeUi = () => {
   if (outputVolumeRange) outputVolumeRange.value = String(betaOutputVolume);
 };
 const applyInputVolume = () => {
-  const needsProcessedTrack = Math.abs(betaInputVolume - 100) >= 0.01 || noiseMode === 'enhanced';
+  if (noiseMode === 'rnnoise') {
+    if (betaRnnoiseSession?.track?.readyState === 'live') betaRnnoiseSession.setGain(betaInputVolume / 100);
+    else void refreshOutgoingMicrophone();
+    micTestRnnoiseSession?.setGain?.(betaInputVolume / 100);
+    return;
+  }
+  const needsProcessedTrack = Math.abs(betaInputVolume - 100) >= 0.01 || ['enhanced', 'studio'].includes(noiseMode);
   if (needsProcessedTrack !== Boolean(betaMicGainNode)) void refreshOutgoingMicrophone();
   else if (betaMicGainNode) betaMicGainNode.gain.value = betaInputVolume / 100;
 };
@@ -2945,6 +3175,8 @@ const stopMicTest = async () => {
   micTestAudio?.pause();
   if (micTestAudio) micTestAudio.srcObject = null;
   micTestAudio = null;
+  await micTestRnnoiseSession?.close?.().catch(() => {});
+  micTestRnnoiseSession = null;
   micTestStream?.getTracks().forEach((track) => track.stop());
   micTestStream = null;
   await micTestContext?.close().catch(() => {});
@@ -2960,15 +3192,29 @@ const startMicTest = async () => {
   isolateCallDuringMicTest();
   try {
     micTestStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints(), video: false });
+    let testedStream = micTestStream;
+    if (noiseMode === 'rnnoise') {
+      try {
+        const rawTestTrack = micTestStream.getAudioTracks()[0];
+        micTestRnnoiseSession = await window.voiceupRnnoise?.create?.(rawTestTrack, { gain: betaInputVolume / 100 });
+        if (!micTestRnnoiseSession?.track) throw new Error('RNNoise não criou o áudio de teste.');
+        testedStream = new MediaStream([micTestRnnoiseSession.track]);
+      } catch (error) {
+        micTestRnnoiseSession = null;
+        await micTestStream.getAudioTracks()[0]?.applyConstraints?.({ echoCancellation: true, noiseSuppression: true, autoGainControl: true }).catch(() => {});
+        window.voiceupAddDiagnostic?.('teste RNNoise', error?.message || error, 'rnnoise-engine.js');
+        toast('O teste manteve o filtro padrão porque o RNNoise não iniciou.');
+      }
+    }
     micTestContext = new AudioContext();
     await micTestContext.resume();
     const analyser = micTestContext.createAnalyser();
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = .55;
     const samples = new Uint8Array(analyser.fftSize);
-    micTestContext.createMediaStreamSource(micTestStream).connect(analyser);
+    micTestContext.createMediaStreamSource(testedStream).connect(analyser);
     micTestAudio = new Audio();
-    micTestAudio.srcObject = micTestStream;
+    micTestAudio.srcObject = testedStream;
     await applyMicTestMonitoring();
     micTestButton.textContent = betaT('audio.stopTest') || 'Parar teste';
     let testNoiseFloorDb = -70;

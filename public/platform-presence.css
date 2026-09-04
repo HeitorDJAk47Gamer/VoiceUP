@@ -1,0 +1,16 @@
+/* Shape identifies the app; color identifies presence. Icons never animate. */
+.platform-presence { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 18px; height: 18px; color: #45c878; vertical-align: middle; line-height: 1; }
+.platform-presence.status-idle { color: #efa83a; }
+.platform-presence.status-dnd { color: #ef5964; }
+.platform-presence svg { display: block; width: 100%; height: 100%; flex: none; }
+.member-presence-avatar, .channel-member-avatar, .call-member-visual { position: relative; }
+.member-presence-avatar > .platform-presence, .channel-member-avatar > .platform-presence, .call-member-visual > .platform-presence { --platform-badge-bg: var(--panel, #111827); position: absolute; right: -3px; bottom: -3px; z-index: 2; width: 22px; height: 22px; padding: 3px; border-radius: 7px; background: var(--platform-badge-bg); box-sizing: border-box; }
+.channel-member-avatar > .platform-presence { width: 17px; height: 17px; padding: 2px; right: -4px; bottom: -2px; }
+.call-member-visual > .platform-presence { width: 28px; height: 28px; padding: 4px; }
+.member-presence-avatar > .media-live-badge { bottom: auto; top: -6px; }
+#presence-status-button, #presence-status-button.status-idle, #presence-status-button.status-dnd { --platform-badge-bg: var(--night, #111827); width: 26px !important; height: 26px !important; background: var(--platform-badge-bg); border: 2px solid var(--platform-badge-bg); border-radius: 7px; }
+#presence-status-button > .platform-presence { width: 19px; height: 19px; }
+.presence-menu .platform-presence { width: 21px; height: 21px; }
+.member-avatar > .platform-presence { --platform-badge-bg: var(--surface, #171025); position: absolute; bottom: -3px; right: -3px; width: 22px; height: 22px; padding: 3px; border-radius: 6px; background: var(--platform-badge-bg); box-sizing: border-box; }
+.member-avatar { position: relative; overflow: visible; }
+.member-avatar img { border-radius: inherit; }

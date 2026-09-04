@@ -1,0 +1,27 @@
+VoiceUP RNNoise component
+=========================
+
+The bundled microphone noise suppressor uses the following open-source
+projects. Processing runs locally inside VoiceUP; these components do not
+upload microphone audio or contact an external service.
+
+RNNoise
+  Copyright Jean-Marc Valin, Amazon, Mozilla, Xiph.Org Foundation and
+  contributors. Distributed under the BSD 3-Clause license.
+  Source: https://github.com/xiph/rnnoise
+  License: LICENSE-rnnoise.txt
+
+@sapphi-red/web-noise-suppressor 0.4.0
+  Copyright sapphi-red. Distributed under the MIT license.
+  Source: https://github.com/sapphi-red/web-noise-suppressor
+  License: LICENSE-web-noise-suppressor.txt
+
+@shiguredo/rnnoise-wasm 2022.2.0
+  Distributed under the Apache License 2.0.
+  Source: https://github.com/shiguredo/rnnoise-wasm
+  License: LICENSE-shiguredo-rnnoise-wasm.txt
+
+The worklet was copied from the published
+@sapphi-red/web-noise-suppressor 0.4.0 package and renamed from
+workletProcessor.js to rnnoise-worklet.js. The WASM binaries were copied
+from the same published package without modification.

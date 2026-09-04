@@ -1,38 +1,88 @@
-# Política de versões do VoiceUP
+# Política de versões e releases do VoiceUP
 
-## Versões públicas
+## Numeração
 
-As versões públicas usam versionamento sem sufixo, por exemplo `1.1.0`.
-Localmente, são mantidas as três versões públicas mais recentes em `releases/`.
+Versões públicas usam versionamento sem sufixo, como 1.1.3. Correções
+compatíveis aumentam o último número; mudanças maiores aumentam o número do
+meio.
 
-O número da versão pública muda conforme o tamanho da atualização:
+Betas antecipam a próxima versão pública e usam -beta.N, por exemplo:
 
-- Correções, ajustes e poucas novidades: aumenta o último número. Exemplo:
-  `1.1.0` passa para `1.1.1`.
-- Atualização grande, com muitas novidades ou mudanças importantes: aumenta o
-  número do meio e reinicia o último. Exemplo: `1.1.1` passa para `1.2.0`.
+- 1.1.3-beta.1
+- 1.1.3-beta.2
+- 1.1.3
 
-O tamanho da atualização deve ser avaliado pelo conjunto das mudanças desde a
-última versão pública, e não pela quantidade de versões beta criadas.
+O número da beta sempre cresce para a mesma versão-alvo. Uma beta já gerada não
+é renomeada, porque a versão está gravada dentro dos executáveis.
 
-## Versões beta
+Na Microsoft Store, que aceita apenas quatro números, o último componente
+separa os canais. Assim, `1.1.3-beta.9` vira `1.1.3.9` no manifesto AppX e a
+estável `1.1.3` usa o número interno reservado `1.1.3.65535`. A beta seguinte
+de outra versão, como `1.1.4-beta.1`, volta a usar `1.1.4.1` e continua maior.
+O nome e a versão exibidos dentro do VoiceUP permanecem os valores SemVer.
 
-Toda beta usa exatamente a versão pública mais recente como base, seguida por
-`-beta.N`, em que `N` começa em 1 e cresce a cada novo teste.
+## Canais e retenção local
 
-Exemplo com `1.1.0` como versão pública atual:
+São mantidas até três releases públicas e, separadamente, até três betas mais
+recentes. Uma beta é experimental e pode receber correções antes de se tornar
+estável; uma release pública é o canal recomendado aos usuários.
 
-- `1.1.0-beta.1`
-- `1.1.0-beta.2`
-- `1.1.0-beta.3`
+## Requisitos para uma beta
 
-Ao publicar uma nova versão, por exemplo `1.2.0`, a contagem das betas reinicia:
+Antes de entregar uma beta para teste:
 
-- `1.2.0-beta.1`
+- Client, ServerHost e Cloud usam a mesma versão de protocolo;
+- dependências e arquivos JavaScript passam por auditoria e validação;
+- testes de atualização, sessões, salas, identidade, permissões e plugins
+  passam;
+- instaladores Client e ServerHost são gerados com identidades separadas;
+- uma execução básica confirma abertura, entrada em sala, texto e mídia;
+- notas registram mudanças conhecidas e limitações.
 
-Betas não ocupam as três vagas reservadas às versões públicas. Separadamente,
-são mantidas apenas as três versões beta mais recentes, considerando primeiro
-a versão pública-base e depois o número da beta.
+Betas locais podem ser não assinadas e devem ser identificadas como teste. Se
+forem distribuídas publicamente, aplicam-se também todos os requisitos de
+release pública.
 
-Betas antigas não devem ser renomeadas, pois a versão também está gravada dentro
-dos executáveis. Elas permanecem com o número que tinham quando foram compiladas.
+## Requisitos para uma release pública
+
+Uma tag pública só pode ser criada quando:
+
+- não há vulnerabilidade crítica conhecida sem tratamento;
+- o upgrade a partir da última estável preserva preferências e identidades de
+  instalação;
+- Client atual funciona com Cloud e ServerHost atuais;
+- o novo Client mantém o fallback documentado para servidores anteriores;
+- a compatibilidade com Cliente anterior foi testada ou a atualização mínima
+  foi declarada nas notas;
+- UPnP permanece desativado até consentimento explícito;
+- plugins externos permanecem bloqueados até aprovação de seu hash;
+- os pacotes de todas as plataformas constam em um manifesto Ed25519 assinado
+  pela chave pública fixada no aplicativo, com nome, versão, tamanho e SHA-256;
+- o instalador Windows mantém nome e identidade compatíveis com os anteriores;
+- hashes SHA-256, manifesto assinado e pacote Cloud sem dados privados são
+  publicados junto dos instaladores; Authenticode comercial é opcional.
+
+## Compatibilidade e segurança
+
+O appId, nome do produto e diretórios de dados do Client e do ServerHost não
+devem mudar em uma atualização normal. Assim, instalar uma nova versão por cima
+da anterior substitui o runtime Electron e preserva as preferências existentes.
+
+O novo Client usa fallback temporário para conversar com servidores antigos.
+Servidores novos aceitam identidades legadas ainda não protegidas; depois que
+uma identidade é vinculada à sua chave criptográfica, um Cliente antigo ou uma
+cópia com o mesmo ID não pode assumir essa identidade. Essa restrição de
+segurança prevalece sobre compatibilidade de downgrade.
+
+Mudanças incompatíveis exigem versão maior, migração explícita e aviso nas notas
+da release.
+
+## Rollback
+
+Se uma regressão grave aparecer, interrompa a distribuição, marque a release
+como não recomendada e publique uma correção com número novo. Não substitua
+silenciosamente um arquivo já publicado sob a mesma versão ou hash.
+
+O rollback nunca deve restaurar uma falha de segurança conhecida. Dados
+persistentes precisam ter backup ou migração reversível antes de qualquer
+alteração de formato.

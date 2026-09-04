@@ -1,10 +1,11 @@
 const os = require('node:os');
 const net = require('node:net');
+const fs = require('node:fs');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 
 const execFileAsync = promisify(execFile);
-const VIRTUAL_INTERFACE = /radmin|virtualbox|vmware|hyper-v|vethernet|tailscale|hamachi|zerotier|loopback|teredo|tunnel/i;
+const VIRTUAL_INTERFACE = /radmin|virtualbox|vmware|hyper-v|vethernet|docker|veth|virbr|br-|tailscale|hamachi|zerotier|loopback|teredo|tunnel|tun\d|tap\d|wg\d/i;
 
 function localNetworkUrls(port) {
   const addresses = [];
@@ -47,6 +48,35 @@ async function windowsDefaultIpv4Route() {
     routes.sort((left, right) => Number(left.virtual) - Number(right.virtual) || left.metric - right.metric);
     return routes[0] || null;
   } catch { return null; }
+}
+
+function parseLinuxRouteTable(routeTable, interfaces = os.networkInterfaces()) {
+  try {
+    const routes = String(routeTable || '').split(/\r?\n/).slice(1).flatMap((line) => {
+      const columns = line.trim().split(/\s+/);
+      if (columns.length < 8 || columns[1] !== '00000000' || columns[7] !== '00000000') return [];
+      const flags = Number.parseInt(columns[3], 16);
+      if (!Number.isFinite(flags) || (flags & 0x2) === 0 || !/^[a-f0-9]{8}$/i.test(columns[2])) return [];
+      const gateway = columns[2].match(/../g).reverse().map((part) => Number.parseInt(part, 16)).join('.');
+      const internalHost = (interfaces[columns[0]] || []).find((entry) => entry.family === 'IPv4' && !entry.internal)?.address || '';
+      if (!internalHost || net.isIP(gateway) !== 4) return [];
+      return [{ gateway, internalHost, metric: Number(columns[6]) || 99999, virtual: VIRTUAL_INTERFACE.test(columns[0]) }];
+    });
+    routes.sort((left, right) => Number(left.virtual) - Number(right.virtual) || left.metric - right.metric);
+    return routes[0] || null;
+  } catch { return null; }
+}
+
+function linuxDefaultIpv4Route() {
+  if (process.platform !== 'linux') return null;
+  try { return parseLinuxRouteTable(fs.readFileSync('/proc/net/route', 'utf8')); }
+  catch { return null; }
+}
+
+async function defaultIpv4Route() {
+  if (process.platform === 'win32') return windowsDefaultIpv4Route();
+  if (process.platform === 'linux') return linuxDefaultIpv4Route();
+  return null;
 }
 
 function mappedResult(base, mapping, method, close) {
@@ -101,7 +131,7 @@ async function openPublicPort(port, options = {}) {
         }
       }
     } catch { /* tenta NAT-PMP quando a descoberta UPnP expira */ }
-    const route = await windowsDefaultIpv4Route();
+    const route = await defaultIpv4Route();
     if (route) {
       const gateway = pmpNat(route.gateway, { ttl: 60 * 60 * 1000, description: String(options.description || 'VoiceUP').slice(0, 60), autoRefresh: true });
       try {
@@ -120,4 +150,4 @@ async function openPublicPort(port, options = {}) {
   }
 }
 
-module.exports = { localNetworkUrls, openPublicPort, addressScope };
+module.exports = { localNetworkUrls, openPublicPort, addressScope, linuxDefaultIpv4Route, parseLinuxRouteTable };

@@ -1,72 +1,18 @@
 (() => {
   'use strict';
 
-  const installedVersion = String(window.voiceupVersion || '1.1.2');
+  const installedVersion = String(window.voiceupVersion || '1.2.0');
   const version = installedVersion;
   const seenKey = 'voiceup-release-notes-seen-v1';
   const locale = () => ['pt-BR', 'en-US', 'es-ES', 'fr-FR'].includes(document.documentElement.lang) ? document.documentElement.lang : 'pt-BR';
-  const copy = {
-    'pt-BR': {
-      eyebrow: 'VERSÃO {version}', title: 'Novidades da v1.1.2', subtitle: 'Esta lista reúne somente as mudanças feitas desde a v1.1.1.', close: 'Entendi', reopen: 'Novidades da {version}', auto: 'Salvamento automático',
-      notes: [
-        'Transmissões — várias lives e câmeras podem permanecer ativas ao mesmo tempo; cada pessoa escolhe qual transmissão assistir.',
-        'Mídia — controles locais de volume, saída da live, tela cheia corrigida, troca de fonte e prévia redimensionável.',
-        'Áudio — voz da call e áudio da transmissão foram separados; a live nunca inclui o microfone e continua audível mesmo com a call mutada.',
-        'Câmera — seleção e prévia nas configurações, com recuperação mais clara quando outro aplicativo estiver usando o dispositivo.',
-        'Conexão — reconexão mais transparente, P2P direto por convite e diagnóstico de acesso público por UPnP/NAT-PMP.',
-        'Chat — respostas, reações, fixação, exclusão própria, formatação, GIFs, embeds, menções destacadas e indicador de digitação.',
-        'Presença — status Online, Ausente e Não perturbe, ping em barras e compatibilidade visual com Clients antigos.',
-        'ServerHost — editor de salas/canais, limites de call, salas privadas, moderação temporária e cluster primário/secundário com failover.',
-        'Cloud — histórico e relatórios agora podem usar SQLite em disco, com migração automática do JSON anterior e limpeza configurável.',
-        'Estabilidade — correções de áudio entre versões, de transmissões simultâneas, barras de rolagem, temas e controles de tela cheia.'
-      ]
-    },
-    'en-US': {
-      eyebrow: 'VERSION {version}', title: 'What is new in v1.1.2', subtitle: 'This list contains only changes made since v1.1.1.', close: 'Got it', reopen: 'What is new in {version}', auto: 'Autosave on',
-      notes: [
-        'Streaming — multiple screen shares and cameras can stay active together; each person chooses which stream to watch.',
-        'Media — local volume, leave-stream controls, corrected fullscreen, source switching and a resizable preview.',
-        'Audio — call voice and stream audio are separate; streams never include the microphone and remain audible while the call is muted.',
-        'Camera — settings selection and preview, with clearer recovery when another app is using the device.',
-        'Connection — more transparent reconnect, direct P2P invites and public-access diagnostics through UPnP/NAT-PMP.',
-        'Chat — replies, reactions, pins, author deletion, formatting, GIFs, embeds, highlighted mentions and typing indicators.',
-        'Presence — Online, Idle and Do Not Disturb, signal-style ping and visual compatibility with older Clients.',
-        'ServerHost — room/channel editor, call limits, private rooms, temporary moderation and primary/secondary failover.',
-        'Cloud — chat history and reports can now use disk-backed SQLite with automatic legacy JSON migration and configurable cleanup.',
-        'Stability — fixes for cross-version audio, simultaneous streams, scrollbars, themes and fullscreen controls.'
-      ]
-    },
-    'es-ES': {
-      eyebrow: 'VERSIÓN {version}', title: 'Novedades de la v1.1.2', subtitle: 'Esta lista contiene solo los cambios realizados desde la v1.1.1.', close: 'Entendido', reopen: 'Novedades de {version}', auto: 'Guardado automático',
-      notes: [
-        'Transmisiones — varias pantallas y cámaras pueden permanecer activas; cada persona elige qué transmisión ver.',
-        'Multimedia — volumen local, salida de transmisión, pantalla completa corregida, cambio de fuente y vista previa redimensionable.',
-        'Audio — voz y transmisión están separadas; la live no incluye el micrófono y sigue audible con la llamada silenciada.',
-        'Cámara — selección y vista previa en ajustes, con recuperación más clara si otra aplicación usa el dispositivo.',
-        'Conexión — reconexión más transparente, invitaciones P2P directas y diagnóstico público por UPnP/NAT-PMP.',
-        'Chat — respuestas, reacciones, fijados, borrado propio, formato, GIF, embeds, menciones e indicador de escritura.',
-        'Presencia — En línea, Ausente y No molestar, ping por barras y compatibilidad con Clients antiguos.',
-        'ServerHost — editor de salas/canales, límites, salas privadas, moderación temporal y failover primario/secundario.',
-        'Cloud — historial y reportes pueden usar SQLite en disco con migración automática del JSON anterior.',
-        'Estabilidad — correcciones para audio entre versiones, transmisiones simultáneas, barras, temas y pantalla completa.'
-      ]
-    },
-    'fr-FR': {
-      eyebrow: 'VERSION {version}', title: 'Nouveautés de la v1.1.2', subtitle: 'Cette liste contient uniquement les changements effectués depuis la v1.1.1.', close: 'Compris', reopen: 'Nouveautés de {version}', auto: 'Enregistrement auto',
-      notes: [
-        'Partages — plusieurs écrans et caméras peuvent rester actifs; chacun choisit le direct à regarder.',
-        'Média — volume local, sortie du direct, plein écran corrigé, changement de source et aperçu redimensionnable.',
-        'Audio — voix et direct sont séparés; le direct n’inclut jamais le micro et reste audible quand l’appel est coupé.',
-        'Caméra — sélection et aperçu dans les réglages, avec une récupération plus claire si une autre app utilise la caméra.',
-        'Connexion — reconnexion plus transparente, invitations P2P directes et diagnostic UPnP/NAT-PMP.',
-        'Chat — réponses, réactions, épingles, suppression par auteur, formatage, GIF, embeds, mentions et saisie.',
-        'Présence — En ligne, Absent et Ne pas déranger, ping en barres et compatibilité avec les anciens Clients.',
-        'ServerHost — éditeur de salons/canaux, limites, salons privés, modération temporaire et failover primaire/secondaire.',
-        'Cloud — historique et rapports peuvent utiliser SQLite sur disque avec migration automatique des anciens JSON.',
-        'Stabilité — corrections audio entre versions, partages simultanés, barres, thèmes et plein écran.'
-      ]
-    }
+  const labels = {
+    'pt-BR': { eyebrow: 'VERSÃO {version}', close: 'Entendi', reopen: 'Novidades da {version}', auto: 'Salvamento automático' },
+    'en-US': { eyebrow: 'VERSION {version}', close: 'Got it', reopen: 'What is new in {version}', auto: 'Autosave on' },
+    'es-ES': { eyebrow: 'VERSIÓN {version}', close: 'Entendido', reopen: 'Novedades de {version}', auto: 'Guardado automático' },
+    'fr-FR': { eyebrow: 'VERSION {version}', close: 'Compris', reopen: 'Nouveautés de {version}', auto: 'Enregistrement auto' }
   };
+  const copy = Object.fromEntries(Object.entries(labels).map(([language, text]) =>
+    [language, { ...text, ...window.voiceupReleaseHistory.locales[language] }]));
 
   document.body.insertAdjacentHTML('beforeend', `<div id="release-notes-modal" class="release-notes-modal hidden" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
     <article class="release-notes-card">

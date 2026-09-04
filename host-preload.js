@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('voiceupServer', {
   openPath: (target) => ipcRenderer.invoke('server:open-path', target),
   settings: () => ipcRenderer.invoke('server:settings'),
   saveSettings: (settings) => ipcRenderer.invoke('server:save-settings', settings),
+  restartApplication: () => ipcRenderer.invoke('window:restart'),
   rooms: () => ipcRenderer.invoke('server:rooms'),
   importDiscordTemplate: (source, roomId, roomName) => ipcRenderer.invoke('server:import-discord-template', { source, roomId, roomName }),
   saveRoom: (room) => ipcRenderer.invoke('server:save-room', room),

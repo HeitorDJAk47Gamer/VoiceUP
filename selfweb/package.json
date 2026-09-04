@@ -1,0 +1,12 @@
+{
+  "name": "voiceup-selfweb",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Edição local e portátil do VoiceUP para navegador, sem Electron no download.",
+  "scripts": {
+    "build": "node build.js",
+    "test": "node --test tests/*.test.js",
+    "preview": "node serve.js",
+    "test:runtime": "node run-runtime-test.js"
+  }
+}

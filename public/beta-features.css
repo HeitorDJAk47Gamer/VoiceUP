@@ -1,4 +1,4 @@
-/* VoiceUP 1.1.2-beta.8 — interaction and workspace layer */
+/* VoiceUP 1.1.3-beta.10 — interaction and workspace layer */
 
 /* Shared icon language */
 .message-action-toolbar svg,.panel-utilities svg,.server-rail svg,.media-layout-toolbar>svg,
@@ -73,7 +73,7 @@ body[data-central-mode="server"] .stage{transition:opacity .2s,transform .2s}bod
 @media(max-width:980px){.server-rail,.right-panel-resizer,.panel-utilities #right-panel-collapse,.right-panel-reopen{display:none!important}.shortcut-grid{grid-template-columns:1fr}.message-action-toolbar{opacity:1;pointer-events:auto;transform:none}.central-context-badge{display:none}.panel-tabs{grid-template-columns:1fr 1fr auto!important}}
 @media(max-width:650px){.reconnect-banner{top:16px;width:calc(100vw - 24px);min-width:0}.media-layout-toolbar{left:7px;top:7px}.message-action-toolbar{position:static;grid-column:2;justify-self:end;margin-top:4px}.message{grid-template-columns:24px minmax(0,1fr)!important}.reply-composer{margin-inline:8px}.pinned-messages-popover{left:10px!important;right:auto!important}}
 @media(prefers-reduced-motion:reduce){.reconnect-banner i{animation:none}.message-action-toolbar,.server-rail button,.feature-switch span,.feature-switch span::after{transition:none}}
-/* Beta 1.1.2-beta.8: motion polish. Every transition is disabled by the existing
+/* Beta 1.1.3-beta.9: motion polish. Every transition is disabled by the existing
    reduced-motion preference in beta-ui.js. */
 @keyframes voiceup-panel-enter{from{opacity:0;transform:translateY(7px) scale(.992)}to{opacity:1;transform:none}}
 @keyframes voiceup-media-enter{from{opacity:0;transform:scale(.965)}to{opacity:1;transform:none}}

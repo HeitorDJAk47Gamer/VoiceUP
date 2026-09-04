@@ -1,0 +1,15 @@
+'use strict';
+const fs=require('node:fs');
+const path=require('node:path');
+const root=path.resolve(__dirname,'..');
+const folder=path.resolve(process.argv[2]||'release-assets');
+const version=require('../package.json').version;
+const out=path.join(root,'deploy/shardcloud');
+fs.mkdirSync(path.join(out,'downloads'),{recursive:true});
+for(const name of ['release-trust.js','release-integrity.js'])fs.copyFileSync(path.join(root,'public',name),path.join(out,name));
+for(const name of [`VoiceUP-${version}-android.apk`,'VoiceUP-SelfWeb.html'])fs.copyFileSync(path.join(folder,name),path.join(out,'downloads',name));
+const manifest=path.join(folder,`VoiceUP-Downloads-${version}.json`);
+const catalog=JSON.parse(fs.readFileSync(manifest,'utf8'));
+require('../public/release-integrity').verifySync(catalog,version);
+fs.copyFileSync(manifest,path.join(out,'downloads/release-downloads.json'));
+console.log(`Downloads do Cloud ${version} preparados com manifesto assinado. Nenhum dado operacional foi copiado.`);

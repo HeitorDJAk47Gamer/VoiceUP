@@ -3,10 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src https://voiceup.shardweb.app; frame-src 'none'">
   <title>VoiceUP Server</title>
   <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="../public/platform-presence.css">
   <style>
     .host-server-icon-setting>div{grid-column:2;grid-row:1/3;display:flex;align-items:center;gap:10px;min-width:0}.host-server-icon-setting>div>span:last-child{display:grid;gap:6px;min-width:0}.host-server-icon-setting input[type=file]{width:100%;min-width:0;color:var(--muted);font-size:10px}.host-server-icon-preview{width:52px;height:52px;display:grid;place-items:center;overflow:hidden;flex:0 0 52px;border-radius:14px;background:var(--surface-3);color:var(--accent);font-size:18px;font-weight:900;border:1px solid var(--line)}.host-server-icon-preview img{width:100%;height:100%;object-fit:cover}@media(max-width:620px){.host-server-icon-setting>div{grid-column:1;grid-row:auto;margin-top:8px}}
+    .hardware-restart{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:5px 0 8px;padding:11px 12px;border:1px solid color-mix(in srgb,var(--accent) 42%,var(--line));border-radius:10px;background:color-mix(in srgb,var(--accent) 8%,var(--bg))}.hardware-restart>span{color:var(--muted);font-size:10px;line-height:1.45}@media(max-width:620px){.hardware-restart{align-items:stretch;flex-direction:column}.hardware-restart .button{width:100%}}
   </style>
 </head>
 <body data-theme="ocean">
@@ -149,7 +152,9 @@
           <label><span>Tema do painel</span><small>Altera apenas a aparência do ServerHost.</small><select id="host-theme"><option value="ocean">Oceano</option><option value="violet">Violeta</option><option value="forest">Floresta</option><option value="graphite">Grafite</option></select></label>
           <label class="host-server-icon-setting"><span>Imagem do servidor</span><small>É exibida para quem entrar e nos atalhos salvos do VoiceUP. Arquivos de imagem são convertidos automaticamente, mesmo sem extensão.</small><div><span id="host-server-icon-preview" class="host-server-icon-preview" aria-hidden="true">V</span><span><input id="host-server-icon" type="file"><button id="host-server-icon-clear" class="button secondary" type="button">Usar ícone padrão</button></span></div></label>
           <label><span>Ao clicar no X</span><small>Defina se o servidor continua ativo na bandeja.</small><select id="host-close-behavior"><option value="tray">Manter ativo na bandeja</option><option value="ask">Perguntar o que fazer</option><option value="quit">Encerrar o programa</option></select></label>
-          <label><span>Acesso público automático</span><small>Tenta abrir a porta deste ServerHost no roteador por UPnP ou NAT-PMP. Não contorna CGNAT da operadora.</small><span class="switch"><input id="public-access-automatic" type="checkbox" checked><i></i></span></label>
+          <label><span>Aceleração de hardware</span><small>Ativada por padrão. Desative apenas se o painel apresentar tela preta, cintilação ou travamentos de GPU. A alteração exige reiniciar.</small><span class="switch"><input id="host-hardware-acceleration" type="checkbox" checked><i></i></span></label>
+          <div id="host-hardware-restart" class="hardware-restart hidden" role="status"><span>A alteração está salva e será aplicada após reiniciar o ServerHost.</span><button id="host-hardware-restart-button" class="button primary" type="button">Reiniciar agora</button></div>
+            <label><span>Acesso público automático</span><small>Desativado por padrão. Ao ativar, você verá um aviso antes de o VoiceUP tentar abrir a porta por UPnP ou NAT-PMP.</small><span class="switch"><input id="public-access-automatic" type="checkbox"><i></i></span></label>
           <label><span>Guardar mensagens por</span><small>0 mantém até o limite por sala sem apagar por idade.</small><input id="chat-retention-days" type="number" min="0" max="3650" value="30"><em>dias</em></label>
           <label><span>Máximo por sala</span><small>Mensagens antigas excedentes são removidas automaticamente.</small><input id="chat-max-per-room" type="number" min="50" max="5000" value="300"><em>mensagens</em></label>
           <div class="settings-action"><span class="autosave-status">● Salvamento automático</span><button id="save-settings" class="button primary" type="button">Salvar configurações</button></div>
@@ -190,6 +195,8 @@
       </section>
     </main>
   </div>
+  <script src="../public/platform-presence.js"></script>
+  <script src="../public/release-history.js"></script>
   <script src="./renderer.js"></script>
 </body>
 </html>

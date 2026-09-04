@@ -1,0 +1,41 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
+buildscript {
+
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.7.2'
+        classpath 'com.google.gms:google-services:4.4.2'
+
+        // NOTE: Do not place your application dependencies here; they belong
+        // in the individual module build.gradle files
+    }
+}
+
+apply from: "variables.gradle"
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+// Gradle itself remains on Java 17, while Capacitor 7 compiles its Android
+// sources as Java 21. CI/local builds can point this at any JDK 21+ compiler.
+def voiceupCompilerHome = System.getenv("VOICEUP_JAVA_COMPILER_HOME")
+if (voiceupCompilerHome) {
+    subprojects {
+        tasks.withType(JavaCompile).configureEach {
+            options.fork = true
+            options.forkOptions.executable = new File(voiceupCompilerHome, "bin/javac.exe").absolutePath
+        }
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}

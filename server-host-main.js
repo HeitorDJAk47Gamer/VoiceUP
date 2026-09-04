@@ -3,9 +3,16 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const crypto = require('crypto');
+const { fileURLToPath } = require('node:url');
 const { startSignalingServer, normalizeRoomLayout, hashRoomPassword } = require('./signaling-server');
 const { registerUpdateHandlers } = require('./update-helper');
 const { localNetworkUrls, openPublicPort } = require('./network-access');
+
+// O ServerHost é um aplicativo diferente do Client.  Definir nome e identidade
+// antes de ler userData impede que ambos compartilhem a mesma pasta de perfil,
+// ícone de tarefa ou instância quando estiverem instalados no mesmo computador.
+app.setName('VoiceUP Server');
+if (process.platform === 'win32') app.setAppUserModelId('com.goatgank.voiceup.server');
 
 // Estes argumentos permitem executar mais de um ServerHost no mesmo PC sem
 // compartilharem porta, bans, configurações, plugins ou músicas. São úteis
@@ -48,7 +55,13 @@ let pluginStateFile = '';
 let publicPortMapping = null;
 let publicAccessGeneration = 0;
 let publicAccessState = { status: 'idle', mapped: false, message: 'Acesso automático ainda não verificado.' };
-let hostSettings = { closeBehavior: 'tray', theme: 'ocean', serverIcon: '', rooms: [], storage: { retentionDays: 30, maxPerRoom: 300 }, publicAccess: { automatic: true }, cluster: { enabled: false, role: 'primary', primaryUrl: '', publicUrl: '', secret: '', nodeId: '', capacity: 100, weight: 1, failover: true, smartDistribution: true, heartbeatMs: 3000 } };
+let hardwareAccelerationAtStartup = true;
+const HOST_ENTRY = path.join(__dirname, 'host', 'index.html');
+const MUSIC_BOT_ENTRY = path.join(__dirname, 'host', 'music-bot.html');
+const APP_ICON = path.join(__dirname, 'assets', process.platform === 'win32' ? 'voiceup-icon.ico' : 'voiceup-logo-2d.png');
+const musicBotToken = crypto.randomBytes(32).toString('hex');
+const defaultHostCloseBehavior = () => process.platform === 'linux' ? 'ask' : 'tray';
+let hostSettings = { closeBehavior: defaultHostCloseBehavior(), theme: 'ocean', serverIcon: '', hardwareAcceleration: true, rooms: [], storage: { retentionDays: 30, maxPerRoom: 300 }, publicAccess: { automatic: false, consentVersion: 0 }, cluster: { enabled: false, role: 'primary', primaryUrl: '', publicUrl: '', secret: '', nodeId: '', capacity: 100, weight: 1, failover: true, smartDistribution: true, heartbeatMs: 3000 } };
 
 function normalizeServerIcon(value) {
   const icon = String(value || '');
@@ -56,21 +69,94 @@ function normalizeServerIcon(value) {
 }
 
 const settingsPath = () => path.join(app.getPath('userData'), 'server-settings.json');
+try {
+  const startupSettings = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
+  hardwareAccelerationAtStartup = startupSettings.hardwareAcceleration !== false;
+} catch { /* first start keeps acceleration enabled */ }
+if (!hardwareAccelerationAtStartup) app.disableHardwareAcceleration();
+const isTrustedFileUrl = (value, expectedFile) => {
+  try {
+    const target = new URL(String(value || ''));
+    return target.protocol === 'file:' && path.resolve(fileURLToPath(target)) === path.resolve(expectedFile);
+  } catch { return false; }
+};
+const isTrustedWindowEvent = (event, targetWindow, expectedFile) => Boolean(
+  targetWindow && !targetWindow.isDestroyed() && event?.sender === targetWindow.webContents &&
+  isTrustedFileUrl(event?.senderFrame?.url || event.sender.getURL(), expectedFile)
+);
+const isTrustedHostEvent = (event) => isTrustedWindowEvent(event, mainWindow, HOST_ENTRY);
+const isTrustedMusicBotEvent = (event) => isTrustedWindowEvent(event, musicBotWindow, MUSIC_BOT_ENTRY);
+const secureHostHandle = (channel, handler) => ipcMain.handle(channel, (event, ...args) => {
+  if (!isTrustedHostEvent(event)) throw new Error('Solicitação bloqueada pelo VoiceUP Server.');
+  return handler(event, ...args);
+});
+const secureMusicBotHandle = (channel, handler) => ipcMain.handle(channel, (event, ...args) => {
+  if (!isTrustedMusicBotEvent(event)) throw new Error('Solicitação do bot bloqueada pelo VoiceUP Server.');
+  return handler(event, ...args);
+});
+const lockWindowNavigation = (window, expectedFile) => {
+  window.webContents.on('will-navigate', (event, targetUrl) => { if (!isTrustedFileUrl(targetUrl, expectedFile)) event.preventDefault(); });
+  window.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+};
+
+// Versões antigas do ServerHost usavam a mesma pasta padrão do Client
+// ("voiceup"). Na primeira abertura da identidade nova, trazemos somente os
+// arquivos exclusivos do host sem tocar em dados do Client e sem sobrescrever
+// nenhum dado que já exista no novo perfil.
+function migrateLegacyServerProfile() {
+  if (dataDirectory || fs.existsSync(settingsPath())) return;
+  const target = app.getPath('userData');
+  const legacyFolders = [
+    path.join(app.getPath('appData'), 'voiceup'),
+    path.join(app.getPath('appData'), 'VoiceUP')
+  ];
+  const serverFiles = ['server-settings.json', 'bans.json', 'chat-history.json', 'bug-reports.json', 'plugin-settings.json'];
+  for (const legacy of legacyFolders) {
+    if (!fs.existsSync(legacy) || path.resolve(legacy).toLowerCase() === path.resolve(target).toLowerCase()) continue;
+    const hasServerData = serverFiles.some((name) => fs.existsSync(path.join(legacy, name)))
+      || fs.existsSync(path.join(legacy, 'plugins')) || fs.existsSync(path.join(legacy, 'music'));
+    if (!hasServerData) continue;
+    try {
+      fs.mkdirSync(target, { recursive: true });
+      for (const name of serverFiles) {
+        const source = path.join(legacy, name);
+        const destination = path.join(target, name);
+        if (fs.existsSync(source) && !fs.existsSync(destination)) fs.copyFileSync(source, destination);
+      }
+      for (const name of ['plugins', 'music']) {
+        const source = path.join(legacy, name);
+        const destination = path.join(target, name);
+        if (fs.existsSync(source) && !fs.existsSync(destination)) fs.cpSync(source, destination, { recursive: true });
+      }
+    } catch { /* A nova pasta vazia ainda funciona se a migração falhar. */ }
+    return;
+  }
+}
 function loadSettings() {
   try { hostSettings = { ...hostSettings, ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) }; } catch { /* first run */ }
+  hostSettings.closeBehavior = ['tray', 'ask', 'quit'].includes(hostSettings.closeBehavior) ? hostSettings.closeBehavior : defaultHostCloseBehavior();
   hostSettings.rooms = (Array.isArray(hostSettings.rooms) ? hostSettings.rooms : []).map((room) => normalizeRoomLayout(room)).filter((room) => room.id);
   hostSettings.storage = { retentionDays: 30, maxPerRoom: 300, ...(hostSettings.storage || {}) };
   hostSettings.storage.retentionDays = Math.max(0, Math.min(3650, Math.round(Number(hostSettings.storage.retentionDays) || 0)));
   hostSettings.storage.maxPerRoom = Math.max(50, Math.min(5000, Math.round(Number(hostSettings.storage.maxPerRoom) || 300)));
-  hostSettings.publicAccess = { automatic: true, ...(hostSettings.publicAccess || {}) };
-  hostSettings.publicAccess.automatic = hostSettings.publicAccess.automatic !== false;
+  hostSettings.publicAccess = { automatic: false, consentVersion: 0, ...(hostSettings.publicAccess || {}) };
+  hostSettings.publicAccess.consentVersion = Number(hostSettings.publicAccess.consentVersion) >= 1 ? 1 : 0;
+  hostSettings.publicAccess.automatic = hostSettings.publicAccess.consentVersion >= 1 && hostSettings.publicAccess.automatic === true;
   hostSettings.serverIcon = normalizeServerIcon(hostSettings.serverIcon);
+  hostSettings.hardwareAcceleration = hostSettings.hardwareAcceleration !== false;
   hostSettings.cluster = { enabled: false, role: 'primary', primaryUrl: '', publicUrl: '', secret: '', nodeId: '', capacity: 100, weight: 1, failover: true, smartDistribution: true, heartbeatMs: 3000, ...(hostSettings.cluster || {}) };
   if (!hostSettings.cluster.nodeId) hostSettings.cluster.nodeId = `host-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
   if (!hostSettings.cluster.secret) hostSettings.cluster.secret = crypto.randomBytes(18).toString('hex');
   saveSettings();
 }
 function saveSettings() { try { fs.writeFileSync(settingsPath(), JSON.stringify(hostSettings, null, 2), 'utf8'); } catch { /* optional preference */ } }
+const publicHostSettings = () => ({
+  ...hostSettings,
+  hardwareAcceleration: hostSettings.hardwareAcceleration !== false,
+  hardwareAccelerationActive: hardwareAccelerationAtStartup,
+  restartRequired: (hostSettings.hardwareAcceleration !== false) !== hardwareAccelerationAtStartup
+});
 function publicRooms() { return hostSettings.rooms.map(({ passwordHash, ...room }) => ({ ...room, private: Boolean(passwordHash) })); }
 function fileSize(target) { try { return fs.statSync(target).size; } catch { return 0; } }
 function directorySize(target) {
@@ -95,6 +181,8 @@ function categorizedStorage() {
   const total = directorySize(userData);
   return { totalBytes: total, categories: { ...categories, other: Math.max(0, total - known) } };
 }
+const sha256File = (target) => { try { return crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex'); } catch { return ''; } };
+const officialPluginHashes = () => ['dados.js', 'musica.js', 'xp-chat.js'].map((file) => sha256File(path.join(__dirname, 'plugins', file))).filter(Boolean);
 function addresses() { return localNetworkUrls(hostPort); }
 function serializablePublicAccess(value = {}) {
   const { close: _close, ...snapshot } = value || {};
@@ -168,12 +256,33 @@ function revealMainWindow() {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show(); mainWindow.focus();
 }
+function createServerTray() {
+  if (tray) return true;
+  try {
+    tray = new Tray(APP_ICON);
+    tray.setToolTip('VoiceUp Server - ativo');
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'Abrir painel', click: revealMainWindow },
+      { label: 'Iniciar servidor', click: () => startHostedSignaling().catch(() => {}) },
+      { label: 'Desligar servidor', click: () => stopHostedSignaling().catch(() => {}) },
+      { type: 'separator' },
+      { label: 'Encerrar programa', click: () => { isQuitting = true; app.quit(); } }
+    ]));
+    tray.on('double-click', revealMainWindow);
+    return true;
+  } catch (error) {
+    tray = null;
+    console.warn('A bandeja do sistema não está disponível neste ambiente:', error?.message || error);
+    return false;
+  }
+}
 
 async function sendMusicBotCommand(command) {
   if (!musicBotWindow || musicBotWindow.isDestroyed()) {
     musicBotReady = false;
-    musicBotWindow = new BrowserWindow({ show: false, webPreferences: { preload: path.join(__dirname, 'music-bot-preload.js'), contextIsolation: true, nodeIntegration: false } });
-    await musicBotWindow.loadFile(path.join(__dirname, 'host', 'music-bot.html'), { query: { port: String(hostPort) } });
+    musicBotWindow = new BrowserWindow({ show: false, webPreferences: { preload: path.join(__dirname, 'music-bot-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, allowRunningInsecureContent: false } });
+    lockWindowNavigation(musicBotWindow, MUSIC_BOT_ENTRY);
+    await musicBotWindow.loadFile(MUSIC_BOT_ENTRY, { query: { port: String(hostPort) } });
     musicBotWindow.on('closed', () => { musicBotWindow = null; musicBotReady = false; });
   }
   if (!musicBotReady) { pendingMusicCommands.push(command); return; }
@@ -183,6 +292,7 @@ async function startHostedSignaling() {
   if (signaling) return { ok: true, message: 'Servidor já está online.' };
   signaling = await startSignalingServer(hostPort, {
     pluginDirectories: [pluginFolder, portablePluginFolder, path.join(__dirname, 'plugins')],
+    trustedPluginHashes: officialPluginHashes(),
     musicDirectory: musicFolder,
     pluginStateFile,
     bansFile: path.join(app.getPath('userData'), 'bans.json'),
@@ -190,9 +300,12 @@ async function startHostedSignaling() {
     reportsFile: path.join(app.getPath('userData'), 'bug-reports.json'),
     chatRetentionDays: hostSettings.storage.retentionDays,
     chatMaxPerRoom: hostSettings.storage.maxPerRoom,
+    version: app.getVersion(),
     serverIcon: hostSettings.serverIcon,
     roomLayouts: hostSettings.rooms,
     cluster: hostSettings.cluster,
+    botToken: musicBotToken,
+    identityFile: path.join(app.getPath('userData'), 'client-identities.json'),
     onPluginEvent: (event) => { if (event?.event === 'music-bot') sendMusicBotCommand(event.payload).catch(() => {}); }
   });
   void refreshPublicMapping();
@@ -214,9 +327,10 @@ async function stopHostedSignaling() {
 async function restartHostedSignaling() { await stopHostedSignaling(); return startHostedSignaling(); }
 
 async function openWindow() {
+  migrateLegacyServerProfile();
   loadSettings();
   pluginFolder = path.join(app.getPath('userData'), 'plugins');
-  portablePluginFolder = path.join(path.dirname(process.execPath), 'plugins');
+  portablePluginFolder = process.platform === 'linux' ? pluginFolder : path.join(path.dirname(process.execPath), 'plugins');
   musicFolder = path.join(app.getPath('userData'), 'music');
   pluginStateFile = path.join(app.getPath('userData'), 'plugin-settings.json');
   fs.mkdirSync(pluginFolder, { recursive: true }); fs.mkdirSync(musicFolder, { recursive: true });
@@ -228,7 +342,7 @@ async function openWindow() {
   const bundledMusicReadme = path.join(__dirname, 'music', 'README.md');
   if (fs.existsSync(bundledMusicReadme)) fs.copyFileSync(bundledMusicReadme, path.join(musicFolder, 'README.md'));
   await startHostedSignaling();
-  mainWindow = new BrowserWindow({ width: 960, height: 800, minWidth: 680, minHeight: 600, title: 'VoiceUp Server', icon: path.join(__dirname, 'assets', 'voiceup-icon.ico'), backgroundColor: '#101522', autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'host-preload.js'), contextIsolation: true, nodeIntegration: false } });
+  mainWindow = new BrowserWindow({ width: 960, height: 800, minWidth: 680, minHeight: 600, title: 'VoiceUp Server', icon: APP_ICON, backgroundColor: '#101522', autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'host-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, allowRunningInsecureContent: false } });
   mainWindow.on('close', (event) => {
     if (isQuitting) return;
     if (hostSettings.closeBehavior === 'quit') { event.preventDefault(); isQuitting = true; app.quit(); return; }
@@ -243,25 +357,17 @@ async function openWindow() {
     mainWindow.hide();
   });
   mainWindow.on('closed', () => { mainWindow = null; closePromptOpen = false; });
-  await mainWindow.loadFile(path.join(__dirname, 'host', 'index.html'));
-  tray = new Tray(path.join(__dirname, 'assets', 'voiceup-icon.ico'));
-  tray.setToolTip('VoiceUp Server - ativo');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Abrir painel', click: revealMainWindow },
-    { label: 'Iniciar servidor', click: () => startHostedSignaling().catch(() => {}) },
-    { label: 'Desligar servidor', click: () => stopHostedSignaling().catch(() => {}) },
-    { type: 'separator' },
-    { label: 'Encerrar programa', click: () => { isQuitting = true; app.quit(); } }
-  ]));
-  tray.on('double-click', revealMainWindow);
+  lockWindowNavigation(mainWindow, HOST_ENTRY);
+  await mainWindow.loadFile(HOST_ENTRY);
+  if (hostSettings.closeBehavior === 'tray' && !createServerTray()) hostSettings.closeBehavior = 'ask';
 }
 
-ipcMain.handle('server-info', () => {
+secureHostHandle('server-info', () => {
   const urls = addresses(); const publicUrl = publicAccessState.scope === 'public' ? publicAccessState.publicUrl : '';
   const host = publicUrl || urls[0] || `http://localhost:${hostPort}`;
   return { port: hostPort, urls, publicUrl, publicAccess: publicAccessState, connectionCode: `VU1:${Buffer.from(JSON.stringify({ host })).toString('base64')}`, pluginFolder, portablePluginFolder, musicFolder, online: Boolean(signaling), version: app.getVersion() };
 });
-ipcMain.handle('server-stats', () => {
+secureHostHandle('server-stats', () => {
   const now = process.hrtime.bigint(); const usage = process.cpuUsage(lastCpu); const elapsedMicros = Number(now - lastCpuAt) / 1000;
   lastCpu = process.cpuUsage(); lastCpuAt = now;
   const cpuPercent = elapsedMicros > 0 ? Math.min(100, Math.round(((usage.user + usage.system) / elapsedMicros) * 1000) / 10) : 0;
@@ -271,14 +377,14 @@ ipcMain.handle('server-stats', () => {
   const stats = signaling?.getStats?.() || { uptimeSeconds: 0, participants: 0, rooms: 0, averagePing: null, events: { signals: 0 }, logs: [{ time: new Date().toLocaleTimeString('pt-BR'), level: 'info', message: 'Servidor desligado.' }], plugins: [], pluginErrors: [], members: [], bans: [], reports: [] };
   return { ...stats, storage: { ...(stats.storage || {}), ...categorizedStorage(), policy: hostSettings.storage }, publicAccess: publicAccessState, port: hostPort, online: Boolean(signaling), cpuPercent, memoryMb, heapMb: Math.round(memory.heapUsed / 1024 / 1024) };
 });
-ipcMain.handle('server:moderate', (_event, { action, id, durationMinutes, reason } = {}) => {
+secureHostHandle('server:moderate', (_event, { action, id, durationMinutes, reason } = {}) => {
   if (!signaling) return { ok: false, message: 'O servidor está desligado.' };
   if (action === 'kick') return signaling.kick(id);
   if (action === 'ban') return signaling.ban(id, { durationMinutes, reason });
   return { ok: false, message: 'Ação inválida.' };
 });
-ipcMain.handle('server:unban', (_event, clientId) => signaling ? signaling.unban(clientId) : { ok: false, message: 'O servidor está desligado.' });
-ipcMain.handle('server:control', async (_event, action) => {
+secureHostHandle('server:unban', (_event, clientId) => signaling ? signaling.unban(clientId) : { ok: false, message: 'O servidor está desligado.' });
+secureHostHandle('server:control', async (_event, action) => {
   try {
     if (action === 'start') return await startHostedSignaling();
     if (action === 'stop') return await stopHostedSignaling();
@@ -287,9 +393,9 @@ ipcMain.handle('server:control', async (_event, action) => {
     return { ok: false, message: 'Ação inválida.' };
   } catch (error) { return { ok: false, message: error.message || 'Não foi possível alterar o servidor.' }; }
 });
-ipcMain.handle('server:settings', () => hostSettings);
-ipcMain.handle('server:rooms', () => publicRooms());
-ipcMain.handle('server:import-discord-template', async (_event, { source, roomId, roomName } = {}) => {
+secureHostHandle('server:settings', () => publicHostSettings());
+secureHostHandle('server:rooms', () => publicRooms());
+secureHostHandle('server:import-discord-template', async (_event, { source, roomId, roomName } = {}) => {
   try {
     const raw = String(source || '').trim(); if (!raw) return { ok: false, message: 'Cole um código, link ou JSON de modelo do Discord.' };
     let payload;
@@ -305,8 +411,8 @@ ipcMain.handle('server:import-discord-template', async (_event, { source, roomId
     return { ok: true, message: 'Modelo Discord convertido. Revise os canais antes de salvar.', room };
   } catch (error) { return { ok: false, message: error.message || 'Não foi possível importar o modelo.' }; }
 });
-ipcMain.handle('server:cluster-settings', () => hostSettings.cluster);
-ipcMain.handle('server:save-cluster', async (_event, next = {}) => {
+secureHostHandle('server:cluster-settings', () => hostSettings.cluster);
+secureHostHandle('server:save-cluster', async (_event, next = {}) => {
   const role = next.role === 'secondary' ? 'secondary' : 'primary';
   const enabled = next.enabled === true;
   const primaryUrl = String(next.primaryUrl || '').trim().replace(/\/$/, '').slice(0, 300);
@@ -324,7 +430,7 @@ ipcMain.handle('server:save-cluster', async (_event, next = {}) => {
   await restartHostedSignaling();
   return { ok: true, message: enabled ? `Cluster ${role === 'primary' ? 'primário' : 'secundário'} ativado.` : 'Cluster desativado.', cluster: hostSettings.cluster };
 });
-ipcMain.handle('server:save-room', (_event, next = {}) => {
+secureHostHandle('server:save-room', (_event, next = {}) => {
   const previousLookup = String(next.previousId || next.id || '').toLowerCase();
   const previous = hostSettings.rooms.find((item) => item.id.toLowerCase() === previousLookup);
   const suppliedPassword = String(next.password || '');
@@ -340,7 +446,7 @@ ipcMain.handle('server:save-room', (_event, next = {}) => {
   signaling?.updateRoomLayouts?.(hostSettings.rooms);
   return { ok: true, message: index >= 0 ? 'Sala atualizada.' : 'Sala criada.', rooms: publicRooms() };
 });
-ipcMain.handle('server:delete-room', (_event, roomId) => {
+secureHostHandle('server:delete-room', (_event, roomId) => {
   const id = String(roomId || '').toLowerCase();
   const before = hostSettings.rooms.length;
   hostSettings.rooms = hostSettings.rooms.filter((room) => room.id.toLowerCase() !== id);
@@ -349,11 +455,13 @@ ipcMain.handle('server:delete-room', (_event, roomId) => {
   signaling?.updateRoomLayouts?.(hostSettings.rooms);
   return { ok: true, message: 'Sala removida. O código continua aceitando os canais padrão por compatibilidade.', rooms: publicRooms() };
 });
-ipcMain.handle('server:save-settings', (_event, next = {}) => {
+secureHostHandle('server:save-settings', (_event, next = {}) => {
   const closeBehaviors = ['tray', 'ask', 'quit'];
   const themes = ['ocean', 'violet', 'forest', 'graphite'];
-  hostSettings.closeBehavior = closeBehaviors.includes(next.closeBehavior) ? next.closeBehavior : hostSettings.closeBehavior;
+  hostSettings.closeBehavior = closeBehaviors.includes(next.closeBehavior) ? next.closeBehavior : defaultHostCloseBehavior();
+  if (hostSettings.closeBehavior === 'tray' && !createServerTray()) hostSettings.closeBehavior = 'ask';
   hostSettings.theme = themes.includes(next.theme) ? next.theme : hostSettings.theme;
+  if (typeof next.hardwareAcceleration === 'boolean') hostSettings.hardwareAcceleration = next.hardwareAcceleration;
   if (Object.prototype.hasOwnProperty.call(next, 'serverIcon')) {
     hostSettings.serverIcon = normalizeServerIcon(next.serverIcon);
     signaling?.updateServerProfile?.({ icon: hostSettings.serverIcon });
@@ -364,44 +472,52 @@ ipcMain.handle('server:save-settings', (_event, next = {}) => {
     signaling?.configureChatStorage?.(hostSettings.storage);
   }
   if (next.publicAccess && typeof next.publicAccess === 'object') {
-    const changed = hostSettings.publicAccess.automatic !== (next.publicAccess.automatic !== false);
-    hostSettings.publicAccess.automatic = next.publicAccess.automatic !== false;
+    const nextAutomatic = next.publicAccess.automatic === true && next.publicAccess.confirmed === true;
+    const changed = hostSettings.publicAccess.automatic !== nextAutomatic;
+    hostSettings.publicAccess.automatic = nextAutomatic;
+    hostSettings.publicAccess.consentVersion = nextAutomatic ? 1 : 0;
     if (changed) void refreshPublicMapping();
   }
   saveSettings();
-  return hostSettings;
+  return publicHostSettings();
 });
-ipcMain.handle('server:cleanup-messages', (_event, options = {}) => signaling ? signaling.cleanupMessages(options) : { ok: false, message: 'Inicie o servidor para limpar as mensagens.' });
-ipcMain.handle('server:clear-reports', () => signaling ? signaling.clearReports() : { ok: false, message: 'Inicie o servidor para limpar os relatórios.' });
-ipcMain.handle('window:close-choice', (_event, choice) => {
+secureHostHandle('server:cleanup-messages', (_event, options = {}) => signaling ? signaling.cleanupMessages(options) : { ok: false, message: 'Inicie o servidor para limpar as mensagens.' });
+secureHostHandle('server:clear-reports', () => signaling ? signaling.clearReports() : { ok: false, message: 'Inicie o servidor para limpar os relatórios.' });
+secureHostHandle('window:close-choice', (_event, choice) => {
   if (!closePromptOpen) return false;
   closePromptOpen = false;
-  if (choice === 'tray') { mainWindow?.hide(); return true; }
+  if (choice === 'tray' && createServerTray()) { mainWindow?.hide(); return true; }
+  if (choice === 'tray') { hostSettings.closeBehavior = 'ask'; saveSettings(); return false; }
   if (choice === 'quit') { isQuitting = true; app.quit(); return true; }
   return true;
 });
-ipcMain.handle('server:configure-plugin', async (_event, { id, enabled, settings } = {}) => {
-  if (!signaling?.configurePlugin) return { ok: false, message: 'O servidor está desligado.' };
-  return signaling.configurePlugin(String(id || ''), { enabled, settings });
+secureHostHandle('window:restart', () => {
+  setTimeout(() => { app.relaunch(); isQuitting = true; app.quit(); }, 80);
+  return true;
 });
-ipcMain.handle('server:plugin-action', async (_event, { id, action, payload } = {}) => {
+secureHostHandle('server:configure-plugin', async (_event, { id, enabled, settings, approveFingerprint } = {}) => {
+  if (!signaling?.configurePlugin) return { ok: false, message: 'O servidor está desligado.' };
+  return signaling.configurePlugin(String(id || ''), { enabled, settings, approveFingerprint: String(approveFingerprint || '') });
+});
+secureHostHandle('server:plugin-action', async (_event, { id, action, payload } = {}) => {
   if (!signaling?.pluginAction) return { ok: false, message: 'O servidor está desligado.' };
   return signaling.pluginAction(String(id || ''), String(action || ''), payload || {});
 });
-ipcMain.handle('server:open-path', async (_event, target) => {
+secureHostHandle('server:open-path', async (_event, target) => {
   const folder = ({ plugins: pluginFolder, music: musicFolder })[target];
   if (!folder) return { ok: false, message: 'Pasta inválida.' };
   const error = await shell.openPath(folder);
   return error ? { ok: false, message: error } : { ok: true };
 });
-ipcMain.handle('music-bot:read-track', (_event, fileName) => {
+secureMusicBotHandle('music-bot:credentials', () => ({ port: hostPort, token: musicBotToken }));
+secureMusicBotHandle('music-bot:read-track', (_event, fileName) => {
   const safeName = path.basename(String(fileName || ''));
   if (!/\.(mp3|ogg|wav|m4a|aac)$/i.test(safeName)) throw new Error('Formato de música inválido.');
   const file = path.join(musicFolder, safeName); if (!fs.existsSync(file)) throw new Error('Arquivo de música não encontrado.');
   return fs.readFileSync(file);
 });
-ipcMain.on('music-bot:ready', () => { musicBotReady = true; while (pendingMusicCommands.length) musicBotWindow?.webContents.send('music-bot:command', pendingMusicCommands.shift()); });
-registerUpdateHandlers(ipcMain, 'VoiceUPServer Setup ');
+ipcMain.on('music-bot:ready', (event) => { if (!isTrustedMusicBotEvent(event)) return; musicBotReady = true; while (pendingMusicCommands.length) musicBotWindow?.webContents.send('music-bot:command', pendingMusicCommands.shift()); });
+registerUpdateHandlers(ipcMain, 'VoiceUPServer Setup ', isTrustedHostEvent, { linuxProductName: 'VoiceUPServer' });
 app.whenReady().then(openWindow).catch((error) => { console.error(error); app.quit(); });
 app.on('activate', revealMainWindow);
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' && (isQuitting || hostSettings.closeBehavior === 'quit')) app.quit(); });

@@ -2,6 +2,7 @@ const { app, BrowserWindow, shell, desktopCapturer, ipcMain, Tray, Menu, globalS
 const path = require('path');
 const fs = require('fs');
 const crypto = require('node:crypto');
+const { fileURLToPath } = require('node:url');
 const { spawn } = require('node:child_process');
 const dns = require('node:dns').promises;
 const nodeNet = require('node:net');
@@ -18,9 +19,19 @@ let selectedCapture = { id: '', kind: '', includeAudio: false };
 let processAudioCapture = null;
 let directRoomServer = null;
 let directPortMapping = null;
-let windowSettings = { closeBehavior: 'tray' };
+const defaultCloseBehavior = () => process.platform === 'linux' ? 'ask' : 'tray';
+let windowSettings = { closeBehavior: defaultCloseBehavior(), hardwareAcceleration: true, fullscreenGameCaptureCompatibility: true };
+let hardwareAccelerationAtStartup = true;
+let fullscreenGameCaptureCompatibilityAtStartup = false;
 const registeredShortcuts = new Map();
 const APP_WEB_IDENTITY = 'https://voiceup.shardweb.app/';
+const CLIENT_ENTRY = path.join(__dirname, 'public', 'index.html');
+const APP_ICON = path.join(__dirname, 'assets', process.platform === 'win32' ? 'voiceup-icon.ico' : 'voiceup-logo-2d.png');
+const RNNOISE_ASSET_LIMIT = 512 * 1024;
+const RNNOISE_ASSETS = Object.freeze({
+  wasm: path.join(__dirname, 'public', 'vendor', 'rnnoise', 'rnnoise.wasm'),
+  simd: path.join(__dirname, 'public', 'vendor', 'rnnoise', 'rnnoise_simd.wasm')
+});
 const LINK_PREVIEW_LIMIT = 640 * 1024;
 const BACKGROUND_CAPTURE_TITLES = new Set([
   'program manager',
@@ -32,6 +43,28 @@ const BACKGROUND_CAPTURE_TITLES = new Set([
   'start'
 ]);
 const settingsPath = () => path.join(app.getPath('userData'), 'window-settings.json');
+const isTrustedClientUrl = (value) => {
+  try {
+    const target = new URL(String(value || ''));
+    return target.protocol === 'file:' && path.resolve(fileURLToPath(target)) === path.resolve(CLIENT_ENTRY);
+  } catch { return false; }
+};
+const isTrustedClientContents = (webContents) => Boolean(
+  mainWindow && !mainWindow.isDestroyed() && webContents === mainWindow.webContents && isTrustedClientUrl(webContents.getURL())
+);
+const isTrustedClientEvent = (event) => Boolean(
+  isTrustedClientContents(event?.sender) && isTrustedClientUrl(event?.senderFrame?.url || event.sender.getURL())
+);
+const secureHandle = (channel, handler) => ipcMain.handle(channel, (event, ...args) => {
+  if (!isTrustedClientEvent(event)) throw new Error('Solicitação bloqueada pelo VoiceUP.');
+  return handler(event, ...args);
+});
+const safeExternalUrl = (value) => {
+  try {
+    const target = new URL(String(value || ''));
+    return ['http:', 'https:'].includes(target.protocol) && !target.username && !target.password ? target.href : '';
+  } catch { return ''; }
+};
 const availableTcpPort = () => new Promise((resolve, reject) => {
   const probe = nodeNet.createServer();
   probe.unref();
@@ -86,6 +119,8 @@ const startDirectRoom = async (input = {}) => {
     roomLayouts: [layout],
     historyFile: path.join(dataDirectory, 'chat-history.json'),
     reportsFile: path.join(dataDirectory, 'bug-reports.json'),
+    identityFile: path.join(dataDirectory, 'client-identities.json'),
+    version: app.getVersion(),
     chatRetentionDays: 30,
     chatMaxPerRoom: 300
   });
@@ -94,7 +129,7 @@ const startDirectRoom = async (input = {}) => {
   directRoomServer = { ...signaling, roomId, localUrl, networkUrls, access: { status: 'checking', mapped: false }, shareCode: '' };
 
   let access = { status: 'disabled', mapped: false, message: 'Acesso automático não solicitado.' };
-  if (input.publicAccess !== false) access = await openPublicPort(port, { description: `VoiceUP sala ${roomId}`, timeoutMs: 7500 });
+  if (input.publicAccess === true) access = await openPublicPort(port, { description: `VoiceUP sala ${roomId}`, timeoutMs: 7500 });
   directPortMapping = access.mapped ? access : null;
   const publicAccess = serializablePublicAccess(access);
   const shareHost = publicAccess.scope === 'public' && publicAccess.publicUrl ? publicAccess.publicUrl : (networkUrls[0] || localUrl);
@@ -113,7 +148,9 @@ const processAudioHelperPath = () => app.isPackaged
   : path.join(__dirname, 'native', 'voiceup-process-audio.exe');
 const processAudioCapability = () => ({
   available: process.platform === 'win32' && fs.existsSync(processAudioHelperPath()),
-  mode: 'process-tree-include-exclude',
+  mode: process.platform === 'win32' ? 'process-tree-include-exclude' : 'unavailable',
+  reason: process.platform === 'linux' ? 'linux-loopback-not-supported' : '',
+  platform: process.platform,
   sampleRate: 48000,
   channels: 2
 });
@@ -259,7 +296,7 @@ const fetchLinkPreview = async (raw) => {
     // URLs such as a CDN's /revision/latest have no useful final extension,
     // but their response still identifies itself as an image.  Returning this
     // marker lets the renderer replace the regular link with an image embed.
-    if (/^image\/(?:avif|bmp|gif|jpe?g|png|svg\+xml|webp)/.test(contentType)) {
+    if (/^image\/(?:avif|bmp|gif|jpe?g|png|webp)/.test(contentType)) {
       await response.body?.cancel?.().catch(() => {});
       return { url: current.href, image: current.href, type: 'image' };
     }
@@ -276,7 +313,7 @@ const fetchLinkPreview = async (raw) => {
     const siteName = cleanPreviewText(metadata['og:site_name'] || current.hostname.replace(/^www\./, ''), 70);
     const rawImage = metadata['og:image:secure_url'] || metadata['og:image'] || metadata['twitter:image'] || '';
     let image = '';
-    if (rawImage) { try { const candidate = new URL(decodeHtml(rawImage), current); if (['http:', 'https:'].includes(candidate.protocol)) image = candidate.href; } catch { /* optional image */ } }
+    if (rawImage) { try { const candidate = new URL(decodeHtml(rawImage), current); image = (await publicPreviewUrl(candidate.href)).href; } catch { /* optional image */ } }
     return title || description || image ? { url: current.href, title, description, siteName, image } : null;
   } finally { clearTimeout(timeout); }
 };
@@ -297,8 +334,54 @@ const shareableDesktopSources = async (thumbnailSize = { width: 420, height: 236
     return Boolean(title) && !BACKGROUND_CAPTURE_TITLES.has(title);
   });
 };
-function loadSettings() { try { windowSettings = { ...windowSettings, ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) }; } catch { /* first start */ } }
+function loadSettings() {
+  try { windowSettings = { ...windowSettings, ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) }; } catch { /* first start */ }
+  windowSettings.closeBehavior = ['tray', 'ask', 'quit'].includes(windowSettings.closeBehavior) ? windowSettings.closeBehavior : defaultCloseBehavior();
+  windowSettings.hardwareAcceleration = windowSettings.hardwareAcceleration !== false;
+  windowSettings.fullscreenGameCaptureCompatibility = windowSettings.fullscreenGameCaptureCompatibility !== false;
+}
 function saveSettings() { try { fs.writeFileSync(settingsPath(), JSON.stringify(windowSettings, null, 2), 'utf8'); } catch { /* optional preference */ } }
+const publicWindowSettings = () => ({
+  platform: process.platform,
+  closeBehavior: windowSettings.closeBehavior,
+  hardwareAcceleration: windowSettings.hardwareAcceleration !== false,
+  hardwareAccelerationActive: hardwareAccelerationAtStartup,
+  fullscreenGameCaptureCompatibility: windowSettings.fullscreenGameCaptureCompatibility !== false,
+  fullscreenGameCaptureCompatibilityActive: fullscreenGameCaptureCompatibilityAtStartup,
+  fullscreenGameCaptureCompatibilitySupported: process.platform === 'win32',
+  restartRequired: (windowSettings.hardwareAcceleration !== false) !== hardwareAccelerationAtStartup
+    || (process.platform === 'win32'
+      && (windowSettings.fullscreenGameCaptureCompatibility !== false) !== fullscreenGameCaptureCompatibilityAtStartup)
+});
+
+function disableChromiumFeature(feature) {
+  const current = app.commandLine.getSwitchValue('disable-features')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (!current.includes(feature)) current.push(feature);
+  app.commandLine.appendSwitch('disable-features', current.join(','));
+}
+const chromiumFeatureDisabled = (feature) => app.commandLine.getSwitchValue('disable-features')
+  .split(',')
+  .map((entry) => entry.trim())
+  .includes(feature);
+
+// Chromium only accepts this change before Electron becomes ready. Reading the
+// small local preference synchronously here keeps the normal, accelerated path
+// as the default while allowing a user with GPU/driver issues to opt out.
+loadSettings();
+hardwareAccelerationAtStartup = windowSettings.hardwareAcceleration !== false;
+if (!hardwareAccelerationAtStartup) app.disableHardwareAcceleration();
+const fullscreenGameCaptureCompatibilityRequested = process.platform === 'win32'
+  && windowSettings.fullscreenGameCaptureCompatibility !== false;
+// Windows Graphics Capture can take ownership of the hardware cursor plane in
+// some exclusive/fullscreen games. The alternate WebRTC screen capturer keeps
+// the local game cursor visible while Electron still embeds it in the stream.
+// Window capture keeps WGC because the issue is specific to entire-screen mode.
+if (fullscreenGameCaptureCompatibilityRequested) disableChromiumFeature('AllowWgcScreenCapturer');
+fullscreenGameCaptureCompatibilityAtStartup = process.platform === 'win32'
+  && chromiumFeatureDisabled('AllowWgcScreenCapturer');
 function revealWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) {
     mainWindow = null;
@@ -331,15 +414,23 @@ function configureGlobalShortcuts(shortcuts = {}) {
   return accepted;
 }
 function createTray() {
-  if (tray) return;
-  tray = new Tray(path.join(__dirname, 'assets', 'voiceup-icon.ico'));
-  tray.setToolTip('VoiceUP');
-  tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Abrir VoiceUP', click: revealWindow }, { type: 'separator' }, { label: 'Encerrar programa', click: () => { isQuitting = true; app.quit(); } }]));
-  tray.on('double-click', revealWindow);
+  if (tray) return true;
+  try {
+    tray = new Tray(APP_ICON);
+    tray.setToolTip('VoiceUP');
+    tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Abrir VoiceUP', click: revealWindow }, { type: 'separator' }, { label: 'Encerrar programa', click: () => { isQuitting = true; app.quit(); } }]));
+    tray.on('double-click', revealWindow);
+    return true;
+  } catch (error) {
+    tray = null;
+    console.warn('A bandeja do sistema não está disponível neste ambiente:', error?.message || error);
+    return false;
+  }
 }
 async function createWindow() {
-  loadSettings(); createTray();
-  mainWindow = new BrowserWindow({ width: 1180, height: 760, minWidth: 780, minHeight: 600, title: 'VoiceUp', icon: path.join(__dirname, 'assets', 'voiceup-icon.ico'), backgroundColor: '#101522', autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'client-preload.js'), contextIsolation: true, nodeIntegration: false } });
+  loadSettings();
+  if (windowSettings.closeBehavior === 'tray' && !createTray()) windowSettings.closeBehavior = 'ask';
+  mainWindow = new BrowserWindow({ width: 1180, height: 760, minWidth: 780, minHeight: 600, title: 'VoiceUp', icon: APP_ICON, backgroundColor: '#101522', autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'client-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, allowRunningInsecureContent: false, backgroundThrottling: false } });
   mainWindow.on('close', (event) => {
     if (isQuitting) return;
     if (windowSettings.closeBehavior === 'quit') { event.preventDefault(); isQuitting = true; app.quit(); return; }
@@ -354,24 +445,48 @@ async function createWindow() {
     mainWindow.hide();
   });
   mainWindow.on('closed', () => { stopProcessAudioCapture('window-closed'); mainWindow = null; closePromptOpen = false; });
-  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => callback(permission === 'media' || permission === 'display-capture'));
-  mainWindow.webContents.session.setPermissionCheckHandler((_webContents, permission) => permission === 'media' || permission === 'display-capture');
+  const allowedPermissions = new Set(['media', 'display-capture']);
+  mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback, details = {}) => {
+    const requestingUrl = details.requestingUrl || webContents?.getURL?.() || '';
+    callback(allowedPermissions.has(permission) && isTrustedClientContents(webContents) && isTrustedClientUrl(requestingUrl));
+  });
+  mainWindow.webContents.session.setPermissionCheckHandler((webContents, permission, requestingOrigin, details = {}) => {
+    const requestingUrl = details.requestingUrl || webContents?.getURL?.() || '';
+    const trustedOrigin = !requestingOrigin || requestingOrigin === 'file://' || isTrustedClientUrl(requestingOrigin);
+    return allowedPermissions.has(permission) && trustedOrigin && isTrustedClientContents(webContents) && isTrustedClientUrl(requestingUrl);
+  });
   configureYouTubeHeaders(mainWindow.webContents.session);
-  mainWindow.webContents.session.setDisplayMediaRequestHandler(async (_request, callback) => {
+  mainWindow.webContents.session.setDisplayMediaRequestHandler(async (request, callback) => {
     try {
+      if (!isTrustedClientContents(mainWindow?.webContents) || (request.frame && request.frame !== mainWindow.webContents.mainFrame) || !selectedCapture.id) return callback({});
       const sources = await shareableDesktopSources();
-      const source = sources.find((item) => item.id === selectedCapture.id) || sources[0];
-      // Audio is always published through the native process-loopback helper.
-      // For a screen it excludes the complete VoiceUP process tree, preventing
-      // remote call voices from returning through the live and being doubled.
+      const source = sources.find((item) => item.id === selectedCapture.id);
+      // On Windows, audio is published separately through the protected native
+      // helper. Electron does not expose its system-loopback stream on Linux, so
+      // Linux grants video only instead of risking call duplication or leakage.
       callback(source ? { video: source } : {});
     } catch { callback({}); }
   });
-  await mainWindow.loadFile(path.join(__dirname, 'public', 'index.html'), { query: { version: app.getVersion() } });
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
+    if (!isTrustedClientUrl(targetUrl)) event.preventDefault();
+  });
+  mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    const externalUrl = safeExternalUrl(url);
+    if (externalUrl) void shell.openExternal(externalUrl);
+    return { action: 'deny' };
+  });
+  await mainWindow.loadFile(CLIENT_ENTRY, { query: { version: app.getVersion() } });
 }
-registerUpdateHandlers(ipcMain, 'VoiceUP Setup ');
-ipcMain.handle('capture:sources', async () => (await shareableDesktopSources()).map((source) => ({
+registerUpdateHandlers(ipcMain, 'VoiceUP Setup ', isTrustedClientEvent, { linuxProductName: 'VoiceUP' });
+secureHandle('audio:rnnoise-asset', (_event, requestedAsset) => {
+  const assetPath = RNNOISE_ASSETS[String(requestedAsset || '')];
+  if (!assetPath) throw new Error('Componente de áudio inválido.');
+  const asset = fs.readFileSync(assetPath);
+  if (!asset.length || asset.length > RNNOISE_ASSET_LIMIT) throw new Error('Componente de áudio indisponível.');
+  return asset;
+});
+secureHandle('capture:sources', async () => (await shareableDesktopSources()).map((source) => ({
   id: source.id,
   name: source.name,
   kind: source.id.startsWith('screen:') ? 'screen' : 'window',
@@ -379,28 +494,43 @@ ipcMain.handle('capture:sources', async () => (await shareableDesktopSources()).
   thumbnail: source.thumbnail?.isEmpty?.() ? '' : source.thumbnail?.toDataURL?.() || '',
   appIcon: source.appIcon?.isEmpty?.() ? '' : source.appIcon?.toDataURL?.() || ''
 })));
-ipcMain.handle('capture:select', (_event, selection = {}) => {
+secureHandle('capture:select', (_event, selection = {}) => {
   stopProcessAudioCapture('source-changed');
   const id = String(selection.id || '');
   selectedCapture = { id, kind: id.startsWith('screen:') ? 'screen' : id.startsWith('window:') ? 'window' : '', includeAudio: Boolean(selection.includeAudio) };
   return { ok: true, kind: selectedCapture.kind, processAudio: selectedCapture.kind === 'window' ? processAudioCapability() : null };
 });
-ipcMain.handle('capture:process-audio-capability', () => processAudioCapability());
-ipcMain.handle('capture:process-audio-start', (_event, sourceId) => startProcessAudioCapture(String(sourceId || '')));
-ipcMain.handle('capture:process-audio-stop', () => stopProcessAudioCapture('renderer-stopped'));
-ipcMain.handle('link:preview', async (_event, raw) => { try { return await fetchLinkPreview(raw); } catch { return null; } });
-ipcMain.handle('window:set-video-fullscreen', (_event, enabled) => { mainWindow?.setFullScreen(Boolean(enabled)); return Boolean(enabled); });
-ipcMain.handle('window:settings', () => windowSettings);
-ipcMain.handle('window:save-settings', (_event, next = {}) => { const allowed = ['tray', 'ask', 'quit']; windowSettings.closeBehavior = allowed.includes(next.closeBehavior) ? next.closeBehavior : 'tray'; saveSettings(); return windowSettings; });
-ipcMain.handle('shortcuts:configure', (_event, shortcuts = {}) => configureGlobalShortcuts(shortcuts));
-ipcMain.handle('shortcuts:clear', () => { clearGlobalShortcuts(); return true; });
-ipcMain.handle('direct-room:start', (_event, options = {}) => startDirectRoom(options));
-ipcMain.handle('direct-room:stop', () => stopDirectRoom());
-ipcMain.handle('direct-room:status', () => directRoomStatus());
-ipcMain.handle('window:close-choice', (_event, choice) => {
+secureHandle('capture:process-audio-capability', () => processAudioCapability());
+secureHandle('capture:process-audio-start', (_event, sourceId) => startProcessAudioCapture(String(sourceId || '').slice(0, 180)));
+secureHandle('capture:process-audio-stop', () => stopProcessAudioCapture('renderer-stopped'));
+secureHandle('link:preview', async (_event, raw) => { try { return await fetchLinkPreview(String(raw || '').slice(0, 2048)); } catch { return null; } });
+secureHandle('window:set-video-fullscreen', (_event, enabled) => { mainWindow?.setFullScreen(Boolean(enabled)); return Boolean(enabled); });
+secureHandle('window:settings', () => publicWindowSettings());
+secureHandle('window:save-settings', (_event, next = {}) => {
+  const allowed = ['tray', 'ask', 'quit'];
+  windowSettings.closeBehavior = allowed.includes(next.closeBehavior) ? next.closeBehavior : defaultCloseBehavior();
+  if (windowSettings.closeBehavior === 'tray' && !createTray()) windowSettings.closeBehavior = 'ask';
+  if (typeof next.hardwareAcceleration === 'boolean') windowSettings.hardwareAcceleration = next.hardwareAcceleration;
+  if (typeof next.fullscreenGameCaptureCompatibility === 'boolean') {
+    windowSettings.fullscreenGameCaptureCompatibility = next.fullscreenGameCaptureCompatibility;
+  }
+  saveSettings();
+  return publicWindowSettings();
+});
+secureHandle('window:restart', () => {
+  setTimeout(() => { app.relaunch(); isQuitting = true; app.quit(); }, 80);
+  return true;
+});
+secureHandle('shortcuts:configure', (_event, shortcuts = {}) => configureGlobalShortcuts(shortcuts));
+secureHandle('shortcuts:clear', () => { clearGlobalShortcuts(); return true; });
+secureHandle('direct-room:start', (_event, options = {}) => startDirectRoom(options));
+secureHandle('direct-room:stop', () => stopDirectRoom());
+secureHandle('direct-room:status', () => directRoomStatus());
+secureHandle('window:close-choice', (_event, choice) => {
   if (!closePromptOpen) return false;
   closePromptOpen = false;
-  if (choice === 'tray') { mainWindow?.hide(); return true; }
+  if (choice === 'tray' && createTray()) { mainWindow?.hide(); return true; }
+  if (choice === 'tray') { windowSettings.closeBehavior = 'ask'; saveSettings(); return false; }
   if (choice === 'quit') { isQuitting = true; app.quit(); return true; }
   return true;
 });

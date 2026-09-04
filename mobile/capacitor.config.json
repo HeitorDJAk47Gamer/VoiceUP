@@ -1,0 +1,8 @@
+{
+  "appId": "com.goatgank.voiceup",
+  "appName": "VoiceUP",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="pt-BR">
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; script-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; media-src 'self' blob: data:">
 <title>VoiceUP Music Bot</title>
 <script>
 const bots = new Map();
@@ -44,8 +45,10 @@ async function receiveSignal(state, { from, name, data }) {
 }
 async function join(state, room, voiceChannel) {
   if (state.socket && state.activeRoom === room && state.activeChannel === voiceChannel) return;
+  const credentials = await window.voiceupMusicBot.credentials();
+  if (!credentials?.token || Number(credentials.port) !== Number(serverPort)) throw new Error('Credencial local do bot indisponível');
   state.socket?.disconnect(); closePeers(state); await loadSocket(); state.socket = window.io(serverUrl, { transports: ['websocket', 'polling'] }); state.activeRoom = room; state.activeChannel = voiceChannel;
-  state.socket.on('connect', () => state.socket.emit('join-room', { roomId: room, voiceChannel, name: state.botName, color: '#47a7f5', avatar: state.avatar, bot: true, clientId: `music-bot-${state.botId}` }));
+  state.socket.on('connect', () => state.socket.emit('join-room', { roomId: room, voiceChannel, name: state.botName, color: '#47a7f5', avatar: state.avatar, bot: true, botToken: credentials.token, clientId: `music-bot-${state.botId}` }));
   state.socket.on('room-joined', ({ peers: items }) => items.forEach((item) => makePeer(state, item.id, item.name, true)));
   state.socket.on('peer-joined', (item) => makePeer(state, item.id, item.name, false));
   state.socket.on('peer-left', ({ id }) => { state.peers.get(id)?.pc.close(); state.peers.delete(id); });

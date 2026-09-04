@@ -18,8 +18,19 @@ const positiveInteger = (value, fallback) => {
 // bots from consuming the participant allowance. Hosts may tune both values.
 const MAX_HUMAN_VOICE_CHANNEL_SIZE = Math.max(2, positiveInteger(process.env.VOICEUP_MAX_HUMANS_PER_CALL, 12));
 const MAX_VOICE_CHANNEL_SIZE = Math.max(MAX_HUMAN_VOICE_CHANNEL_SIZE, positiveInteger(process.env.VOICEUP_MAX_MEMBERS_PER_CALL, 15));
+const MAX_IDENTITY_RECORDS = Math.min(200000, Math.max(1000, positiveInteger(process.env.VOICEUP_MAX_IDENTITIES, 50000)));
 const safeChannel = (value, fallback) => String(value || fallback).trim().slice(0, 24) || fallback;
-const safeIdentity = (value) => String(value || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 80);
+const safeIdentity = (value) => {
+  const identity = String(value || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 80);
+  return ['__proto__', 'prototype', 'constructor'].includes(identity.toLowerCase()) ? '' : identity;
+};
+const safeDataImage = (value, max = 150000) => typeof value === 'string' && /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(value) && value.length <= max ? value : '';
+const safeSecretEqual = (left, right) => {
+  const first = Buffer.from(String(left || ''), 'utf8');
+  const second = Buffer.from(String(right || ''), 'utf8');
+  return first.length > 0 && first.length === second.length && crypto.timingSafeEqual(first, second);
+};
+const identityProofText = (challenge, socketId, room, clientId) => `voiceup-identity-v1\n${challenge}\n${socketId}\n${room}\n${clientId}`;
 const safeMessageId = (value, socketId) => { const owner = String(socketId || 'client').replace(/[^a-z0-9_-]/gi, '').slice(0, 36); const raw = String(value || Date.now().toString(36)).replace(/[^a-z0-9_-]/gi, '').slice(0, 72); return raw.startsWith(`msg-${owner}-`) ? raw : `msg-${owner}-${raw}`; };
 const voiceKey = (room, channel) => `voice:${room}:${channel}`;
 const serverKey = (room) => `server:${room}`;
@@ -120,7 +131,23 @@ function startSignalingServer(port = 3000, options = {}) {
   app.disable('x-powered-by');
   app.use(express.json({ limit: '48kb' }));
   const server = http.createServer(app);
-  const io = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
+  const configuredOrigins = new Set((Array.isArray(options.allowedOrigins) ? options.allowedOrigins : []).map((origin) => String(origin || '').replace(/\/$/, '')).filter(Boolean));
+  configuredOrigins.add('https://voiceup.shardweb.app');
+  const allowedOrigin = (origin) => {
+    const value = String(origin || '').replace(/\/$/, '');
+    if (!value || value === 'null' || value === 'file:/' || value === 'file://') return true;
+    if (configuredOrigins.has(value)) return true;
+    try {
+      const target = new URL(value);
+      return ['http:', 'https:'].includes(target.protocol) && ['localhost', '127.0.0.1', '::1'].includes(target.hostname);
+    } catch { return false; }
+  };
+  const io = new Server(server, {
+    cors: { origin: (origin, callback) => callback(allowedOrigin(origin) ? null : new Error('Origem não autorizada.'), allowedOrigin(origin)), methods: ['GET', 'POST'] },
+    allowRequest: (request, callback) => callback(null, allowedOrigin(request.headers.origin)),
+    maxHttpBufferSize: 256 * 1024,
+    perMessageDeflate: false
+  });
   const startedAt = Date.now();
   const events = { connections: 0, signals: 0, joins: 0, messages: 0, kicks: 0, bans: 0 };
   const normalizeServerIcon = (value) => {
@@ -129,6 +156,56 @@ function startSignalingServer(port = 3000, options = {}) {
   };
   let serverProfile = { icon: normalizeServerIcon(options.serverIcon) };
   const logs = [];
+  const botSecret = String(options.botToken || '');
+  const identityFile = String(options.identityFile || '');
+  let identityRegistry = { version: 1, clients: Object.create(null) };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(identityFile, 'utf8'));
+    if (parsed?.clients && typeof parsed.clients === 'object') {
+      const clients = Object.create(null);
+      for (const [identity, entry] of Object.entries(parsed.clients).slice(0, MAX_IDENTITY_RECORDS)) {
+        if (safeIdentity(identity) === identity && entry?.fingerprint) clients[identity] = entry;
+      }
+      identityRegistry = { version: 1, clients };
+    }
+  } catch { /* first start or optional in-memory registry */ }
+  const persistIdentityRegistry = () => {
+    if (!identityFile) return;
+    try {
+      fs.mkdirSync(path.dirname(identityFile), { recursive: true });
+      fs.writeFileSync(identityFile, JSON.stringify(identityRegistry, null, 2), 'utf8');
+    } catch (error) { addLog('error', `Não foi possível salvar as identidades protegidas: ${String(error.message || '').slice(0, 140)}`); }
+  };
+  const issueIdentityChallenge = (socket) => {
+    const challenge = crypto.randomBytes(32).toString('base64url');
+    socket.data.identityChallenge = challenge;
+    socket.data.identityChallengeAt = Date.now();
+    socket.emit('identity-challenge', { version: 1, challenge });
+  };
+  const verifyIdentityProof = (socket, packet, room, identity) => {
+    try {
+      const challenge = String(packet.identityChallenge || '');
+      if (!identity || challenge !== socket.data.identityChallenge || Date.now() - Number(socket.data.identityChallengeAt || 0) > 60000) return { ok: false, reason: 'desafio expirado' };
+      const jwk = packet.identityPublicKey && typeof packet.identityPublicKey === 'object' ? packet.identityPublicKey : JSON.parse(String(packet.identityPublicKey || '{}'));
+      if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !/^[a-z0-9_-]{40,60}$/i.test(String(jwk.x || '')) || !/^[a-z0-9_-]{40,60}$/i.test(String(jwk.y || ''))) return { ok: false, reason: 'chave inválida' };
+      const normalizedKey = { kty: 'EC', crv: 'P-256', x: String(jwk.x), y: String(jwk.y) };
+      const fingerprint = crypto.createHash('sha256').update(JSON.stringify(normalizedKey)).digest('hex');
+      const signature = Buffer.from(String(packet.identityProof || ''), 'base64url');
+      if (signature.length !== 64) return { ok: false, reason: 'assinatura inválida' };
+      const publicKey = crypto.createPublicKey({ key: normalizedKey, format: 'jwk' });
+      const verified = crypto.verify('sha256', Buffer.from(identityProofText(challenge, socket.id, room, identity)), { key: publicKey, dsaEncoding: 'ieee-p1363' }, signature);
+      if (!verified) return { ok: false, reason: 'assinatura recusada' };
+      const existing = Object.hasOwn(identityRegistry.clients, identity) ? identityRegistry.clients[identity] : null;
+      if (existing?.fingerprint && existing.fingerprint !== fingerprint) return { ok: false, reason: 'identidade já protegida por outra chave' };
+      if (!existing && Object.keys(identityRegistry.clients).length >= MAX_IDENTITY_RECORDS) return { ok: false, reason: 'limite de identidades protegidas atingido' };
+      const now = new Date();
+      const shouldPersist = !existing || !Number.isFinite(Date.parse(existing.lastSeenAt || '')) || now.getTime() - Date.parse(existing.lastSeenAt) >= 60 * 60 * 1000;
+      identityRegistry.clients[identity] = { fingerprint, publicKey: normalizedKey, createdAt: existing?.createdAt || now.toISOString(), lastSeenAt: shouldPersist ? now.toISOString() : existing.lastSeenAt };
+      if (shouldPersist) persistIdentityRegistry();
+      socket.data.identityChallenge = '';
+      return { ok: true, fingerprint };
+    } catch { return { ok: false, reason: 'prova malformada' }; }
+  };
   const chatStore = createPersistentChatStore({
     filePath: options.historyFile || path.join(process.cwd(), 'data', 'chat-history.json'),
     maxPerRoom: options.chatMaxPerRoom || 300,
@@ -196,6 +273,20 @@ function startSignalingServer(port = 3000, options = {}) {
   };
   setConfiguredRooms(options.roomLayouts);
   const addLog = (level, message) => { logs.unshift({ time: new Date().toLocaleTimeString('pt-BR'), level, message }); if (logs.length > 80) logs.pop(); };
+  const consumeRate = (socket, bucket, limit, windowMs) => {
+    socket.data.rateLimits ||= new Map();
+    const now = Date.now();
+    const recent = (socket.data.rateLimits.get(bucket) || []).filter((time) => now - time < windowMs);
+    if (recent.length >= limit) {
+      if (now - Number(socket.data.lastRateWarningAt || 0) > 2500) {
+        socket.data.lastRateWarningAt = now;
+        socket.emit('app-error', 'Muitas ações em pouco tempo. Aguarde alguns segundos.');
+      }
+      socket.data.rateLimits.set(bucket, recent);
+      return false;
+    }
+    recent.push(now); socket.data.rateLimits.set(bucket, recent); return true;
+  };
   const finiteMetric = (value, minimum = 0, maximum = 1e12) => {
     const number = Number(value);
     return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, number)) : null;
@@ -225,8 +316,15 @@ function startSignalingServer(port = 3000, options = {}) {
     receivedAt: Date.now(),
     peers: (Array.isArray(packet.peers) ? packet.peers : []).slice(0, 64).map(sanitizeWebrtcPeer).filter((peer) => peer.peerId)
   });
+  const safeClientPlatform = (value) => typeof value === 'string' && ['windows', 'linux', 'android', 'selfweb'].includes(value) ? value : '';
   const safePresenceStatus = (value) => ['online', 'idle', 'dnd'].includes(String(value || '').toLowerCase()) ? String(value).toLowerCase() : 'online';
-  const peerSummary = (id, peer = {}) => ({ id, clientId: peer.clientId || '', name: peer.name || 'Visitante', color: peer.color || AVATAR_COLORS[0], avatar: peer.avatar || '', status: safePresenceStatus(peer.status), voiceChannel: peer.voiceChannel === LOBBY_CHANNEL ? '' : (peer.voiceChannel || 'Geral'), ping: Number.isFinite(peer.ping) ? Math.round(peer.ping) : null, isBot: Boolean(peer.isBot) });
+  const safeAudioState = (value) => ({ micMuted: value?.micMuted === true, outputMuted: value?.outputMuted === true });
+  const safeMediaState = (value) => ({ screen: value?.screen === true, camera: value?.camera === true });
+  const mediaPresence = (value) => value && typeof value === 'object' ? { voiceupMediaState: safeMediaState(value) } : {};
+  // A call belongs to the channel, not to the person who first joined it.
+  // Keep its start until the LAST member leaves; never persist empty calls.
+  const voiceActivityByRoom = new Map();
+  const peerSummary = (id, peer = {}) => ({ id, clientId: peer.clientId || '', name: peer.name || 'Visitante', color: peer.color || AVATAR_COLORS[0], avatar: peer.avatar || '', status: safePresenceStatus(peer.status), platform: safeClientPlatform(peer.platform), voiceChannel: peer.voiceChannel === LOBBY_CHANNEL ? '' : (peer.voiceChannel || 'Geral'), ping: Number.isFinite(peer.ping) ? Math.round(peer.ping) : null, isBot: Boolean(peer.isBot), voiceupAudioState: safeAudioState(peer.voiceupAudioState), ...mediaPresence(peer.voiceupMediaState), callStartedAt: Number(peer.callStartedAt) || voiceActivityByRoom.get(peer.serverRoom)?.get(peer.voiceChannel) || 0 });
   const peersIn = (key) => {
     const local = [...(io.sockets.adapter.rooms.get(key) || [])].map((id) => {
       const peer = io.sockets.sockets.get(id)?.data || {};
@@ -235,7 +333,51 @@ function startSignalingServer(port = 3000, options = {}) {
     const remote = [...remoteMembers.values()].filter((peer) => peer.serverRoom === key || peer.voiceRoom === key).map((peer) => peerSummary(peer.id, peer));
     return [...local, ...remote];
   };
-  const broadcastPresence = (serverRoom, excludedId) => io.to(serverRoom).emit('room-presence', { members: peersIn(serverRoom).filter((peer) => peer.id !== excludedId) });
+  const roomPresencePacket = (serverRoom, excludedId) => {
+    const members = peersIn(serverRoom).filter((peer) => peer.id !== excludedId);
+    const serverTime = Date.now();
+    const starts = voiceActivityByRoom.get(serverRoom) || new Map();
+    const occupied = new Set(members.map((member) => member.voiceChannel).filter(Boolean));
+    for (const channel of starts.keys()) if (!occupied.has(channel)) starts.delete(channel);
+    for (const member of members) {
+      const channel = member.voiceChannel;
+      if (!channel) continue;
+      const remoteStart = Number(member.callStartedAt);
+      const knownStart = remoteStart > 0 && remoteStart <= serverTime ? remoteStart : serverTime;
+      starts.set(channel, Math.min(starts.get(channel) || serverTime, knownStart));
+    }
+    if (starts.size) voiceActivityByRoom.set(serverRoom, starts); else voiceActivityByRoom.delete(serverRoom);
+    return { members, serverTime, voiceActivity: [...starts].map(([voiceChannel, startedAt]) => ({ voiceChannel, startedAt })) };
+  };
+  const broadcastPresence = (serverRoom, excludedId) => io.to(serverRoom).emit('room-presence', roomPresencePacket(serverRoom, excludedId));
+  const leaveCurrentMembership = (socket) => {
+    const previousServerRoom = socket.data.serverRoom;
+    const previousVoiceRoom = socket.data.voiceRoom;
+    if (previousVoiceRoom) {
+      if (socket.data.voiceChannel !== LOBBY_CHANNEL) socket.to(previousVoiceRoom).emit('peer-left', { id: socket.id, name: socket.data.name || 'Visitante' });
+      socket.leave(previousVoiceRoom);
+    }
+    if (previousServerRoom) socket.leave(previousServerRoom);
+    Object.assign(socket.data, { room: '', serverRoom: '', voiceRoom: '', voiceChannel: LOBBY_CHANNEL });
+    if (previousServerRoom) broadcastPresence(previousServerRoom, socket.id);
+  };
+  // A network recovery receives a new Socket.IO id.  The persisted clientId is
+  // the durable account identity, so retain the newest session and retire any
+  // older socket from that same profile in the same room.
+  const duplicateSessionsFor = (room, identity, socketId, isBot = false) => {
+    if (!identity || isBot) return [];
+    return [...io.sockets.sockets.values()].filter((candidate) => candidate.id !== socketId
+      && !candidate.data?.isFederation
+      && !candidate.data?.isBot
+      && candidate.data?.room === room
+      && candidate.data?.clientId === identity);
+  };
+  const replaceDuplicateSessions = (sessions) => {
+    for (const staleSocket of sessions) {
+      staleSocket.emit('session-replaced', { message: 'Esta conexão foi substituída por uma reconexão mais recente deste perfil.' });
+      staleSocket.disconnect(true);
+    }
+  };
   const safeMentions = (serverRoom, mentions) => {
     if (!Array.isArray(mentions)) return [];
     const allowed = new Set(peersIn(serverRoom).map((peer) => peer.id));
@@ -262,7 +404,7 @@ function startSignalingServer(port = 3000, options = {}) {
   const musicFiles = () => fs.readdirSync(musicFolder).filter((name) => /\.(mp3|ogg|wav|m4a|aac)$/i.test(name)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
 
   const federationId = (socketId) => `fed:${clusterNodeId}:${socketId}`;
-  const exportMember = (socket) => ({ id: federationId(socket.id), localId: socket.id, clientId: socket.data.clientId || '', name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0], avatar: socket.data.avatar || '', status: safePresenceStatus(socket.data.status), room: socket.data.room || '', serverRoom: socket.data.serverRoom || '', voiceRoom: socket.data.voiceRoom || '', voiceChannel: socket.data.voiceChannel || LOBBY_CHANNEL, ping: Number.isFinite(socket.data.ping) ? Math.round(socket.data.ping) : null, isBot: Boolean(socket.data.isBot), joinedAt: socket.data.joinedAt || Date.now() });
+  const exportMember = (socket) => ({ id: federationId(socket.id), localId: socket.id, clientId: socket.data.clientId || '', name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0], avatar: socket.data.avatar || '', status: safePresenceStatus(socket.data.status), platform: safeClientPlatform(socket.data.platform), room: socket.data.room || '', serverRoom: socket.data.serverRoom || '', voiceRoom: socket.data.voiceRoom || '', voiceChannel: socket.data.voiceChannel || LOBBY_CHANNEL, ping: Number.isFinite(socket.data.ping) ? Math.round(socket.data.ping) : null, isBot: Boolean(socket.data.isBot), joinedAt: socket.data.joinedAt || Date.now(), voiceupAudioState: safeAudioState(socket.data.voiceupAudioState), ...mediaPresence(socket.data.voiceupMediaState), callStartedAt: voiceActivityByRoom.get(socket.data.serverRoom)?.get(socket.data.voiceChannel) || 0 });
   const localClientSockets = () => [...io.sockets.sockets.values()].filter((socket) => socket.data.room && !socket.data.isFederation);
   const sendFederation = (event, payload) => { if (federationTransport?.connected) federationTransport.emit(event, payload); };
   const nodeLoadScore = (node = {}) => {
@@ -337,7 +479,10 @@ function startSignalingServer(port = 3000, options = {}) {
     const id = String(value.id || '').slice(0, 180); const room = safeRoomId(value.room); if (!id || !room) return;
     const layout = roomLayout(room); const requested = safeChannel(value.voiceChannel, LOBBY_CHANNEL);
     const voiceChannel = requested === LOBBY_CHANNEL || layout.voiceChannels.includes(requested) ? requested : layout.voiceChannels[0];
-    const member = { id, localId: String(value.localId || ''), clientId: safeIdentity(value.clientId), name: String(value.name || 'Visitante').slice(0, 24), color: AVATAR_COLORS.includes(value.color) ? value.color : AVATAR_COLORS[0], avatar: typeof value.avatar === 'string' && value.avatar.startsWith('data:image/') && value.avatar.length <= 150000 ? value.avatar : '', status: safePresenceStatus(value.status), ping: Number.isFinite(value.ping) ? Math.round(value.ping) : null, room, serverRoom: serverKey(room), voiceChannel, voiceRoom: voiceKey(room, voiceChannel), isBot: Boolean(value.isBot), joinedAt: Number(value.joinedAt) || Date.now(), remote: true };
+    const member = { id, localId: String(value.localId || ''), clientId: safeIdentity(value.clientId), name: String(value.name || 'Visitante').slice(0, 24), color: AVATAR_COLORS.includes(value.color) ? value.color : AVATAR_COLORS[0], avatar: typeof value.avatar === 'string' && value.avatar.startsWith('data:image/') && value.avatar.length <= 150000 ? value.avatar : '', status: safePresenceStatus(value.status), platform: safeClientPlatform(value.platform), ping: Number.isFinite(value.ping) ? Math.round(value.ping) : null, room, serverRoom: serverKey(room), voiceChannel, voiceRoom: voiceKey(room, voiceChannel), isBot: Boolean(value.isBot), joinedAt: Number(value.joinedAt) || Date.now(), remote: true };
+    member.voiceupAudioState = safeAudioState(value.voiceupAudioState);
+    Object.assign(member, mediaPresence(value.voiceupMediaState));
+    member.callStartedAt = Number.isFinite(value.callStartedAt) && value.callStartedAt > 0 ? Math.min(Date.now(), value.callStartedAt) : 0;
     const previous = remoteMembers.get(id);
     if (previous?.voiceRoom && previous.voiceRoom !== member.voiceRoom && previous.voiceChannel !== LOBBY_CHANNEL) io.to(previous.voiceRoom).emit('peer-left', { id, name: previous.name });
     remoteMembers.set(id, member);
@@ -396,7 +541,7 @@ function startSignalingServer(port = 3000, options = {}) {
       const socket = io.sockets.sockets.get(localizeFederatedId(target));
       if (!socket?.data?.serverRoom || socket.data.serverRoom !== serverKey(origin?.room)) return;
       events.signals += 1;
-      socket.emit('signal', { from: String(origin.id || ''), name: origin.name || 'Visitante', color: origin.color || AVATAR_COLORS[0], avatar: origin.avatar || '', status: safePresenceStatus(origin.status), data });
+      socket.emit('signal', { from: String(origin.id || ''), name: origin.name || 'Visitante', color: origin.color || AVATAR_COLORS[0], avatar: origin.avatar || '', status: safePresenceStatus(origin.status), platform: safeClientPlatform(origin.platform), data });
     });
     transport.on('federation:moderate', ({ target, action, message, expiresAt, reason } = {}) => {
       const localId = localizeFederatedId(target);
@@ -486,6 +631,8 @@ function startSignalingServer(port = 3000, options = {}) {
 
   const plugins = loadPlugins({
     directories: options.pluginDirectories || [path.join(__dirname, 'plugins')],
+    trustedPluginHashes: options.trustedPluginHashes || [],
+    trustedPluginDirectories: options.trustedPluginDirectories || [],
     stateFile: options.pluginStateFile || '',
     addLog,
     emitSystemMessage: ({ room, textChannel, text, name, color, avatar, pluginId }) => {
@@ -518,11 +665,21 @@ function startSignalingServer(port = 3000, options = {}) {
     addLog('report', `Novo relatório de ${report.name || 'cliente'} · ${report.id}`);
     return res.status(201).json({ ok: true, id: report.id, message: 'Relatório enviado ao responsável por este servidor.' });
   });
-  app.get('/health', (_req, res) => res.json({ ok: true, app: 'VoiceUp Server', nodeId: clusterNodeId, cluster: { enabled: clusterEnabled, role: clusterRole, state: federationState }, maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, maxHumanVoiceChannelSize: MAX_HUMAN_VOICE_CHANNEL_SIZE, managedRooms: configuredRooms.size, storage: { chat: chatStore.stats(), reports: reportStore.stats() }, plugins: plugins.list().map(({ id, version }) => ({ id, version })), musicFiles: musicFiles() }));
+  const publicStatus = () => ({
+    ok: true,
+    app: 'VoiceUP Server',
+    version: String(options.version || ''),
+    uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+    participants: localClientSockets().filter((client) => !client.data.isBot).length,
+    activeRooms: new Set(localClientSockets().map((client) => client.data.room).filter(Boolean)).size,
+    cluster: { enabled: clusterEnabled, role: clusterRole, state: federationState },
+    limits: { humansPerCall: MAX_HUMAN_VOICE_CHANNEL_SIZE, membersPerCall: MAX_VOICE_CHANNEL_SIZE }
+  });
+  app.get(['/health', '/api/status'], (_req, res) => { res.set('Cache-Control', 'no-store'); res.json(publicStatus()); });
   io.on('connection', (socket) => {
     const federationAuth = socket.handshake?.auth || {};
     if (federationAuth.voiceupFederation) {
-      const allowed = clusterEnabled && clusterRole === 'primary' && clusterSecret && String(federationAuth.secret || '') === clusterSecret;
+      const allowed = clusterEnabled && clusterRole === 'primary' && safeSecretEqual(federationAuth.secret, clusterSecret);
       if (!allowed) { addLog('cluster', 'Pareamento de host recusado'); socket.disconnect(true); return; }
       socket.data.isFederation = true;
       const remoteHost = safeIdentity(federationAuth.hostId);
@@ -542,70 +699,118 @@ function startSignalingServer(port = 3000, options = {}) {
       return;
     }
     events.connections += 1; addLog('info', 'Novo cliente conectado');
-    socket.on('join-room', ({ roomId, roomPassword, voiceChannel, name, color, avatar, bot, clientId, status, capabilities }) => {
+    socket.on('identity-challenge-request', () => { if (consumeRate(socket, 'identity-challenge', 8, 60000)) issueIdentityChallenge(socket); });
+    socket.on('join-room', (payload = {}) => {
+      if (!payload || typeof payload !== 'object' || !consumeRate(socket, 'join', 12, 60000)) return;
+      const { roomId, roomPassword, voiceChannel, name, color, avatar, bot, botToken, clientId, status, capabilities } = payload;
       const room = safeRoomId(roomId);
       const layout = roomLayout(room);
       const requestedVoiceChannel = safeChannel(voiceChannel, LOBBY_CHANNEL);
       const voiceChannelName = requestedVoiceChannel === LOBBY_CHANNEL || layout.voiceChannels.includes(requestedVoiceChannel) ? requestedVoiceChannel : layout.voiceChannels[0];
       const safeName = String(name || 'Visitante').trim().slice(0, 24) || 'Visitante';
       const identity = safeIdentity(clientId);
+      const isBot = bot === true && safeSecretEqual(botToken, botSecret);
+      if (bot === true && !isBot) {
+        addLog('security', `Identificação de bot recusada para ${safeName}`);
+        socket.emit('app-error', 'Credencial interna de bot inválida.');
+        return setTimeout(() => socket.disconnect(true), 120);
+      }
       if (!room) return socket.emit('app-error', 'Informe um código de sala.');
-      if (layout.passwordHash && !bot && !verifyRoomPassword(roomPassword, layout.passwordHash)) {
+      const safeCapabilities = Array.isArray(capabilities) ? [...new Set(capabilities.map((value) => String(value || '').trim().slice(0, 48)).filter(Boolean))].slice(0, 16) : [];
+      const supportsIdentityProof = safeCapabilities.includes('identity-proof-v1');
+      let identityFingerprint = '';
+      if (!isBot && supportsIdentityProof) {
+        const proof = verifyIdentityProof(socket, payload, room, identity);
+        if (!proof.ok) {
+          socket.emit('identity-proof-required', { message: `Não foi possível confirmar a identidade deste perfil (${proof.reason}).` });
+          issueIdentityChallenge(socket);
+          return;
+        }
+        identityFingerprint = proof.fingerprint;
+      } else if (!isBot && identity && identityRegistry.clients[identity]?.fingerprint) {
+        socket.emit('identity-proof-required', { message: 'Este perfil já usa identidade protegida. Atualize o VoiceUP para continuar com ele.' });
+        return;
+      }
+      if (layout.passwordHash && !isBot && !verifyRoomPassword(roomPassword, layout.passwordHash)) {
         socket.emit('room-password-required', { roomId: room, message: 'Esta sala é privada. Informe a senha correta.' });
         return socket.emit('app-error', 'Esta sala é privada. Informe a senha correta.');
       }
       pruneExpiredBans();
-      if (!bot && identity && banned.has(identity)) {
+      if (!isBot && identity && banned.has(identity)) {
         const entry = banned.get(identity); const temporary = Boolean(entry.expiresAt);
         const expiresText = temporary ? ` até ${new Date(entry.expiresAt).toLocaleString('pt-BR')}` : '';
         socket.emit('server-action', { action: 'banned', message: `Você foi banido deste Server Host${expiresText}.${entry.reason ? ` Motivo: ${entry.reason}` : ''}`, expiresAt: entry.expiresAt, reason: entry.reason || '' });
         addLog('ban', `${safeName} tentou entrar, mas está banido`);
         return setTimeout(() => socket.disconnect(true), 120);
       }
-      const redirect = !bot ? shouldRedirectToRemote(capabilities) : null;
+      const redirect = !isBot ? shouldRedirectToRemote(capabilities) : null;
       if (redirect) {
         socket.emit('cluster-redirect', { ...redirect, sourceNodeId: clusterNodeId });
         addLog('cluster', `${safeName} direcionado ao host ${redirect.nodeId}`);
         return;
       }
       const serverRoom = serverKey(room); const voiceRoom = voiceKey(room, voiceChannelName);
+      const staleSessions = duplicateSessionsFor(room, identity, socket.id, isBot);
+      const staleSessionIds = new Set(staleSessions.map((candidate) => candidate.id));
       const voiceSettings = voiceChannelSettings(layout, voiceChannelName); const limits = voiceChannelLimits(layout, voiceChannelName);
-      if (voiceChannelName !== LOBBY_CHANNEL && voiceSettings.locked && !bot) return socket.emit('app-error', 'Este canal de voz está fechado pelo ServerHost.');
-      if (voiceChannelName !== LOBBY_CHANNEL && peersIn(voiceRoom).length >= limits.total) return socket.emit('app-error', `O canal de voz já possui o limite de ${limits.total} pessoas.`);
-      const regularPeers = peersIn(voiceRoom).filter((peer) => !peer.isBot);
-      if (voiceChannelName !== LOBBY_CHANNEL && !bot && regularPeers.length >= limits.humans) return socket.emit('app-error', `O canal de voz atingiu o limite de ${limits.humans} pessoas.`);
-      const usedColors = peersIn(serverRoom).map((peer) => peer.color);
+      if (voiceChannelName !== LOBBY_CHANNEL && voiceSettings.locked && !isBot) return socket.emit('app-error', 'Este canal de voz está fechado pelo ServerHost.');
+      const activeVoicePeers = peersIn(voiceRoom).filter((peer) => peer.id !== socket.id && !staleSessionIds.has(peer.id));
+      if (voiceChannelName !== LOBBY_CHANNEL && activeVoicePeers.length >= limits.total) return socket.emit('app-error', `O canal de voz já possui o limite de ${limits.total} pessoas.`);
+      const regularPeers = activeVoicePeers.filter((peer) => !peer.isBot);
+      if (voiceChannelName !== LOBBY_CHANNEL && !isBot && regularPeers.length >= limits.humans) return socket.emit('app-error', `O canal de voz atingiu o limite de ${limits.humans} pessoas.`);
+      const usedColors = peersIn(serverRoom).filter((peer) => !staleSessionIds.has(peer.id)).map((peer) => peer.color);
       const requestedColor = AVATAR_COLORS.includes(color) ? color : AVATAR_COLORS[0];
       const safeColor = usedColors.includes(requestedColor) ? AVATAR_COLORS.find((candidate) => !usedColors.includes(candidate)) || requestedColor : requestedColor;
-      const safeAvatar = typeof avatar === 'string' && avatar.startsWith('data:image/') && avatar.length <= 150000 ? avatar : '';
+      const safeAvatar = safeDataImage(avatar);
+      leaveCurrentMembership(socket);
       socket.join(serverRoom); socket.join(voiceRoom);
-      const safeCapabilities = Array.isArray(capabilities) ? [...new Set(capabilities.map((value) => String(value || '').trim().slice(0, 48)).filter(Boolean))].slice(0, 16) : [];
-      Object.assign(socket.data, { room, serverRoom, voiceRoom, voiceChannel: voiceChannelName, name: safeName, color: safeColor, avatar: safeAvatar, status: safePresenceStatus(status), clientId: identity, capabilities: safeCapabilities, isBot: Boolean(bot), joinedAt: Date.now() });
+      Object.assign(socket.data, { room, serverRoom, voiceRoom, voiceChannel: voiceChannelName, name: safeName, color: safeColor, avatar: safeAvatar, status: safePresenceStatus(status), platform: safeClientPlatform(payload.platform), clientId: identity, identityFingerprint, identityVerified: Boolean(identityFingerprint), capabilities: safeCapabilities, isBot, joinedAt: Date.now() });
+      replaceDuplicateSessions(staleSessions);
       socket.emit('color-assigned', { color: safeColor }); events.joins += 1; addLog('join', `${safeName} entrou em ${room} / ${voiceChannelName}`);
       publishRoomLayout(socket);
       publishServerProfile(socket);
-      const peers = voiceChannelName === LOBBY_CHANNEL ? [] : peersIn(voiceRoom).filter((peer) => peer.id !== socket.id);
+      const peers = voiceChannelName === LOBBY_CHANNEL ? [] : peersIn(voiceRoom).filter((peer) => peer.id !== socket.id && !staleSessionIds.has(peer.id));
       socket.emit('room-joined', { roomId: room, voiceChannel: voiceChannelName, peers, limits: publicRoomLayout(layout).limits, serverProfile: { ...serverProfile } });
       socket.emit('chat-history', { messages: historyFor(room) });
       publishClusterRoute(socket);
-      if (voiceChannelName !== LOBBY_CHANNEL) socket.to(voiceRoom).emit('peer-joined', { id: socket.id, name: safeName, color: safeColor, avatar: safeAvatar, status: socket.data.status });
+      if (voiceChannelName !== LOBBY_CHANNEL) socket.to(voiceRoom).emit('peer-joined', { id: socket.id, name: safeName, color: safeColor, avatar: safeAvatar, clientId: identity, status: socket.data.status, platform: safeClientPlatform(socket.data.platform) });
       broadcastPresence(serverRoom);
       sendFederation('federation:member', { hostId: clusterNodeId, member: exportMember(socket) });
     });
     socket.on('request-room-presence', () => {
-      if (!socket.data.serverRoom) return;
-      socket.emit('room-presence', { members: peersIn(socket.data.serverRoom) });
+      if (!socket.data.serverRoom || !consumeRate(socket, 'presence-request', 20, 10000)) return;
+      socket.emit('room-presence', roomPresencePacket(socket.data.serverRoom));
     });
-    socket.on('presence-update', ({ status } = {}) => {
-      if (!socket.data.serverRoom) return;
-      const next = safePresenceStatus(status);
-      if (next === socket.data.status) return;
+    socket.on('presence-update', ({ status, platform } = {}) => {
+      if (!socket.data.serverRoom || !consumeRate(socket, 'presence-update', 20, 30000)) return;
+      const next = status === undefined ? socket.data.status : safePresenceStatus(status);
+      const nextPlatform = safeClientPlatform(platform) || safeClientPlatform(socket.data.platform);
+      if (next === socket.data.status && nextPlatform === socket.data.platform) return;
       socket.data.status = next;
+      socket.data.platform = nextPlatform;
       broadcastPresence(socket.data.serverRoom);
       sendFederation('federation:member', { hostId: clusterNodeId, member: exportMember(socket) });
     });
-    socket.on('switch-voice-channel', ({ voiceChannel }) => {
-      if (!socket.data.room) return;
+    socket.on('media-state-update', (value = {}) => {
+      if (!socket.data.serverRoom || !consumeRate(socket, 'media-state-update', 40, 10000)) return;
+      const state = safeMediaState(value);
+      const previous = socket.data.voiceupMediaState;
+      if (previous && state.screen === previous.screen && state.camera === previous.camera) return;
+      socket.data.voiceupMediaState = state;
+      broadcastPresence(socket.data.serverRoom);
+      sendFederation('federation:member', { hostId: clusterNodeId, member: exportMember(socket) });
+    });
+    socket.on('audio-state-update', (value = {}) => {
+      if (!socket.data.serverRoom || !consumeRate(socket, 'audio-state-update', 40, 10000)) return;
+      const state = safeAudioState(value);
+      const previous = safeAudioState(socket.data.voiceupAudioState);
+      if (state.micMuted === previous.micMuted && state.outputMuted === previous.outputMuted) return;
+      socket.data.voiceupAudioState = state;
+      broadcastPresence(socket.data.serverRoom);
+      sendFederation('federation:member', { hostId: clusterNodeId, member: exportMember(socket) });
+    });
+    socket.on('switch-voice-channel', ({ voiceChannel } = {}) => {
+      if (!socket.data.room || !consumeRate(socket, 'voice-switch', 16, 30000)) return;
       const layout = roomLayout(socket.data.room);
       const requestedChannel = safeChannel(voiceChannel, layout.voiceChannels[0]);
       const channel = requestedChannel === LOBBY_CHANNEL || layout.voiceChannels.includes(requestedChannel) ? requestedChannel : layout.voiceChannels[0];
@@ -621,12 +826,12 @@ function startSignalingServer(port = 3000, options = {}) {
       socket.join(nextVoiceRoom); socket.data.voiceRoom = nextVoiceRoom; socket.data.voiceChannel = channel;
       const peers = channel === LOBBY_CHANNEL ? [] : peersIn(nextVoiceRoom).filter((peer) => peer.id !== socket.id);
       socket.emit('room-joined', { roomId: socket.data.room, voiceChannel: channel, peers, limits: publicRoomLayout(layout).limits, serverProfile: { ...serverProfile } });
-      if (channel !== LOBBY_CHANNEL) socket.to(nextVoiceRoom).emit('peer-joined', { id: socket.id, name: socket.data.name, color: socket.data.color, avatar: socket.data.avatar, status: safePresenceStatus(socket.data.status) });
+      if (channel !== LOBBY_CHANNEL) socket.to(nextVoiceRoom).emit('peer-joined', { id: socket.id, name: socket.data.name, color: socket.data.color, avatar: socket.data.avatar, clientId: socket.data.clientId || '', status: safePresenceStatus(socket.data.status), platform: safeClientPlatform(socket.data.platform) });
       broadcastPresence(socket.data.serverRoom); addLog('channel', channel === LOBBY_CHANNEL ? `${socket.data.name} saiu da call` : `${socket.data.name} mudou para ${channel}`);
       sendFederation('federation:member', { hostId: clusterNodeId, member: exportMember(socket) });
     });
-    socket.on('text-message', ({ text, textChannel, messageId, createdAt, mentions, reply }) => {
-      if (!socket.data.serverRoom) return;
+    socket.on('text-message', ({ text, textChannel, messageId, createdAt, mentions, reply } = {}) => {
+      if (!socket.data.serverRoom || !consumeRate(socket, 'text', 30, 10000)) return;
       const safeText = String(text || '').trim().slice(0, 500); if (!safeText) return;
       events.messages += 1;
       const layout = roomLayout(socket.data.room);
@@ -645,16 +850,16 @@ function startSignalingServer(port = 3000, options = {}) {
       const replyPacket = safeReply(socket.data.room, reply);
       socket.data.chatMessages ||= new Map(); socket.data.chatMessages.set(id, { textChannel: safeTextChannel, mentions: safeMentionIds, mentionClientIds });
       if (socket.data.chatMessages.size > 250) socket.data.chatMessages.delete(socket.data.chatMessages.keys().next().value);
-      const packet = { from: socket.id, authorClientId: socket.data.clientId || '', messageId: id, createdAt: sentAt, text: safeText, textChannel: safeTextChannel, name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0], avatar: socket.data.avatar || '', mentions: safeMentionIds, mentionClientIds, reply: replyPacket, reactions: {}, pinned: false };
+      const packet = { from: socket.id, authorClientId: socket.data.clientId || '', authorIdentityFingerprint: socket.data.identityFingerprint || '', messageId: id, createdAt: sentAt, text: safeText, textChannel: safeTextChannel, name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0], avatar: socket.data.avatar || '', mentions: safeMentionIds, mentionClientIds, reply: replyPacket, reactions: {}, pinned: false };
       rememberMessage(socket.data.room, packet);
       io.to(socket.data.serverRoom).emit('text-message', packet);
       sendFederation('federation:text', { hostId: clusterNodeId, room: socket.data.room, packet: { ...packet, from: federationId(socket.id) } });
       plugins.onTextMessage({ text: safeText, room: socket.data.room, textChannel: safeTextChannel, voiceChannel: socket.data.voiceChannel, user: { id: socket.id, clientId: socket.data.clientId || '', name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0] }, serverIsCloud: false });
     });
-    socket.on('edit-message', ({ messageId, text, textChannel, mentions }) => {
-      if (!socket.data.serverRoom) return;
+    socket.on('edit-message', ({ messageId, text, textChannel, mentions } = {}) => {
+      if (!socket.data.serverRoom || !consumeRate(socket, 'message-edit', 24, 10000)) return;
       const id = String(messageId || ''); const stored = messageById(socket.data.room, id); const known = socket.data.chatMessages?.get(id); const safeText = String(text || '').trim().slice(0, 500);
-      const ownsMessage = stored && (stored.authorClientId && socket.data.clientId ? stored.authorClientId === socket.data.clientId : stored.from === socket.id);
+      const ownsMessage = stored && (stored.authorIdentityFingerprint ? stored.authorIdentityFingerprint === socket.data.identityFingerprint : (stored.authorClientId && socket.data.clientId ? stored.authorClientId === socket.data.clientId : stored.from === socket.id));
       if ((!known && !ownsMessage) || !safeText || safeChannel(textChannel, 'geral') !== (stored?.textChannel || known?.textChannel)) return socket.emit('app-error', 'Não foi possível editar essa mensagem.');
       const editedAt = Date.now(); const safeMentionIds = safeMentions(socket.data.serverRoom, mentions); const mentionClientIds = stableMentionIds(socket.data.serverRoom, safeMentionIds);
       if (known) Object.assign(known, { mentions: safeMentionIds, mentionClientIds });
@@ -664,11 +869,11 @@ function startSignalingServer(port = 3000, options = {}) {
       sendFederation('federation:edit', { hostId: clusterNodeId, room: socket.data.room, packet: { ...packet, from: federationId(socket.id) } });
     });
     socket.on('react-message', ({ messageId, emoji } = {}) => {
-      if (!socket.data.serverRoom) return;
+      if (!socket.data.serverRoom || !consumeRate(socket, 'message-reaction', 40, 10000)) return;
       const stored = messageById(socket.data.room, messageId); const safeEmoji = String(emoji || '').trim().slice(0, 12);
       if (!stored || !safeEmoji) return socket.emit('app-error', 'Não foi possível reagir a essa mensagem.');
       stored.reactions ||= {};
-      const actor = socket.data.clientId || socket.id; const actors = new Set(Array.isArray(stored.reactions[safeEmoji]) ? stored.reactions[safeEmoji] : []);
+      const actor = socket.data.identityFingerprint ? `key:${socket.data.identityFingerprint}` : (socket.data.clientId || socket.id); const actors = new Set(Array.isArray(stored.reactions[safeEmoji]) ? stored.reactions[safeEmoji] : []);
       if (actors.has(actor)) actors.delete(actor); else actors.add(actor);
       if (actors.size) stored.reactions[safeEmoji] = [...actors]; else delete stored.reactions[safeEmoji];
       chatStore.touch();
@@ -677,7 +882,7 @@ function startSignalingServer(port = 3000, options = {}) {
       sendFederation('federation:reaction', { hostId: clusterNodeId, room: socket.data.room, packet });
     });
     socket.on('pin-message', ({ messageId, pinned } = {}) => {
-      if (!socket.data.serverRoom) return;
+      if (!socket.data.serverRoom || !consumeRate(socket, 'message-pin', 20, 10000)) return;
       const stored = messageById(socket.data.room, messageId); if (!stored) return socket.emit('app-error', 'Mensagem não encontrada.');
       stored.pinned = Boolean(pinned); stored.pinnedBy = socket.data.clientId || socket.id;
       chatStore.touch();
@@ -686,21 +891,22 @@ function startSignalingServer(port = 3000, options = {}) {
       sendFederation('federation:pin', { hostId: clusterNodeId, room: socket.data.room, packet });
     });
     socket.on('delete-message', ({ messageId } = {}) => {
-      if (!socket.data.serverRoom) return;
+      if (!socket.data.serverRoom || !consumeRate(socket, 'message-delete', 20, 10000)) return;
       const stored = messageById(socket.data.room, messageId);
-      const ownsMessage = stored && (stored.authorClientId && socket.data.clientId ? stored.authorClientId === socket.data.clientId : stored.from === socket.id);
+      const ownsMessage = stored && (stored.authorIdentityFingerprint ? stored.authorIdentityFingerprint === socket.data.identityFingerprint : (stored.authorClientId && socket.data.clientId ? stored.authorClientId === socket.data.clientId : stored.from === socket.id));
       if (!ownsMessage) return socket.emit('app-error', 'Você só pode apagar suas próprias mensagens.');
       forgetMessage(socket.data.room, stored.messageId); socket.data.chatMessages?.delete(stored.messageId);
       const packet = { messageId: stored.messageId, textChannel: stored.textChannel };
       io.to(socket.data.serverRoom).emit('message-deleted', packet);
       sendFederation('federation:delete', { hostId: clusterNodeId, room: socket.data.room, packet });
     });
-    socket.on('signal', ({ target, data }) => {
-      if (!target || !socket.data.serverRoom) return;
+    socket.on('signal', ({ target, data } = {}) => {
+      if (!target || !socket.data.serverRoom || !consumeRate(socket, 'signal', 360, 10000)) return;
+      try { if (Buffer.byteLength(JSON.stringify(data || {}), 'utf8') > 64 * 1024) return socket.emit('app-error', 'Pacote de conexão grande demais.'); } catch { return; }
       const targetSocket = io.sockets.sockets.get(String(target));
       if (targetSocket && targetSocket.data.serverRoom === socket.data.serverRoom) {
         events.signals += 1;
-        targetSocket.emit('signal', { from: socket.id, name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0], avatar: socket.data.avatar || '', status: safePresenceStatus(socket.data.status), data });
+        targetSocket.emit('signal', { from: socket.id, name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0], avatar: socket.data.avatar || '', status: safePresenceStatus(socket.data.status), platform: safeClientPlatform(socket.data.platform), data });
         return;
       }
       const remote = remoteMembers.get(String(target));
@@ -708,10 +914,10 @@ function startSignalingServer(port = 3000, options = {}) {
       events.signals += 1;
       sendFederation('federation:signal', { hostId: clusterNodeId, target: remote.id, origin: exportMember(socket), data });
     });
-    socket.on('latency-ping', ({ sentAt }) => socket.emit('latency-pong', { sentAt }));
-    socket.on('server-pong', ({ sentAt }) => { const ping = Date.now() - Number(sentAt); if (Number.isFinite(ping) && ping >= 0 && ping < 10000) socket.data.ping = ping; });
+    socket.on('latency-ping', ({ sentAt } = {}) => { if (consumeRate(socket, 'latency', 20, 10000)) socket.emit('latency-pong', { sentAt }); });
+    socket.on('server-pong', ({ sentAt } = {}) => { if (!consumeRate(socket, 'server-pong', 30, 10000)) return; const ping = Date.now() - Number(sentAt); if (Number.isFinite(ping) && ping >= 0 && ping < 10000) socket.data.ping = ping; });
     socket.on('webrtc-stats', (packet = {}) => {
-      if (!socket.data.serverRoom || socket.data.isBot) return;
+      if (!socket.data.serverRoom || socket.data.isBot || !consumeRate(socket, 'webrtc-stats', 12, 30000)) return;
       const sanitized = sanitizeWebrtcPacket(socket, packet);
       webrtcTelemetry.set(socket.id, sanitized);
       sendFederation('federation:telemetry', { hostId: clusterNodeId, packet: sanitized });
@@ -720,7 +926,7 @@ function startSignalingServer(port = 3000, options = {}) {
   });
 
   const members = () => [
-    ...localClientSockets().map((socket) => ({ id: socket.id, clientId: socket.data.clientId || '', name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0], avatar: socket.data.avatar || '', status: safePresenceStatus(socket.data.status), ping: Number.isFinite(socket.data.ping) ? Math.round(socket.data.ping) : null, room: socket.data.room || '', voiceChannel: socket.data.voiceChannel || '', isBot: Boolean(socket.data.isBot), remote: false, connectedSeconds: socket.data.joinedAt ? Math.floor((Date.now() - socket.data.joinedAt) / 1000) : 0 })),
+    ...localClientSockets().map((socket) => ({ id: socket.id, clientId: socket.data.clientId || '', name: socket.data.name || 'Visitante', color: socket.data.color || AVATAR_COLORS[0], avatar: socket.data.avatar || '', status: safePresenceStatus(socket.data.status), platform: safeClientPlatform(socket.data.platform), ping: Number.isFinite(socket.data.ping) ? Math.round(socket.data.ping) : null, room: socket.data.room || '', voiceChannel: socket.data.voiceChannel || '', isBot: Boolean(socket.data.isBot), remote: false, connectedSeconds: socket.data.joinedAt ? Math.floor((Date.now() - socket.data.joinedAt) / 1000) : 0 })),
     ...[...remoteMembers.values()].map((member) => ({ ...member, remote: true, connectedSeconds: member.joinedAt ? Math.floor((Date.now() - member.joinedAt) / 1000) : 0 }))
   ];
   const updateRoomLayouts = (rooms = []) => {

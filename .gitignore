@@ -1,6 +1,12 @@
 node_modules/
+mobile/dist/
 release/
 release-server/
+release-beta/
+release-beta-server/
+release-linux/
+release-linux-server/
+release-linux-bundle/
 release-server-v*/
 release-v*/
 releases/
@@ -12,3 +18,38 @@ native/*.obj
 .env.*
 !.env.example
 .DS_Store
+
+# Caches e saidas locais de empacotamento
+.electron-cache/
+.electron-builder-cache/
+.npm-cache/
+.store-build/
+tmp-electron-debug-profile/
+
+# Dados operacionais nunca devem entrar no repositorio ou em pacotes publicos
+data/
+deploy/**/data/
+deploy/**/node_modules/
+
+# Perfis temporarios usados pelos testes de interface e midia
+tools/.feature-ui-userdata*/
+tools/.process-audio-test-userdata/
+tools/.verify-*-userdata/
+tools/.security-*/
+
+# Material privado de assinatura
+*.pfx
+*.p12
+*.pvk
+*.key
+*.keystore
+*.jks
+*.dpapi
+.release-tools/
+release-beta-platform*/
+release-store-v*/
+test-1.1.3-mobile-beta.*/
+selfweb/dist/
+mobile/android/.idea/
+release-assets/
+test-1.2.0/

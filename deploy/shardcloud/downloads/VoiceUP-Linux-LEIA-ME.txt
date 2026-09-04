@@ -1,0 +1,33 @@
+VoiceUP Linux 1.2.0 — Cliente e ServerHost x64
+
+AppImage portátil e DEB para Debian/Ubuntu e derivados. Electron incluído.
+Baixe somente os pacotes da Release oficial v1.2.0 no GitHub.
+
+CLIENTE
+   chmod +x VoiceUP-1.2.0-linux-x64.AppImage
+   ./VoiceUP-1.2.0-linux-x64.AppImage
+
+SERVERHOST
+   chmod +x VoiceUPServer-1.2.0-linux-x64.AppImage
+   ./VoiceUPServer-1.2.0-linux-x64.AppImage
+
+Sem FUSE, tente --appimage-extract-and-run. Para instalar no Debian/Ubuntu:
+   sudo apt install ./VoiceUP-1.2.0-linux-x64.deb
+   sudo apt install ./VoiceUPServer-1.2.0-linux-x64.deb
+
+Execute os aplicativos como usuário normal, sem sudo e sem --no-sandbox.
+
+LIMITAÇÕES
+- Áudio isolado da tela/aplicativo não disponível; microfone é separado.
+- Captura Wayland depende do portal PipeWire e do compositor.
+- Atalhos globais e bandeja dependem do ambiente gráfico.
+- ServerHost usa TCP 3000 por padrão; firewall/NAT podem limitar o acesso.
+- AppImage novo não substitui sozinho o arquivo antigo ou seus atalhos.
+- Testes automatizados não substituem testes em hardware GNOME/KDE/X11.
+
+INTEGRIDADE
+O atualizador verifica o catálogo assinado com Ed25519 e o SHA-256 do pacote.
+Para conferência manual, baixe o arquivo SHA256SUMS da mesma Release:
+   sha256sum --ignore-missing -c VoiceUP-SHA256SUMS-1.2.0.txt
+
+Projeto: https://github.com/HeitorDJAk47Gamer/VoiceUP/releases/tag/v1.2.0

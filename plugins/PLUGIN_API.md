@@ -4,6 +4,10 @@ A API permite reagir a mensagens, responder como bot, guardar dados e expor
 opções no painel do host. O formato é CommonJS (`module.exports`) e funciona no
 Node.js usado pelo ServerHost e pelo VoiceUP Cloud.
 
+Para solicitar um plugin a outra IA, use o documento autocontido
+[GUIA_PARA_IA.md](./GUIA_PARA_IA.md). Esta página permanece como referência
+resumida para consulta durante o desenvolvimento.
+
 ## Estrutura exportada
 
 | Campo | Obrigatório | Descrição |
@@ -76,6 +80,12 @@ api.storage.delete('count');
 Guarde somente dados serializáveis e pequenos. Não armazene senhas, tokens ou
 arquivos grandes nesse espaço.
 
+Também não coloque API keys, senhas ou tokens em `settings`. As configurações
+são persistidas em texto comum e podem ser incluídas em respostas
+administrativas. Plugins que integrem serviços externos devem ler o segredo de
+uma variável de ambiente do processo e nunca escrevê-lo em URLs, mensagens ou
+logs.
+
 ### `api.media`
 
 - `api.media.list()` lista os arquivos de áudio reconhecidos pelo host.
@@ -110,12 +120,18 @@ onAdminAction({ action, payload, plugin, api }) {
 
 ## Compatibilidade e segurança
 
+- Um arquivo externo é identificado pelo SHA-256 e fica bloqueado antes do
+  `require()`. No ServerHost, o administrador precisa confirmar esse hash no
+  painel; no Cloud, precisa incluí-lo em
+  `VOICEUP_TRUSTED_PLUGIN_HASHES`. Qualquer alteração exige nova aprovação.
 - Um erro em um plugin é isolado e aparece nos logs, sem derrubar os outros.
 - IDs duplicados são ignorados.
 - O runtime limita textos, schemas e imagens do painel.
 - Não use `eval`, não execute comandos recebidos do chat e não monte caminhos
   de arquivos com conteúdo enviado por participantes.
-- Um plugin é código de servidor e pode usar módulos nativos do Node.js; essa
-  liberdade também significa que o autor do host deve revisar o arquivo.
+- Um plugin aprovado é código de servidor e pode usar módulos nativos do
+  Node.js, acessar arquivos e iniciar conexões de rede com as permissões do
+  processo. A aprovação por hash não é uma sandbox; o administrador deve
+  revisar a origem e o arquivo completo.
 - A API ainda é beta. Mantenha `version` no plugin e teste em uma pasta de teste
   antes de colocar no servidor principal.

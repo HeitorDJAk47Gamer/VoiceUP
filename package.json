@@ -1,30 +1,58 @@
 {
   "name": "voiceup",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "private": true,
   "author": "Goat Gank",
   "description": "Comunicação P2P simples por voz e texto",
+  "desktopName": "com.voiceup.app.desktop",
   "main": "electron-main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
     "test:update-compat": "node tools/test-update-compat.js",
+    "test:beta-installer": "node tools/test-beta-installer.js",
+    "test:welcome-layout": "node tools/test-welcome-layout.js",
+    "test:channel-roster": "node tools/test-channel-roster.js && node tools/channel-presence-smoke-test.js",
+    "test:session-dedup": "node tools/session-dedup-smoke-test.js",
+    "test:cloud-session-dedup": "node tools/cloud-session-dedup-smoke-test.js",
+    "test:security": "node tools/security-smoke-test.js",
+    "test:hardware-acceleration": "node tools/test-hardware-acceleration.js",
+    "test:fullscreen-game-capture": "node tools/test-fullscreen-game-capture.js",
+    "test:linux": "node tools/test-linux-compat.js",
+    "test:linux-package": "node tools/test-linux-package.js",
+    "test:multi-live": "electron tools/multi-live-ui-smoke-test.js",
+    "test:live-performance": "node tools/test-live-performance.js",
+    "test:live-performance:runtime": "node tools/verify-game-stream-fps.js",
+    "test:rnnoise": "electron tools/rnnoise-smoke-test.js",
+    "test:rnnoise:packaged": "electron tools/rnnoise-smoke-test.js --packaged",
     "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-process-audio.ps1",
     "predist": "npm run build:native",
     "dist": "electron-builder --win nsis",
+    "predist:beta": "npm run build:native",
+    "dist:beta": "electron-builder --win nsis --config.directories.output=release-beta",
     "predist:store": "npm run build:native",
-    "dist:store": "electron-builder --win appx --publish never",
+    "dist:store": "electron-builder --win appx --publish never --config.appx.setBuildNumber=true --config.buildNumber=65535",
+    "predist:store:beta": "npm run build:native",
+    "dist:store:beta": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-store-beta.ps1",
+    "test:store-package": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/test-store-package.ps1",
     "predist:server": "npm run build:native",
-    "dist:server": "electron-builder --win nsis --config.appId=com.goatgank.voiceup.server --config.extraMetadata.main=server-host-main.js --config.productName=VoiceUPServer --config.directories.output=release-server"
+    "dist:server": "electron-builder --win nsis --config.appId=com.goatgank.voiceup.server --config.extraMetadata.main=server-host-main.js --config.extraMetadata.name=voiceup-server --config.extraMetadata.productName=VoiceUPServer --config.productName=VoiceUPServer --config.win.executableName=VoiceUPServer --config.nsis.shortcutName=VoiceUPServer --config.nsis.uninstallDisplayName=VoiceUPServer --config.directories.output=release-server",
+    "predist:beta:server": "npm run build:native",
+    "dist:beta:server": "electron-builder --win nsis --config.appId=com.goatgank.voiceup.server --config.extraMetadata.main=server-host-main.js --config.extraMetadata.name=voiceup-server --config.extraMetadata.productName=VoiceUPServer --config.productName=VoiceUPServer --config.win.executableName=VoiceUPServer --config.nsis.shortcutName=VoiceUPServer --config.nsis.uninstallDisplayName=VoiceUPServer --config.directories.output=release-beta-server",
+    "dist:linux": "electron-builder --linux AppImage deb --x64 --publish never --config.directories.output=release-linux",
+    "dist:linux:dir": "electron-builder --linux dir --x64 --publish never --config.directories.output=release-linux",
+    "dist:linux:server": "electron-builder --linux AppImage deb --x64 --publish never --config.appId=com.goatgank.voiceup.server --config.extraMetadata.main=server-host-main.js --config.extraMetadata.name=voiceup-server --config.extraMetadata.productName=VoiceUPServer --config.extraMetadata.desktopName=com.goatgank.voiceup.server.desktop --config.productName=VoiceUPServer --config.linux.executableName=voiceup-server --config.directories.output=release-linux-server",
+    "dist:linux:server:dir": "electron-builder --linux dir --x64 --publish never --config.appId=com.goatgank.voiceup.server --config.extraMetadata.main=server-host-main.js --config.extraMetadata.name=voiceup-server --config.extraMetadata.productName=VoiceUPServer --config.extraMetadata.desktopName=com.goatgank.voiceup.server.desktop --config.productName=VoiceUPServer --config.linux.executableName=voiceup-server --config.directories.output=release-linux-server"
   },
   "dependencies": {
     "@achingbrain/nat-port-mapper": "^4.0.5",
+    "@sapphi-red/web-noise-suppressor": "^0.4.0",
     "express": "^4.21.2",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1"
   },
   "devDependencies": {
-    "electron": "^37.2.6",
+    "electron": "43.4.1",
     "electron-builder": "^26.0.12"
   },
   "build": {
@@ -51,16 +79,39 @@
       "music/README.md",
       "package.json"
     ],
-    "extraResources": [
-      {
-        "from": "native/voiceup-process-audio.exe",
-        "to": "native/voiceup-process-audio.exe"
-      }
-    ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    },
     "win": {
       "target": "nsis",
       "icon": "assets/voiceup-icon.ico",
-      "executableName": "VoiceUP"
+      "executableName": "VoiceUP",
+      "extraResources": [
+        {
+          "from": "native/voiceup-process-audio.exe",
+          "to": "native/voiceup-process-audio.exe"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "assets/voiceup-logo-2d.png",
+      "category": "Network",
+      "synopsis": "Comunicação P2P por voz, vídeo e texto",
+      "description": "Cliente VoiceUP para comunicação P2P por voz, vídeo, compartilhamento de tela e texto.",
+      "maintainer": "Goat Gank",
+      "vendor": "Goat Gank",
+      "executableName": "voiceup",
+      "artifactName": "${productName}-${version}-linux-x64.${ext}",
+      "syncDesktopName": true
     },
     "appx": {
       "identityName": "HeitorDJAk47.VoiceUP",

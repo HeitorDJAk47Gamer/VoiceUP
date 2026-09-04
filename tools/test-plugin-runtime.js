@@ -1,12 +1,46 @@
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { loadPlugins } = require('../plugin-runtime');
 
 (async () => {
+  const externalDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceup-plugin-gate-'));
+  const externalPluginFile = path.join(externalDirectory, 'externo.js');
+  const externalStateFile = path.join(externalDirectory, 'state.json');
+  try {
+    fs.writeFileSync(externalPluginFile, `global.__voiceupExternalPluginExecuted = true; module.exports = { id: 'externo', name: 'Externo', onTextMessage() {} };`);
+    delete global.__voiceupExternalPluginExecuted;
+    let guardedRuntime = loadPlugins({ directories: [externalDirectory], stateFile: externalStateFile, emitSystemMessage: () => {} });
+    let pendingPlugin = guardedRuntime.list()[0];
+    assert.equal(pendingPlugin.requiresApproval, true);
+    assert.equal(global.__voiceupExternalPluginExecuted, undefined, 'Plugin externo foi executado antes da aprovação.');
+    let approval = await guardedRuntime.configure(pendingPlugin.id, { enabled: true, approveFingerprint: '0'.repeat(64) });
+    assert.equal(approval.ok, false);
+    approval = await guardedRuntime.configure(pendingPlugin.id, { enabled: true, approveFingerprint: pendingPlugin.fingerprint });
+    assert.equal(approval.ok, true);
+    assert.equal(approval.requiresReload, true);
+    assert.equal(global.__voiceupExternalPluginExecuted, undefined, 'A aprovação executou o plugin antes da recarga solicitada.');
+    guardedRuntime = loadPlugins({ directories: [externalDirectory], stateFile: externalStateFile, emitSystemMessage: () => {} });
+    assert.equal(global.__voiceupExternalPluginExecuted, true);
+    assert.equal(guardedRuntime.list()[0].id, 'externo');
+
+    global.__voiceupExternalPluginExecuted = false;
+    fs.appendFileSync(externalPluginFile, `\n// arquivo alterado`);
+    guardedRuntime = loadPlugins({ directories: [externalDirectory], stateFile: externalStateFile, emitSystemMessage: () => {} });
+    pendingPlugin = guardedRuntime.list()[0];
+    assert.equal(pendingPlugin.requiresApproval, true, 'Plugin alterado reutilizou uma aprovação antiga.');
+    assert.equal(global.__voiceupExternalPluginExecuted, false, 'Plugin alterado foi executado antes da nova aprovação.');
+  } finally {
+    delete global.__voiceupExternalPluginExecuted;
+    fs.rmSync(externalDirectory, { recursive: true, force: true });
+  }
+
   const messages = [];
   const events = [];
   const runtime = loadPlugins({
     directories: [path.join(__dirname, '..', 'plugins')],
+    trustedPluginDirectories: [path.join(__dirname, '..', 'plugins')],
     emitSystemMessage: (message) => messages.push(message),
     emitPluginEvent: (event) => events.push(event),
     media: { list: () => ['alpha.mp3', 'beta.ogg'] }

@@ -1,4 +1,4 @@
-/* VoiceUP 1.1.2-beta.8: interaction and workspace layer.
+/* VoiceUP 1.1.3-beta.10: interaction and workspace layer.
  * Kept separate from the WebRTC media core so the stabilized simultaneous
  * camera/screen negotiation remains untouched and easy to audit. */
 (() => {

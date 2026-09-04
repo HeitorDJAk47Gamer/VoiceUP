@@ -1,12 +1,14 @@
 # Plugins do VoiceUP Server
 
 Plugins são módulos JavaScript executados **no ServerHost ou no Cloud**, nunca
-no computador de cada participante. Cada arquivo `.js` colocado diretamente
-nesta pasta é carregado quando o servidor inicia ou quando o host usa
-**Plugins > Recarregar plugins**.
+no computador de cada participante. Os plugins oficiais incluídos na versão são
+reconhecidos pelo hash. Qualquer arquivo externo colocado na pasta aparece como
+bloqueado e não é executado até uma aprovação explícita.
 
-> Plugins executam código com as permissões do servidor. Instale somente
-> arquivos de autores em quem você confia.
+> Depois de aprovado, um plugin executa código com acesso aos dados e recursos
+> do processo do servidor. A aprovação por hash impede execução silenciosa e
+> detecta mudanças no arquivo, mas não é uma sandbox. Instale somente arquivos
+> de autores em quem você confia.
 
 ## Instalação
 
@@ -14,14 +16,21 @@ nesta pasta é carregado quando o servidor inicia ou quando o host usa
 2. Abra o painel do VoiceUP ServerHost e entre na página **Plugins**.
 3. Clique em **Abrir pasta de plugins**.
 4. Coloque o `.js` nessa pasta, sem criar outra subpasta.
-5. Clique em **Recarregar plugins** ou reinicie o servidor.
-6. Use o Toggle Switch do card para habilitar/desabilitar e abra **Editar
-   opções** para configurar o plugin.
+5. Clique em **Recarregar plugins** ou reinicie o servidor. O arquivo ainda não
+   será executado.
+6. Confira o nome, a origem e o SHA-256 exibido no painel. Ao tentar ativar,
+   leia o aviso e confirme somente se reconhece o arquivo.
+7. Depois da aprovação e da recarga, use o Toggle Switch para
+   habilitar/desabilitar e abra **Editar opções** para configurar.
 
-No projeto Cloud, copie o `.js` para a pasta `plugins` enviada à hospedagem e
-reinicie/reimplante a aplicação. As opções e dados persistentes usam o arquivo
-definido por `PLUGIN_STATE_FILE`; confirme que a hospedagem oferece disco
-persistente antes de depender desses dados.
+Se um único byte do arquivo mudar, o SHA-256 também muda e o ServerHost exige
+uma nova aprovação.
+
+No Cloud não há confirmação visual local. Calcule o SHA-256 do plugin revisado e
+inclua o hash completo em VOICEUP_TRUSTED_PLUGIN_HASHES antes de reiniciar. Sem
+essa lista, plugins externos permanecem bloqueados. As opções, aprovações e
+dados persistentes usam o arquivo definido por PLUGIN_STATE_FILE; confirme que
+a hospedagem oferece disco persistente antes de depender desses dados.
 
 ## Plugins oficiais incluídos
 
@@ -40,6 +49,15 @@ persistente antes de depender desses dados.
 Leia [PLUGIN_API.md](./PLUGIN_API.md) para o contrato completo. Comece copiando
 `examples/meu-plugin.example.js`, altere o `id` e salve a cópia diretamente na
 pasta `plugins` com extensão `.js`.
+
+Se outra IA for escrever o plugin, envie a ela o
+[Guia para criar plugins privados com IA](./GUIA_PARA_IA.md). Ele é
+autocontido, inclui um prompt pronto, documenta as limitações reais do runtime
+e traz um checklist de revisão e teste.
+
+Antes de aceitar o código, aplique o
+[teste rápido de compreensão](./TESTE_RAPIDO_IA.md). O gabarito ajuda a detectar
+em poucos minutos se a IA confundiu plugins do VoiceUP com APIs inexistentes.
 
 O mínimo necessário é:
 

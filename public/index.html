@@ -4,14 +4,14 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <meta name="theme-color" content="#111827"/>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https: http:; media-src 'self' data: blob: https: http:; connect-src https: http: wss: ws:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; worker-src 'self' blob:"/>
   <title>VoiceUP</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="style.css"/>
   <link rel="stylesheet" href="beta.css"/>
   <link rel="stylesheet" href="beta-features.css"/>
   <link rel="stylesheet" href="interface-polish.css"/>
+  <link rel="stylesheet" href="channel-roster.css"/>
+  <link rel="stylesheet" href="platform-presence.css"/>
 </head>
 <body>
   <main id="welcome" class="welcome">
@@ -24,10 +24,35 @@
     </section>
     <section class="join-card">
       <div class="card-glow"></div>
-      <div class="join-heading"><span class="brand-mark mini">V</span><div><h2>Entrar no VoiceUP</h2><p>Escolha conexão direta ou uma sala hospedada.</p></div></div>
-      <form id="join-form"><label>Seu nome<input id="name-input" maxlength="24" placeholder="Como quer ser chamado?" autocomplete="name" required/></label><button type="submit">Criar convite P2P <span>→</span></button></form>
-      <div class="receive-invite"><label>Convite recebido<textarea id="offer-input" placeholder="Cole aqui o código enviado pela outra pessoa"></textarea></label><button id="accept-offer" type="button">Entrar com convite</button></div>
-      <p class="hint">O convite contém somente os dados necessários para conectar as duas pessoas.</p>
+      <div class="join-heading"><span class="brand-mark mini">V</span><div><h2>Seu perfil</h2><p>Escolha como você aparecerá nas conversas.</p></div></div>
+
+      <section class="welcome-profile" aria-label="Perfil local">
+        <label class="welcome-avatar-picker" for="profile-photo" title="Alterar foto de perfil">
+          <span id="welcome-avatar-preview" class="welcome-avatar-preview" aria-hidden="true">V</span>
+          <span class="welcome-avatar-edit">Alterar foto</span>
+          <input id="profile-photo" type="file" accept="image/*" aria-label="Escolher foto de perfil"/>
+        </label>
+        <label class="welcome-nick-field">Nick
+          <input id="name-input" form="join-form" maxlength="24" placeholder="Como quer ser chamado?" autocomplete="name" required/>
+          <small>Este nome e sua foto ficam salvos neste computador.</small>
+        </label>
+      </section>
+
+      <section id="host-connect" class="welcome-connection-panel" aria-labelledby="host-connect-title">
+        <div class="welcome-section-heading"><span class="welcome-section-icon" aria-hidden="true">⌂</span><div><p class="eyebrow">CONECTAR AO SERVIDOR</p><h3 id="host-connect-title">Entrar em uma sala</h3><small>Use os dados enviados pelo host ou abra um servidor salvo.</small></div></div>
+        <label>Servidor host<input id="host-url" placeholder="https://voiceup.shardweb.app" autocomplete="url"/></label>
+        <label>Código da sala<input id="host-room" maxlength="48" placeholder="ex.: amigos" autocomplete="off"/></label>
+        <label class="host-password-field">Senha da sala <input id="host-room-password" type="password" maxlength="128" placeholder="Somente se a sala for privada" autocomplete="current-password"><small>A senha não fica salva neste computador nem entra no convite.</small></label>
+        <button id="join-host" type="button">Entrar na sala</button>
+        <small class="host-connect-hint">Os canais aparecem depois de entrar. Clique em um canal de voz para participar.</small>
+      </section>
+
+      <section id="p2p-connect" class="welcome-p2p-panel" aria-labelledby="p2p-connect-title">
+        <div class="welcome-section-heading"><span class="welcome-section-icon" aria-hidden="true">↗</span><div><p class="eyebrow">CONEXÃO DIRETA</p><h3 id="p2p-connect-title">Convite P2P</h3><small>Conecte duas pessoas sem precisar de um ServerHost.</small></div></div>
+        <form id="join-form"><button type="submit">Criar convite P2P <span>→</span></button></form>
+        <div class="receive-invite"><label>Convite recebido<textarea id="offer-input" placeholder="Cole aqui o código enviado pela outra pessoa"></textarea></label><button id="accept-offer" type="button">Entrar com convite</button></div>
+        <p class="hint">O convite contém somente os dados necessários para conectar as duas pessoas.</p>
+      </section>
     </section>
   </main>
 
@@ -77,12 +102,20 @@
     </section>
   </div>
   <div id="toast" class="toast"></div>
+  <script src="socket-loader.js"></script>
+  <script src="channel-roster.js"></script>
+  <script src="platform-presence.js"></script>
   <script src="app.js"></script>
+  <script src="rnnoise-engine.js"></script>
   <script src="beta-ui.js"></script>
   <script src="i18n.js"></script>
+  <script src="release-history.js"></script>
   <script src="release-notes.js"></script>
   <script src="beta-features.js"></script>
   <script src="interface-polish.js"></script>
   <script src="media-stability.js"></script>
+  <script src="audio-call-polish.js"></script>
+  <script src="channel-media-status.js"></script>
+  <script src="platform-status.js"></script>
 </body>
 </html>

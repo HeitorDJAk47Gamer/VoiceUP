@@ -12,11 +12,18 @@
   let dialogResolve = null;
   let settingsSaveTimer = null;
   let hostServerIcon = '';
+  let publicAccessAcknowledged = false;
   let managedRooms = [];
   let roomSnapshotKey = '';
   let voiceChannelDraft = [];
   let textChannelDraft = [];
   let categoryDraft = [];
+  const updateHardwareAccelerationUi = (settings = {}) => {
+    const toggle = $('host-hardware-acceleration');
+    const restart = $('host-hardware-restart');
+    if (toggle && typeof settings.hardwareAcceleration === 'boolean') toggle.checked = settings.hardwareAcceleration;
+    if (restart) restart.classList.toggle('hidden', settings.restartRequired !== true);
+  };
   const roomTemplates = {
     community: { name: 'Comunidade VoiceUP', voice: ['Geral', 'Bate-papo', 'Ausente'], text: ['geral', 'apresentacoes', 'avisos', 'midia'] },
     gaming: { name: 'Servidor de jogos', voice: ['Lobby', 'Jogando 1', 'Jogando 2', 'Ausente'], text: ['geral', 'procurando-grupo', 'clips', 'avisos'] },
@@ -99,24 +106,8 @@
   });
   const showServerReleaseNotes = (version) => showDialog({
     title: `Novidades da versão ${version}`,
-    message: 'Esta lista reúne somente as mudanças feitas desde a v1.1.1.',
-    detail: [
-      'SERVERHOST E ADMINISTRAÇÃO',
-      '• Editor visual de salas, categorias e canais com limites de call, permissões e salas privadas.',
-      '• Banimentos temporários, moderação aprimorada, fotos de perfil e avisos correspondentes no Client.',
-      '• Modelos e importação de estruturas do Discord preservando categorias e ordem dos canais.',
-      '• Diagnóstico WebRTC detalhado: RTT, jitter, perda, rota ICE, codec, mapa P2P e monitor de banda.',
-      '• Cluster primário/secundário com heartbeat, failover e reconexão automática ao host saudável.',
-      '',
-      'CLOUD E ESTABILIDADE',
-      '• Histórico do Cloud e relatórios passam a usar SQLite em disco, com migração segura do JSON existente.',
-      '• Limpeza por idade, limite por sala e métricas de armazenamento no status do servidor.',
-      '• Correções para áudio entre versões, lives simultâneas, câmera, tela cheia e canais extensos.',
-      '',
-      'CLIENT E DISTRIBUIÇÃO',
-      '• Lives com áudio separado da voz, controles locais, múltiplas transmissões e câmera simultânea.',
-      '• Atualizador automático ao abrir, convite P2P direto com diagnóstico UPnP/NAT-PMP e relatórios de erro.'
-    ].join('\n'),
+    message: window.voiceupReleaseHistory.locales['pt-BR'].subtitle,
+    detail: window.voiceupReleaseHistory.locales['pt-BR'].notes.map(note => `• ${note}`).join('\n\n'),
     icon: '✦',
     wide: true,
     actions: [{ value: 'ok', label: 'Entendi', style: 'primary' }]
@@ -135,14 +126,14 @@
     if (!pendingUpdate) return;
     const button = $('check-update');
     button.disabled = true;
-    $('update-status').textContent = 'Baixando o instalador…';
+    $('update-status').textContent = 'Baixando o pacote…';
     const result = await window.voiceupServer.downloadUpdate();
-    $('update-status').textContent = result.ok ? 'Instalador aberto.' : result.message;
+    $('update-status').textContent = result.ok ? 'Pacote aberto.' : result.message;
     button.disabled = !result.ok;
   };
   const confirmPendingServerUpdate = async () => {
     if (!pendingUpdate) return;
-    const accepted = await showDialog({ title: 'Atualização disponível', message: `Baixar o VoiceUP Server ${pendingUpdate.version}?`, detail: 'O instalador será aberto quando o download terminar.', icon: '↓', actions: [{ value: 'confirm', label: 'Baixar', style: 'primary' }, { value: 'cancel', label: 'Agora não', style: 'secondary' }] });
+    const accepted = await showDialog({ title: 'Atualização disponível', message: `Baixar o VoiceUP Server ${pendingUpdate.version}?`, detail: 'O pacote adequado ao seu sistema será aberto quando o download terminar.', icon: '↓', actions: [{ value: 'confirm', label: 'Baixar', style: 'primary' }, { value: 'cancel', label: 'Agora não', style: 'secondary' }] });
     if (accepted === 'confirm') await downloadPendingServerUpdate();
   };
   const promptAutomaticServerUpdate = (result) => {
@@ -162,6 +153,10 @@
     button.disabled = false;
     if (!result.ok) {
       if (!automatic) $('update-status').textContent = result.message;
+      return result;
+    }
+    if (result.packageUnavailable) {
+      if (!automatic) $('update-status').textContent = result.message || 'A atualização publicada ainda não possui um pacote verificado para este sistema.';
       return result;
     }
     if (!result.available) {
@@ -238,7 +233,7 @@
     $('member-list').innerHTML = members.length ? members.map((member) => {
       const avatar = member.avatar ? `<img src="${escapeHtml(member.avatar)}" alt="">` : escapeHtml(initials(member.name));
       const channel = member.voiceChannel === '__lobby__' || !member.voiceChannel ? 'fora da call' : member.voiceChannel;
-      return `<div class="member"><span class="member-avatar" style="--member-color:${escapeHtml(member.color || '#56e2cf')}">${avatar}</span><span class="member-info"><b>${escapeHtml(member.name || 'Visitante')}${member.isBot ? ' · Bot' : ''}</b><small>Sala ${escapeHtml(member.room || '—')} · ${escapeHtml(channel)} · ${formatTime(member.connectedSeconds)}${member.remote ? ' · outro host' : ''}</small></span>${pingBars(member.ping)}${member.isBot || member.remote ? '' : `<span class="member-actions"><button class="button secondary" data-moderate="kick" data-member="${escapeHtml(member.id)}">Expulsar</button><button class="button danger" data-moderate="ban" data-member="${escapeHtml(member.id)}">Banir</button></span>`}</div>`;
+      return `<div class="member"><span class="member-avatar" style="--member-color:${escapeHtml(member.color || '#56e2cf')}">${avatar}${globalThis.voiceupPlatform.badge(member.platform, member.status)}</span><span class="member-info"><b>${escapeHtml(member.name || 'Visitante')}${member.isBot ? ' · Bot' : ''}</b><small>Sala ${escapeHtml(member.room || '—')} · ${escapeHtml(channel)} · ${formatTime(member.connectedSeconds)}${member.remote ? ' · outro host' : ''}</small></span>${pingBars(member.ping)}${member.isBot || member.remote ? '' : `<span class="member-actions"><button class="button secondary" data-moderate="kick" data-member="${escapeHtml(member.id)}">Expulsar</button><button class="button danger" data-moderate="ban" data-member="${escapeHtml(member.id)}">Banir</button></span>`}</div>`;
     }).join('') : '<div class="empty">Nenhum participante conectado.</div>';
     const bans = Array.isArray(stats.bans) ? stats.bans : [];
     $('ban-list').innerHTML = bans.length ? bans.map((ban) => {
@@ -383,8 +378,22 @@
     if (!card) return;
     const id = card.dataset.pluginCard; const settings = {};
     card.querySelectorAll('[data-plugin-setting]').forEach((field) => { settings[field.dataset.pluginSetting] = field.type === 'checkbox' ? field.checked : field.type === 'number' || field.type === 'range' ? Number(field.value) : field.value; });
+    const entry = (latestStats.plugins || []).find((plugin) => plugin.id === id);
+    const enabling = card.querySelector('[data-plugin-enabled]')?.checked !== false;
+    let approveFingerprint = '';
+    if (entry?.requiresApproval && enabling) {
+      const accepted = await showDialog({
+        title: 'Aprovar plugin externo?',
+        message: `${entry.fileName || entry.name} ainda não foi executado pelo VoiceUP.`,
+        detail: `SHA-256: ${entry.fingerprint}\n\nApenas aprove arquivos obtidos de uma fonte em que você confia. Plugins JavaScript aprovados podem acessar dados e recursos do processo do ServerHost. Se o arquivo mudar, uma nova aprovação será exigida.`,
+        tone: 'danger', icon: '!', wide: true,
+        actions: [{ value: 'confirm', label: 'Conferi o SHA-256 e aprovo', style: 'danger' }, { value: 'cancel', label: 'Manter bloqueado', style: 'secondary' }]
+      });
+      if (accepted !== 'confirm') { card.querySelector('[data-plugin-enabled]').checked = false; return; }
+      approveFingerprint = entry.fingerprint;
+    }
     const button = card.querySelector('[data-plugin-save]'); if (button) button.disabled = true;
-    const result = await window.voiceupServer.configurePlugin(id, { enabled: card.querySelector('[data-plugin-enabled]')?.checked !== false, settings });
+    const result = await window.voiceupServer.configurePlugin(id, { enabled: enabling, settings, approveFingerprint });
     showNotice(result.message, result.ok ? 'success' : 'error'); if (button) button.disabled = false; pluginSnapshotKey = ''; refresh();
   }
 
@@ -535,13 +544,15 @@
       const releaseNotesVersion = serverVersion;
       $('app-version').textContent = serverVersion;
       const settings = await window.voiceupServer.settings();
-      $('host-close-behavior').value = settings.closeBehavior || 'tray';
+      $('host-close-behavior').value = settings.closeBehavior || 'ask';
       $('host-theme').value = settings.theme || 'ocean';
+      updateHardwareAccelerationUi(settings);
       hostServerIcon = settings.serverIcon || '';
       renderHostServerIconPreview();
       $('chat-retention-days').value = Number(settings.storage?.retentionDays ?? 30);
       $('chat-max-per-room').value = Number(settings.storage?.maxPerRoom ?? 300);
-      $('public-access-automatic').checked = settings.publicAccess?.automatic !== false;
+      $('public-access-automatic').checked = settings.publicAccess?.automatic === true;
+      publicAccessAcknowledged = $('public-access-automatic').checked && Number(settings.publicAccess?.consentVersion || 0) >= 1;
       setTheme($('host-theme').value);
       renderRooms(await window.voiceupServer.rooms());
       clearRoomForm();
@@ -673,16 +684,37 @@
       refresh();
     };
     const saveHostSettings = async (notify = false) => {
-      const settings = await window.voiceupServer.saveSettings({ closeBehavior: $('host-close-behavior').value, theme: $('host-theme').value, serverIcon: hostServerIcon, publicAccess: { automatic: $('public-access-automatic').checked }, storage: { retentionDays: Number($('chat-retention-days').value), maxPerRoom: Number($('chat-max-per-room').value) } });
+      const settings = await window.voiceupServer.saveSettings({ closeBehavior: $('host-close-behavior').value, theme: $('host-theme').value, serverIcon: hostServerIcon, hardwareAcceleration: $('host-hardware-acceleration').checked, publicAccess: { automatic: $('public-access-automatic').checked, confirmed: publicAccessAcknowledged }, storage: { retentionDays: Number($('chat-retention-days').value), maxPerRoom: Number($('chat-max-per-room').value) } });
+      $('host-close-behavior').value = settings.closeBehavior || 'ask';
       setTheme(settings.theme);
+      updateHardwareAccelerationUi(settings);
       if (notify) showNotice('Configurações do ServerHost salvas.');
     };
     const scheduleHostSettingsSave = () => { clearTimeout(settingsSaveTimer); settingsSaveTimer = window.setTimeout(() => void saveHostSettings(false), 220); };
     $('host-theme').onchange = () => { setTheme($('host-theme').value); drawChart(); scheduleHostSettingsSave(); };
     $('host-close-behavior').onchange = scheduleHostSettingsSave;
+    $('host-hardware-acceleration').onchange = scheduleHostSettingsSave;
     $('chat-retention-days').onchange = scheduleHostSettingsSave;
     $('chat-max-per-room').onchange = scheduleHostSettingsSave;
-    $('public-access-automatic').onchange = scheduleHostSettingsSave;
+    $('public-access-automatic').onchange = async () => {
+      if (!$('public-access-automatic').checked) {
+        publicAccessAcknowledged = false;
+        await saveHostSettings(false);
+        showNotice('Acesso público automático desativado.');
+        return;
+      }
+      const accepted = await showDialog({
+        title: 'Expor o ServerHost à internet?',
+        message: 'O VoiceUP tentará abrir a porta do servidor no roteador usando UPnP ou NAT-PMP.',
+        detail: 'Isso pode permitir conexões externas. Proteja salas privadas com senhas fortes, mantenha o Windows e o VoiceUP atualizados e desative esta opção quando não precisar de acesso pela internet.',
+        tone: 'danger', icon: '!',
+        actions: [{ value: 'confirm', label: 'Entendi e quero ativar', style: 'danger' }, { value: 'cancel', label: 'Manter desativado', style: 'secondary' }]
+      });
+      publicAccessAcknowledged = accepted === 'confirm';
+      $('public-access-automatic').checked = publicAccessAcknowledged;
+      await saveHostSettings(false);
+      showNotice(publicAccessAcknowledged ? 'Acesso público automático ativado com sua confirmação.' : 'Acesso público automático permanece desativado.', publicAccessAcknowledged ? 'success' : 'error');
+    };
     $('host-server-icon').onchange = async () => {
       try {
         hostServerIcon = await imageData($('host-server-icon').files?.[0]);
@@ -697,6 +729,10 @@
       renderHostServerIconPreview();
       await saveHostSettings(false);
       showNotice('Ícone padrão restaurado.');
+    };
+    $('host-hardware-restart-button').onclick = async () => {
+      const accepted = await showDialog({ title: 'Reiniciar o ServerHost?', message: 'A aceleração de hardware será alterada na próxima abertura.', detail: 'As pessoas conectadas serão desconectadas, mas as configurações, salas e plugins já estão salvos.', icon: '↻', actions: [{ value: 'confirm', label: 'Reiniciar agora', style: 'primary' }, { value: 'cancel', label: 'Reiniciar depois', style: 'secondary' }] });
+      if (accepted === 'confirm') await window.voiceupServer.restartApplication();
     };
     $('cleanup-expired-messages').onclick = async () => {
       const result = await window.voiceupServer.cleanupMessages({ olderThanDays: Number($('chat-retention-days').value) });
@@ -752,7 +788,7 @@
     window.voiceupServer.onCloseRequest?.(async () => {
       const choice = await showDialog({
         title: 'Fechar o VoiceUP Server?',
-        message: 'Você pode manter o servidor funcionando na bandeja do Windows.',
+        message: 'Você pode manter o servidor funcionando na bandeja do sistema.',
         detail: 'Encerrar o programa também desconecta todas as pessoas e para os plugins.',
         icon: '×',
         actions: [

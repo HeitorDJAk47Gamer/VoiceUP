@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">VoiceUP</string>
+    <string name="title_activity_main">VoiceUP</string>
+    <string name="package_name">com.goatgank.voiceup</string>
+    <string name="custom_url_scheme">com.goatgank.voiceup</string>
+</resources>
