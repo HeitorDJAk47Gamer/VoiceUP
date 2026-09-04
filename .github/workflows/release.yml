@@ -54,6 +54,8 @@ jobs:
         run: |
           node tools/validate-release-version.js
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/test-site-assets.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --test tools/test-release-integrity.js tools/test-release-history.js tools/test-release-publisher.js
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:update-compat

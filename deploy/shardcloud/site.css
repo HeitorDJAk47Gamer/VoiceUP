@@ -24,6 +24,7 @@
 .download-meta b{color:var(--text);font-weight:750}
 .download-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 .linux-card{background:radial-gradient(circle at 90% 0,rgba(255,207,112,.12),transparent 36%),var(--surface)}
+.selfweb-card{background:radial-gradient(circle at 90% 0,rgba(255,117,134,.13),transparent 36%),var(--surface)}
 .linux-card [aria-disabled="true"]{opacity:.5;cursor:not-allowed;transform:none}
 @media(max-width:680px){.download-grid{grid-template-columns:1fr}.download-grid>.download-card:last-child{grid-column:auto}}
 

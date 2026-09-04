@@ -38,6 +38,7 @@ $publicFiles = @(
   'site.css',
   'site.html',
   'site.js',
+  'site-assets.js',
   'release-downloads.js',
   'release-integrity.js',
   'release-trust.js',

@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const packageInfo = require('./package.json');
 const { loadPlugins } = require('./plugin-runtime');
 const { createPersistentChatStore, createBugReportStore } = require('./persistent-storage');
+const { createSiteRouter } = require('./site-assets');
 
 const port = Number(process.env.PORT || process.env.SERVER_PORT || 80);
 const positiveInteger = (value, fallback) => { const parsed = Number.parseInt(value, 10); return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback; };
@@ -259,13 +260,7 @@ async function latestRelease() {
 
 app.disable('x-powered-by');
 app.use('/assets', express.static(path.join(__dirname, 'assets'), { maxAge: '7d', fallthrough: false }));
-app.get('/site.css', (_request, response) => response.sendFile(path.join(__dirname, 'site.css')));
-app.get('/site.js', (_request, response) => response.sendFile(path.join(__dirname, 'site.js')));
-app.get('/', (_request, response) => response.sendFile(path.join(__dirname, 'site.html')));
-app.get('/status', (_request, response) => response.sendFile(path.join(__dirname, 'status.html')));
-app.get('/plugins', (_request, response) => response.sendFile(path.join(__dirname, 'plugins.html')));
-app.get('/privacidade', (_request, response) => response.sendFile(path.join(__dirname, 'privacy.html')));
-app.get('/termos', (_request, response) => response.sendFile(path.join(__dirname, 'terms.html')));
+app.use(createSiteRouter(__dirname));
 app.get('/downloads/selfweb', (_request, response) => releaseDownloads.download('selfweb', response));
 app.get('/downloads/android', (_request, response) => releaseDownloads.download('android', response));
 app.get('/downloads/linux/:target', (request, response) => {
