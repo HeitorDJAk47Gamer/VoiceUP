@@ -6,12 +6,14 @@ const { getCurrentFuseWire, FuseV1Options } = require('@electron/fuses');
 
 const workspace = path.resolve(__dirname, '..');
 const version = require(path.join(workspace, 'package.json')).version;
+const clientDirectory = process.argv[2] || 'release-beta';
+const serverDirectory = process.argv[3] || 'release-beta-server';
 
-assert.match(version, /^\d+\.\d+\.\d+-beta\.\d+$/, 'A versao deve usar o formato x.y.z-beta.n.');
+assert.match(version, /^\d+\.\d+\.\d+(?:-beta\.\d+)?$/, 'A versão deve usar X.Y.Z ou X.Y.Z-beta.N.');
 
 const installers = [
-  path.join(workspace, 'release-beta', `VoiceUP Setup ${version}.exe`),
-  path.join(workspace, 'release-beta-server', `VoiceUPServer Setup ${version}.exe`)
+  path.join(workspace, clientDirectory, `VoiceUP Setup ${version}.exe`),
+  path.join(workspace, serverDirectory, `VoiceUPServer Setup ${version}.exe`)
 ];
 
 for (const installer of installers) {
@@ -20,8 +22,8 @@ for (const installer of installers) {
 }
 
 const executables = [
-  path.join(workspace, 'release-beta', 'win-unpacked', 'VoiceUP.exe'),
-  path.join(workspace, 'release-beta-server', 'win-unpacked', 'VoiceUPServer.exe')
+  path.join(workspace, clientDirectory, 'win-unpacked', 'VoiceUP.exe'),
+  path.join(workspace, serverDirectory, 'win-unpacked', 'VoiceUPServer.exe')
 ];
 
 for (const executable of executables) {
@@ -29,8 +31,8 @@ for (const executable of executables) {
   assert.ok(fs.statSync(executable).size > 1024 * 1024, `Executável portátil inválido: ${executable}`);
 }
 
-const clientArchive = path.join(workspace, 'release-beta', 'win-unpacked', 'resources', 'app.asar');
-const serverArchive = path.join(workspace, 'release-beta-server', 'win-unpacked', 'resources', 'app.asar');
+const clientArchive = path.join(workspace, clientDirectory, 'win-unpacked', 'resources', 'app.asar');
+const serverArchive = path.join(workspace, serverDirectory, 'win-unpacked', 'resources', 'app.asar');
 const packagedManifest = (archive) => JSON.parse(asar.extractFile(archive, 'package.json').toString('utf8'));
 const clientManifest = packagedManifest(clientArchive);
 const serverManifest = packagedManifest(serverArchive);
@@ -117,6 +119,11 @@ assert.match(asar.extractFile(serverArchive, 'signaling-server.js').toString('ut
 assert.match(asar.extractFile(serverArchive, 'signaling-server.js').toString('utf8'), /media-state-update/, 'O host precisa compartilhar os indicadores de live e câmera.');
 
 for (const archive of [clientArchive, serverArchive]) {
+  for (const file of ['update-helper.js', 'public/release-trust.js', 'public/release-integrity.js', 'public/release-history.js', 'public/platform-presence.js']) {
+    assert.ok(asar.extractFile(archive, file.split('/').join(path.sep)).equals(fs.readFileSync(path.join(workspace, file))), `Atualização/status devem corresponder à fonte validada: ${file}`);
+  }
+  const packagedQs = JSON.parse(asar.extractFile(archive, path.join('node_modules', 'qs', 'package.json')));
+  assert.equal(packagedQs.version, '6.16.0', 'O pacote precisa incluir a correção de segurança de qs.');
   for (const file of ['public/index.html', 'public/app.js', 'public/beta-ui.js', 'public/media-stability.js', 'public/rnnoise-engine.js', 'public/vendor/rnnoise/rnnoise-worklet.js', 'public/vendor/rnnoise/rnnoise.wasm', 'public/vendor/rnnoise/rnnoise_simd.wasm', 'public/channel-roster.js', 'public/channel-roster.css', 'public/channel-media-status.js', 'signaling-server.js']) {
     assert.ok(asar.extractFile(archive, file.split('/').join(path.sep)).equals(fs.readFileSync(path.join(workspace, file))), `O pacote precisa conter o arquivo atual: ${file}`);
   }

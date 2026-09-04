@@ -74,8 +74,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: npm run dist -- --publish never
       - run: npm run dist:server -- --publish never
+      - run: node tools/test-beta-installer.js release release-server
       - run: npm run dist:store -- --config.directories.output=.store-build
-      - run: powershell -NoProfile -File tools/test-store-package.ps1 -ClientBuildDirectory release
+      - run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test-store-package.ps1 -ClientBuildDirectory release
       - run: node selfweb/build.js
       - run: node --test selfweb/tests/*.test.js
       - run: node tools/prepare-release-assets.js windows release-assets
