@@ -15,10 +15,10 @@ $major = [int]$match.Groups[1].Value
 $minor = [int]$match.Groups[2].Value
 $patch = [int]$match.Groups[3].Value
 $beta = [int]$match.Groups[4].Value
-if ($beta -lt 1 -or $beta -gt 65534) { throw 'O numero da beta precisa ficar entre 1 e 65534; 65535 e reservado para a estavel.' }
+if ($beta -lt 1 -or $beta -gt 65535) { throw 'O numero da beta precisa ficar entre 1 e 65535.' }
 
-# A Store aceita somente quatro numeros crescentes. O quarto componente guarda
-# o numero da beta; 65535 fica reservado para a versao estavel desse mesmo trio.
+# Este pacote beta e somente para sideload/testes e nao deve ser enviado ao
+# Partner Center. Publicacoes oficiais sempre usam X.Y.Z.0.
 $storeVersion = "$major.$minor.$patch.$beta"
 
 $builder = Join-Path $workspace 'node_modules\.bin\electron-builder.cmd'

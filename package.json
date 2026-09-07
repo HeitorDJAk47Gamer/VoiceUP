@@ -36,7 +36,7 @@
     "predist:beta": "npm run build:native",
     "dist:beta": "electron-builder --win nsis --config.directories.output=release-beta",
     "predist:store": "npm run build:native",
-    "dist:store": "electron-builder --win appx --publish never --config.appx.setBuildNumber=true --config.buildNumber=65535",
+    "dist:store": "electron-builder --win appx --publish never --config.appx.setBuildNumber=true --config.buildNumber=0",
     "predist:store:beta": "npm run build:native",
     "dist:store:beta": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-store-beta.ps1",
     "test:store-package": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/test-store-package.ps1",

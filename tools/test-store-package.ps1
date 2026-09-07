@@ -9,9 +9,11 @@ if (-not $match.Success) { throw 'A validacao da Store exige X.Y.Z ou X.Y.Z-beta
 $major = [int]$match.Groups[1].Value
 $minor = [int]$match.Groups[2].Value
 $patch = [int]$match.Groups[3].Value
-$beta = if ($match.Groups[4].Success) { [int]$match.Groups[4].Value } else { 65535 }
-if ($beta -lt 1 -or $beta -gt 65535) { throw 'Numero interno invalido para a Store.' }
-$expectedVersion = "$major.$minor.$patch.$beta"
+# O Partner Center exige que o quarto componente dos pacotes oficiais seja 0.
+# As betas geradas apenas para sideload continuam usando o numero da beta.
+$revision = if ($match.Groups[4].Success) { [int]$match.Groups[4].Value } else { 0 }
+if ($revision -lt 0 -or $revision -gt 65535) { throw 'Numero interno invalido para a Store.' }
+$expectedVersion = "$major.$minor.$patch.$revision"
 
 $package = Join-Path (Join-Path $workspace $StoreBuildDirectory) "VoiceUP $($manifest.version).appx"
 if (-not (Test-Path -LiteralPath $package -PathType Leaf)) { throw "AppX ausente: $package" }

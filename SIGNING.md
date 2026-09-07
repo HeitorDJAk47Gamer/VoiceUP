@@ -15,6 +15,8 @@ políticas do Windows. Não desative antivírus ou proteções para contornar al
 Um certificado comercial poderá ser adicionado no futuro sem remover a
 verificação interna. A Microsoft Store continua com seu processo próprio de
 validação/assinatura: gerar ou anexar APPX no GitHub não publica na loja.
+Para o Partner Center, a versão interna do pacote oficial sempre usa quatro
+números no formato `X.Y.Z.0`; por exemplo, o VoiceUP 1.2.1 usa `1.2.1.0`.
 
 ## Chave privada
 
