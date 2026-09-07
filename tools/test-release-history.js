@@ -6,14 +6,16 @@ const vm = require('node:vm');
 const history = require('../public/release-history');
 const read = path => fs.readFileSync(require('node:path').join(__dirname, '..', path), 'utf8');
 
-test('stable release notes cover 1.1.2 -> 1.2.0 in every language', () => {
-  assert.equal(history.from, '1.1.2'); assert.equal(history.version, '1.2.0');
+test('stable release notes cover 1.2.0 -> 1.2.1 in every language', () => {
+  assert.equal(history.from, '1.2.0'); assert.equal(history.version, '1.2.1');
   for (const [language, copy] of Object.entries(history.locales)) {
-    assert.match(copy.title, /1\.2\.0/); assert.match(copy.subtitle, /1\.1\.2.*1\.2\.0/);
-    assert.equal(copy.notes.length, 17, language);
-    for (const token of ['Linux', 'Android', 'SelfWeb', 'ServerHost', 'Cloud', 'RNNoise', 'SHA-256']) assert.ok(copy.notes.some(note => note.includes(token)), `${language}: ${token}`);
-    assert.ok(!copy.notes.some(note => /SQLite|GIFs|v1\.1\.1|Authenticode/.test(note)), 'Old features must not be relisted as new.');
+    assert.match(copy.title, /1\.2\.1/); assert.match(copy.subtitle, /1\.2\.0.*1\.2\.1/);
+    assert.equal(copy.notes.length, 11, language);
+    assert.ok(copy.notes.every(note => note.length >= 45), `${language}: every note must explain the change`);
+    assert.ok(!copy.notes.some(note => /v1\.1\.2|SelfWeb|RNNoise/.test(note)), 'Features shipped in 1.2.0 must not be relisted as new.');
   }
+  const pt = history.locales['pt-BR'].notes.join('\n');
+  for (const token of ['Áudio das transmissões', '14 gradientes escuros e 5 claros', 'Inicialização no Windows', 'cooldown', 'castigo', 'SQLite', 'ping em milissegundos', 'Android', 'Ed25519', 'SHA-256']) assert.match(pt, new RegExp(token));
   assert.doesNotMatch(history.locales['es-ES'].subtitle, /versão|reúne/);
 });
 
@@ -26,7 +28,7 @@ test('browser catalog works without Node and is immutable', () => {
 test('Android CommonJS browser wrapper still exposes the catalog', () => {
   const context = vm.createContext({ module: { exports: {} }, window: {} });
   vm.runInContext(read('public/release-history.js'), context);
-  assert.equal(context.voiceupReleaseHistory.version, '1.2.0');
+  assert.equal(context.voiceupReleaseHistory.version, '1.2.1');
   assert.equal(context.module.exports, context.voiceupReleaseHistory);
 });
 

@@ -9,6 +9,7 @@ const nodeNet = require('node:net');
 const { registerUpdateHandlers } = require('./update-helper');
 const { startSignalingServer, normalizeRoomLayout, hashRoomPassword } = require('./signaling-server');
 const { localNetworkUrls, openPublicPort } = require('./network-access');
+const { readWindowsStartup, writeWindowsStartup } = require('./windows-startup');
 
 let mainWindow;
 let tray;
@@ -20,7 +21,7 @@ let processAudioCapture = null;
 let directRoomServer = null;
 let directPortMapping = null;
 const defaultCloseBehavior = () => process.platform === 'linux' ? 'ask' : 'tray';
-let windowSettings = { closeBehavior: defaultCloseBehavior(), hardwareAcceleration: true, fullscreenGameCaptureCompatibility: true };
+let windowSettings = { closeBehavior: defaultCloseBehavior(), hardwareAcceleration: true, fullscreenGameCaptureCompatibility: true, startWithWindows: false };
 let hardwareAccelerationAtStartup = true;
 let fullscreenGameCaptureCompatibilityAtStartup = false;
 const registeredShortcuts = new Map();
@@ -339,20 +340,27 @@ function loadSettings() {
   windowSettings.closeBehavior = ['tray', 'ask', 'quit'].includes(windowSettings.closeBehavior) ? windowSettings.closeBehavior : defaultCloseBehavior();
   windowSettings.hardwareAcceleration = windowSettings.hardwareAcceleration !== false;
   windowSettings.fullscreenGameCaptureCompatibility = windowSettings.fullscreenGameCaptureCompatibility !== false;
+  windowSettings.startWithWindows = windowSettings.startWithWindows === true;
 }
 function saveSettings() { try { fs.writeFileSync(settingsPath(), JSON.stringify(windowSettings, null, 2), 'utf8'); } catch { /* optional preference */ } }
-const publicWindowSettings = () => ({
-  platform: process.platform,
-  closeBehavior: windowSettings.closeBehavior,
-  hardwareAcceleration: windowSettings.hardwareAcceleration !== false,
-  hardwareAccelerationActive: hardwareAccelerationAtStartup,
-  fullscreenGameCaptureCompatibility: windowSettings.fullscreenGameCaptureCompatibility !== false,
-  fullscreenGameCaptureCompatibilityActive: fullscreenGameCaptureCompatibilityAtStartup,
-  fullscreenGameCaptureCompatibilitySupported: process.platform === 'win32',
-  restartRequired: (windowSettings.hardwareAcceleration !== false) !== hardwareAccelerationAtStartup
-    || (process.platform === 'win32'
-      && (windowSettings.fullscreenGameCaptureCompatibility !== false) !== fullscreenGameCaptureCompatibilityAtStartup)
-});
+const publicWindowSettings = () => {
+  const startup = readWindowsStartup(app);
+  if (startup.supported) windowSettings.startWithWindows = startup.enabled;
+  return {
+    platform: process.platform,
+    closeBehavior: windowSettings.closeBehavior,
+    startWithWindows: startup.supported ? startup.enabled : false,
+    startWithWindowsSupported: startup.supported,
+    hardwareAcceleration: windowSettings.hardwareAcceleration !== false,
+    hardwareAccelerationActive: hardwareAccelerationAtStartup,
+    fullscreenGameCaptureCompatibility: windowSettings.fullscreenGameCaptureCompatibility !== false,
+    fullscreenGameCaptureCompatibilityActive: fullscreenGameCaptureCompatibilityAtStartup,
+    fullscreenGameCaptureCompatibilitySupported: process.platform === 'win32',
+    restartRequired: (windowSettings.hardwareAcceleration !== false) !== hardwareAccelerationAtStartup
+      || (process.platform === 'win32'
+        && (windowSettings.fullscreenGameCaptureCompatibility !== false) !== fullscreenGameCaptureCompatibilityAtStartup)
+  };
+};
 
 function disableChromiumFeature(feature) {
   const current = app.commandLine.getSwitchValue('disable-features')
@@ -513,6 +521,10 @@ secureHandle('window:save-settings', (_event, next = {}) => {
   if (typeof next.hardwareAcceleration === 'boolean') windowSettings.hardwareAcceleration = next.hardwareAcceleration;
   if (typeof next.fullscreenGameCaptureCompatibility === 'boolean') {
     windowSettings.fullscreenGameCaptureCompatibility = next.fullscreenGameCaptureCompatibility;
+  }
+  if (typeof next.startWithWindows === 'boolean') {
+    const startup = writeWindowsStartup(app, next.startWithWindows);
+    windowSettings.startWithWindows = startup.supported ? startup.enabled : false;
   }
   saveSettings();
   return publicWindowSettings();

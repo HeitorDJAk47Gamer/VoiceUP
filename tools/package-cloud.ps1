@@ -47,8 +47,6 @@ $publicFiles = @(
   'terms.html',
   'plugins.html',
   'assets\voiceup-logo.png',
-  "downloads\VoiceUP-$Version-android.apk",
-  'downloads\VoiceUP-SelfWeb.html',
   'downloads\release-downloads.json',
   'downloads\VoiceUP-Linux-LEIA-ME.txt',
   'music\README.md',
@@ -56,6 +54,24 @@ $publicFiles = @(
   'plugins\musica.js',
   'plugins\xp-chat.js'
 )
+
+# O runtime Cloud e o catálogo público têm ciclos diferentes durante uma beta.
+# Inclua os arquivos locais pelo manifesto assinado, não pelo número da beta.
+$releaseEnvelope = Get-Content -Raw (Join-Path $sourceRoot 'downloads\release-downloads.json') | ConvertFrom-Json
+$releasePayloadJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$releaseEnvelope.payload))
+$releasePayload = $releasePayloadJson | ConvertFrom-Json
+$localDownloadNames = @($releasePayload.artifacts | Where-Object {
+  $_.platform -eq 'android' -or ($_.product -eq 'selfweb' -and $_.platform -eq 'web')
+} | ForEach-Object { [string]$_.name })
+if ($localDownloadNames.Count -ne 2) {
+  throw 'O manifesto assinado precisa declarar exatamente o APK Android e o HTML SelfWeb.'
+}
+foreach ($downloadName in $localDownloadNames) {
+  if ([IO.Path]::GetFileName($downloadName) -ne $downloadName) {
+    throw "Nome de download inseguro no manifesto: $downloadName"
+  }
+  $publicFiles += "downloads\$downloadName"
+}
 # Linux usa os arquivos assinados da Release pública. Não duplica centenas
 # de MB no Cloud; a opção antiga continua aceita para scripts existentes.
 

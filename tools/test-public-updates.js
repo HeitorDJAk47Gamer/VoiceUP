@@ -28,31 +28,53 @@ async function main() {
     assert.equal(head.status, 200, `Link quebrado: ${file.name}`);
     assert.equal(Number(head.headers.get('content-length')), file.size);
   }
-  const legacy = execFileSync('git', ['show', 'v1.1.2:update-helper.js'], { cwd: path.join(__dirname, '..'), encoding: 'utf8', windowsHide: true });
   const folder = path.join(__dirname, '../.release-tools/public-updater-check');
+  fs.rmSync(folder, { recursive: true, force: true });
   fs.mkdirSync(folder, { recursive: true });
-  for (const [product, prefix] of [['client', 'VoiceUP Setup '], ['serverhost', 'VoiceUPServer Setup ']]) {
-    const handlers = new Map();
-    let downloaded;
-    const electron = {
-      app: { getVersion: () => '1.1.2', getPath: () => folder },
-      // Do not launch/install anything. Test the download and verification only.
-      shell: { openPath: async file => { downloaded = file; return ''; } }
-    };
-    const module = { exports: {} };
-    vm.runInNewContext(legacy, { require: name => name === 'electron' ? electron : require(name), module, console }, { filename: 'updater-v1.1.2.js' });
-    module.exports.registerUpdateHandlers({ handle: (name, handler) => handlers.set(name, handler) }, prefix);
-    const check = await handlers.get('update:check')();
-    assert.equal(check.ok, true, check.message);
-    assert.equal(check.available, true);
-    assert.equal(check.version, version);
-    const entry = integrity.select(payload, product, 'windows', 'x64');
-    assert.equal(check.downloadUrl, entry.url);
-    const result = await handlers.get('update:download')();
-    assert.equal(result.ok, true, result.message);
-    const verified = await current.verifyDownloadedUpdate(downloaded, { assetName: entry.name, downloadUrl: entry.url, digest: `sha256:${entry.sha256}`, size: entry.size, version, envelope, platform: 'win32', arch: 'x64', product });
-    assert.equal(verified.digest, entry.sha256);
-    console.log(`${product}: atualizador real 1.1.2 localizou e baixou a versão ${version}; assinatura e bytes conferidos. Nenhum instalador foi executado.`);
+  try {
+    for (const legacyTag of ['v1.0.25', 'v1.1.2', 'v1.2.0']) {
+      const legacy = execFileSync('git', ['show', `${legacyTag}:update-helper.js`], { cwd: path.join(__dirname, '..'), encoding: 'utf8', windowsHide: true });
+      for (const [product, prefix] of [['client', 'VoiceUP Setup '], ['serverhost', 'VoiceUPServer Setup ']]) {
+        const handlers = new Map();
+        let downloaded;
+        const electron = {
+          app: { getVersion: () => legacyTag.slice(1), getPath: () => folder },
+          // Never launch or install anything. openPath only records the verified file.
+          shell: { openPath: async file => { downloaded = file; return ''; } }
+        };
+        const module = { exports: {} };
+        vm.runInNewContext(legacy, {
+          require: name => name === 'electron' ? electron : name === './public/release-integrity' ? integrity : require(name),
+          module,
+          console,
+          process,
+          Buffer,
+          URL,
+          setTimeout,
+          clearTimeout
+        }, { filename: `updater-${legacyTag}.js` });
+        module.exports.registerUpdateHandlers({ handle: (name, handler) => handlers.set(name, handler) }, prefix);
+        const check = await handlers.get('update:check')();
+        assert.equal(check.ok, true, `${legacyTag}:${product}: ${check.message || 'falha'}`);
+        assert.equal(check.available, true, `${legacyTag}:${product} não reconheceu ${version}`);
+        assert.equal(check.version, version);
+        const entry = integrity.select(payload, product, 'windows', 'x64');
+        assert.equal(check.downloadUrl, entry.url);
+        const head = await fetch(check.downloadUrl, { method: 'HEAD', signal: AbortSignal.timeout(30000) });
+        assert.equal(head.status, 200, `${legacyTag}:${product} recebeu ${head.status}`);
+        if (legacyTag !== 'v1.1.2') {
+          console.log(`${product}: atualizador público ${legacyTag.slice(1)} localizou ${version} sem 404.`);
+          continue;
+        }
+        const result = await handlers.get('update:download')();
+        assert.equal(result.ok, true, result.message);
+        const verified = await current.verifyDownloadedUpdate(downloaded, { assetName: entry.name, downloadUrl: entry.url, digest: `sha256:${entry.sha256}`, size: entry.size, version, envelope, platform: 'win32', arch: 'x64', product });
+        assert.equal(verified.digest, entry.sha256);
+        console.log(`${product}: atualizador real 1.1.2 baixou ${version}; assinatura e bytes conferidos. Nenhum instalador foi executado.`);
+      }
+    }
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
   }
   console.log(`${payload.artifacts.length} links públicos validados, sem 404.`);
 }

@@ -31,8 +31,8 @@ Comprometimento exige resposta coordenada e rotação explicitamente planejada.
 
 ## Android, SelfWeb e Cloud
 
-O APK possui também assinatura Android. A 1.2.0 usa a mesma chave das betas
-anteriores para permitir upgrade sem apagar o perfil; o certificado conserva
+O APK possui também assinatura Android. A 1.2.1 usa a mesma chave da 1.2.0 e
+das betas anteriores para permitir upgrade sem apagar o perfil; o certificado conserva
 o rótulo histórico Android Debug, mas o pacote release não é depurável.
 Não substitua essa chave por uma recém-gerada. Um eventual Google Play exige
 procedimento de assinatura e publicação próprio.
@@ -63,7 +63,7 @@ assine e publique localmente. Os Secrets opcionais são
 
 ## Compatibilidade
 
-A 1.1.2 pública encontra os nomes históricos e pode baixar a 1.2.0. Betas que
+A 1.0.25, a 1.1.2 e a 1.2.0 públicas encontram os nomes históricos e podem baixar a 1.2.1. Betas que
 já exigiam Authenticode e versões antigas com URLs gravadas incorretamente
 podem precisar de uma instalação manual de transição; não é possível trocar
 o atualizador de um programa já instalado apenas mudando o servidor.

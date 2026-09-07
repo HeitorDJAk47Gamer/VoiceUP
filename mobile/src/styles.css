@@ -10,6 +10,7 @@ html, body, #root { margin: 0; min-width: 320px; min-height: 100%; height: 100%;
 body { overflow: hidden; background: #09111e; }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
+.ui-icon { display: block; width: 20px; height: 20px; pointer-events: none; }
 
 .welcome-shell {
   min-height: 100%; overflow: auto; display: grid; grid-template-columns: minmax(280px, 1fr) minmax(410px, 560px);
@@ -102,8 +103,9 @@ input:focus, select:focus { border-color: #58ddce; box-shadow: 0 0 0 3px rgba(83
 .my-card { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid #29415e; border-radius: 15px; background: #0d1c2f; }
 .my-card > div { min-width: 0; flex: 1; }
 .my-card strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .88rem; }
-.my-card > button { width: 28px; height: 28px; border: 0; border-radius: 8px; color: #acc4e5; background: transparent; }
-.my-card > button:hover { color: #ff909c; background: #351f2d; }
+.my-card > .server-exit-button { display: inline-flex; flex: 0 0 auto; min-width: 68px; height: 42px; align-items: center; justify-content: center; gap: 6px; border: 1px solid #a84557; border-radius: 12px; padding: 0 9px; color: #ffe8eb; background: #7f2d40; box-shadow: 0 7px 18px rgba(126, 35, 55, .25); font-size: .72rem; font-weight: 850; }
+.my-card > .server-exit-button:hover, .my-card > .server-exit-button:focus-visible { border-color: #ff7e8e; color: #fff; background: #aa3e52; }
+.server-exit-button .ui-icon { width: 18px; height: 18px; }
 .presence-select select { height: 25px; min-height: 25px; padding: 0; border: 0; color: #70df9a; background: transparent; font-size: .72rem; }
 .presence-select select:focus { box-shadow: none; }
 
@@ -123,10 +125,13 @@ input:focus, select:focus { border-color: #58ddce; box-shadow: 0 0 0 3px rgba(83
 .mirror { transform: scaleX(-1); }
 .member-tile { align-content: center; gap: 9px; color: #eff6ff; background: radial-gradient(circle at center, rgba(79, 210, 196, .13), transparent 45%), #0b1627; }
 .member-tile small { color: #90a8c9; }
-.call-controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; padding: 17px; border-top: 1px solid #253a58; background: #0a1321; }
-.call-controls button { min-height: 44px; padding: 0 17px; border: 1px solid #2b4363; border-radius: 13px; color: #e9f3ff; background: #17233a; font-weight: 700; }
+.call-controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; padding: 14px 17px; border-top: 1px solid #253a58; background: #0a1321; }
+.call-controls button { display: grid; flex: 0 0 48px; width: 48px; min-height: 48px; height: 48px; place-items: center; padding: 0; border: 1px solid #2b4363; border-radius: 50%; color: #e9f3ff; background: #17233a; box-shadow: 0 7px 18px rgba(0, 0, 0, .16); }
+.call-controls button:hover, .call-controls button:focus-visible { border-color: #5b769d; color: #fff; background: #213451; }
+.call-controls .ui-icon { width: 22px; height: 22px; }
 .call-controls button.on { color: #062027; border-color: #59dfcf; background: #59dfcf; }
-.call-controls button.danger, .call-controls button.hangup { border-color: #ca5664; background: #d95767; color: #fff; }
+.call-controls button.danger, .call-controls button.hangup { border-color: #e46575; background: #c94458; color: #fff; }
+.call-controls button.hangup { flex-basis: 58px; width: 58px; border-radius: 18px; box-shadow: 0 8px 20px rgba(201, 68, 88, .28); }
 
 .chat-view { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .chat-view > header { padding: 17px 23px; border-bottom: 1px solid #253a58; background: #0d192b; }
@@ -178,8 +183,9 @@ input:focus, select:focus { border-color: #58ddce; box-shadow: 0 0 0 3px rgba(83
   .call-grid { grid-template-columns: 1fr; align-content: start; padding: 13px; }
   .media-tile, .member-tile { min-height: 215px; }
   .tile-video { min-height: 215px; }
-  .call-controls { padding: 11px; gap: 7px; }
-  .call-controls button { min-height: 39px; padding: 0 11px; font-size: .78rem; }
+  .call-controls { padding: 10px; gap: 6px; }
+  .call-controls button { flex-basis: 42px; width: 42px; min-height: 42px; height: 42px; padding: 0; }
+  .call-controls button.hangup { flex-basis: 50px; width: 50px; }
   .messages { padding: 15px; }
   .chat-form { padding: 10px; }
 }
@@ -221,6 +227,9 @@ input:focus, select:focus { border-color: #58ddce; box-shadow: 0 0 0 3px rgba(83
 .chat-view > header small { color: #8ca4c4; }
 .chat-view > header > button { flex: 0 0 auto; min-height: 38px; border: 1px solid #344d70; border-radius: 11px; padding: 0 12px; color: #b9cce8; background: #14233a; }
 .chat-view > header > button.active { color: #082027; border-color: #58dfcf; background: #58dfcf; }
+.chat-view > header > .pinned-toggle { display: inline-flex; min-width: 52px; align-items: center; justify-content: center; gap: 6px; }
+.pinned-toggle .ui-icon { width: 17px; height: 17px; }
+.pinned-toggle span { min-width: 10px; font-size: .78rem; font-weight: 800; }
 .messages { gap: 12px; }
 .message { width: min(100%, 820px); padding: 10px; border: 1px solid transparent; border-radius: 14px; }
 .message:hover, .message:focus-within { border-color: #263c59; background: rgba(18, 38, 62, .45); }
@@ -245,10 +254,12 @@ input:focus, select:focus { border-color: #58ddce; box-shadow: 0 0 0 3px rgba(83
 .message-reactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 .message-reactions button { display: inline-flex; min-height: 30px; align-items: center; gap: 5px; border: 1px solid #354c6d; border-radius: 15px; padding: 0 9px; color: #e6f0ff; background: #13233a; }
 .message-reactions b { font-size: .7rem; }
-.message-actions { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; opacity: .2; transition: opacity .15s ease; }
+.message-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; opacity: .28; transition: opacity .15s ease; }
 .message:hover .message-actions, .message:focus-within .message-actions { opacity: 1; }
-.message-actions button { min-height: 30px; border: 0; border-radius: 8px; padding: 0 8px; color: #9eb5d4; background: transparent; font-size: .7rem; }
-.message-actions button:hover { color: #eff7ff; background: #203550; }
+.message-actions button { display: grid; flex: 0 0 32px; width: 32px; min-height: 32px; height: 32px; place-items: center; border: 1px solid transparent; border-radius: 9px; padding: 0; color: #9eb5d4; background: #111f33; }
+.message-actions button:hover, .message-actions button:focus-visible { border-color: #355273; color: #eff7ff; background: #203550; }
+.message-actions button[aria-pressed="true"] { color: #c1b6ff; border-color: #5a4d8d; background: #292547; }
+.message-actions .ui-icon { width: 17px; height: 17px; }
 .message-actions .danger-text { color: #ff96a2; }
 .reaction-picker { display: flex; width: max-content; max-width: 100%; gap: 4px; margin-top: 5px; border: 1px solid #354c69; border-radius: 13px; padding: 6px; background: #0b1728; box-shadow: 0 12px 30px rgba(0,0,0,.3); }
 .reaction-picker button { width: 37px; height: 37px; border: 0; border-radius: 9px; background: transparent; font-size: 1.1rem; }
@@ -258,11 +269,13 @@ input:focus, select:focus { border-color: #58ddce; box-shadow: 0 0 0 3px rgba(83
 .composer-context div { min-width: 0; }
 .composer-context small { color: #5ce0d0; font-weight: 800; }
 .composer-context p { margin: 2px 0 0; overflow: hidden; color: #a8bad5; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
-.composer-context button { width: 32px; height: 32px; border: 0; border-radius: 9px; color: #c7d7ef; background: #20304a; }
+.composer-context button { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 9px; padding: 0; color: #c7d7ef; background: #20304a; }
+.composer-context button .ui-icon { width: 17px; height: 17px; }
 .chat-form button:disabled { cursor: default; opacity: .45; }
 .pinned-drawer { position: absolute; z-index: 6; top: 80px; right: 14px; width: min(380px, calc(100% - 28px)); max-height: min(65vh, 540px); overflow: auto; border: 1px solid #3b5272; border-radius: 16px; padding: 12px; color: #e8f2ff; background: #0b1728; box-shadow: 0 20px 55px rgba(0,0,0,.48); }
 .pinned-drawer > header { display: flex; align-items: center; justify-content: space-between; padding: 3px 5px 10px; }
-.pinned-drawer > header button { width: 31px; height: 31px; border: 0; border-radius: 8px; color: #c8d8ee; background: #1b2b43; }
+.pinned-drawer > header button { display: grid; width: 31px; height: 31px; place-items: center; border: 0; border-radius: 8px; padding: 0; color: #c8d8ee; background: #1b2b43; }
+.pinned-drawer > header button .ui-icon { width: 17px; height: 17px; }
 .pinned-drawer > p { color: #91a7c7; font-size: .82rem; }
 .pinned-drawer article { border-top: 1px solid #293d59; padding: 10px 6px; }
 .pinned-drawer article p { margin: 4px 0 0; color: #b6c7df; font-size: .8rem; line-height: 1.4; white-space: pre-wrap; }
@@ -322,7 +335,7 @@ input:focus, select:focus { border-color: #58ddce; box-shadow: 0 0 0 3px rgba(83
 
 @media (max-width: 410px) {
   .message { grid-template-columns: 30px minmax(0, 1fr); gap: 8px; }
-  .message-actions button { padding: 0 6px; font-size: .66rem; }
+  .message-actions button { padding: 0; }
   .reaction-picker button { width: 34px; height: 34px; }
   .chat-view > header { padding: 12px 13px; }
   .chat-form { grid-template-columns: minmax(0, 1fr) 66px; }

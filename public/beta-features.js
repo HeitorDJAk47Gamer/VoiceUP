@@ -265,10 +265,10 @@
     const stableMentionIds = Array.isArray(packet.mentionClientIds) ? packet.mentionClientIds.map(String) : [];
     const mentioned = !mine && isMentionedForCurrentUser(mentionIds, stableMentionIds);
     const message = {
-      id, text: String(packet.text || '').slice(0, 500), name: packet.name || 'Participante', color: packet.color,
+      id, text: String(packet.text || '').slice(0, packet.pluginId ? 10000 : 500), name: packet.name || 'Participante', color: packet.color,
       avatar: packet.avatar || serverMembers.get(packet.from)?.avatar || '', createdAt: Number(packet.createdAt) || Date.now(),
       editedAt: Number(packet.editedAt) || 0, mentions: mentionIds, mentionClientIds: stableMentionIds, mentioned,
-      mine, reply: packet.reply || null, reactions: packet.reactions || {}, pinned: Boolean(packet.pinned), pinnedBy: packet.pinnedBy || '', authorClientId: packet.authorClientId || ''
+      mine, reply: packet.reply || null, reactions: packet.reactions || {}, pinned: Boolean(packet.pinned), pinnedBy: packet.pinnedBy || '', authorClientId: packet.authorClientId || '', pluginId: packet.pluginId || ''
     };
     if (!channelMessages.has(channel)) channelMessages.set(channel, []);
     channelMessages.get(channel).push(message);
@@ -287,7 +287,7 @@
       const mine = Boolean(packet.authorClientId && packet.authorClientId === clientId);
       const mentionIds = Array.isArray(packet.mentions) ? packet.mentions.map(String) : [];
       const stableMentionIds = Array.isArray(packet.mentionClientIds) ? packet.mentionClientIds.map(String) : [];
-      channelMessages.get(channel).push({ id: String(packet.messageId || ''), text: packet.text, name: packet.name, color: packet.color, avatar: packet.avatar || '', createdAt: Number(packet.createdAt) || Date.now(), editedAt: Number(packet.editedAt) || 0, mentions: mentionIds, mentionClientIds: stableMentionIds, mentioned: !mine && isMentionedForCurrentUser(mentionIds, stableMentionIds), mine, reply: packet.reply || null, reactions: packet.reactions || {}, pinned: Boolean(packet.pinned), pinnedBy: packet.pinnedBy || '', authorClientId: packet.authorClientId || '' });
+      channelMessages.get(channel).push({ id: String(packet.messageId || ''), text: String(packet.text || '').slice(0, packet.pluginId ? 10000 : 500), name: packet.name, color: packet.color, avatar: packet.avatar || '', createdAt: Number(packet.createdAt) || Date.now(), editedAt: Number(packet.editedAt) || 0, mentions: mentionIds, mentionClientIds: stableMentionIds, mentioned: !mine && isMentionedForCurrentUser(mentionIds, stableMentionIds), mine, reply: packet.reply || null, reactions: packet.reactions || {}, pinned: Boolean(packet.pinned), pinnedBy: packet.pinnedBy || '', authorClientId: packet.authorClientId || '', pluginId: packet.pluginId || '' });
     }
     for (const records of channelMessages.values()) records.sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
     renderChannelMessages();

@@ -181,6 +181,9 @@ function bindHostedChannel(p, channel) {
     syncLiveViewerStateForParticipant(p);
     scheduleHostedVideoSync(p, 'camera');
     scheduleHostedVideoSync(p, 'screen');
+    void syncScreenAudioForPeer(p).then(() => {
+      if (sharedAudioTrack?.readyState === 'live' && channel.readyState === 'open') channel.send(JSON.stringify({ type: 'screen-audio-on' }));
+    }).catch(() => {});
     markHostedConnected(p);
   };
   channel.onclose = () => {
@@ -243,6 +246,42 @@ const hostedIncomingAudioKind = (p, transceiver, track) => {
   return negotiatedAudio.indexOf(transceiver) === 1 ? 'screen-audio' : 'voice-audio';
 };
 
+// Keep a real, silent track negotiated in the dedicated live-audio m-line.
+// A null sender can leave some Chromium/WebRTC versions without a usable
+// receiver when audio is enabled later through replaceTrack().
+let betaSilentScreenAudioContext = null;
+let betaSilentScreenAudioSource = null;
+let betaSilentScreenAudioTrack = null;
+function betaScreenAudioTransportTrack() {
+  if (sharedAudioTrack?.readyState === 'live') return sharedAudioTrack;
+  if (betaSilentScreenAudioTrack?.readyState === 'live') return betaSilentScreenAudioTrack;
+  try {
+    betaSilentScreenAudioContext = new AudioContext({ sampleRate: 48000 });
+    const destination = betaSilentScreenAudioContext.createMediaStreamDestination();
+    const gain = betaSilentScreenAudioContext.createGain();
+    gain.gain.value = 0;
+    betaSilentScreenAudioSource = betaSilentScreenAudioContext.createConstantSource();
+    betaSilentScreenAudioSource.offset.value = 0;
+    betaSilentScreenAudioSource.connect(gain).connect(destination);
+    betaSilentScreenAudioSource.start();
+    betaSilentScreenAudioTrack = destination.stream.getAudioTracks()[0];
+    betaSilentScreenAudioTrack.contentHint = 'music';
+    betaSilentScreenAudioContext.resume().catch(() => {});
+    return betaSilentScreenAudioTrack;
+  } catch {
+    betaSilentScreenAudioTrack = null;
+    return null;
+  }
+}
+
+async function syncScreenAudioForPeer(participant) {
+  const sender = participant?.screenAudioSender;
+  const track = betaScreenAudioTransportTrack();
+  if (!sender || !track) return false;
+  if (sender.track !== track) await sender.replaceTrack(track);
+  return true;
+}
+
 function addHostedOfferMedia(p, pc) {
   const audioTrack = outgoingAudioTrack();
   p.audioStream = new MediaStream(audioTrack ? [audioTrack] : []);
@@ -251,7 +290,7 @@ function addHostedOfferMedia(p, pc) {
     : pc.addTransceiver('audio', { direction: 'sendrecv', streams: [p.audioStream] });
   p.audioTransceiver = audioTransceiver; p.audioSender = audioTransceiver.sender; p.audioReceiver = audioTransceiver.receiver;
 
-  const screenAudioTrack = sharedAudioTrack?.readyState === 'live' ? sharedAudioTrack : null;
+  const screenAudioTrack = betaScreenAudioTransportTrack();
   p.screenAudioStream = new MediaStream(screenAudioTrack ? [screenAudioTrack] : []);
   const screenAudioTransceiver = screenAudioTrack
     ? pc.addTransceiver(screenAudioTrack, { direction: 'sendrecv', streams: [p.screenAudioStream] })
@@ -292,7 +331,7 @@ async function bindHostedAnswerMedia(p) {
   }
 
   if (screenAudioTransceiver) {
-    const screenAudioTrack = sharedAudioTrack?.readyState === 'live' ? sharedAudioTrack : null;
+    const screenAudioTrack = betaScreenAudioTransportTrack();
     p.screenAudioStream = new MediaStream(screenAudioTrack ? [screenAudioTrack] : []);
     p.screenAudioTransceiver = screenAudioTransceiver; p.screenAudioSender = screenAudioTransceiver.sender; p.screenAudioReceiver = screenAudioTransceiver.receiver;
     if (screenAudioTransceiver.direction !== 'stopped') screenAudioTransceiver.direction = 'sendrecv';
@@ -349,6 +388,7 @@ function makeHostedConnection(p, initiator = false) {
       // video m-lines were negotiated before the call started.
       scheduleHostedVideoSync(p, 'camera');
       scheduleHostedVideoSync(p, 'screen');
+      void syncScreenAudioForPeer(p).catch(() => {});
       // On some Electron/Windows combinations a pre-created recvonly slot
       // does not fire ontrack after the initial offer. Its receiver still
       // exists, though; register it here so a later video-state can reveal
@@ -480,7 +520,7 @@ makePeer = function makePeerBeta(role = 'offerer') {
       const existing = pc.getSenders().find((sender) => sender.track?.kind === 'audio');
       peer.audioSender = existing || pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
     }
-    const screenAudioTrack = sharedAudioTrack?.readyState === 'live' ? sharedAudioTrack : null;
+    const screenAudioTrack = betaScreenAudioTransportTrack();
     peer.screenAudioStream = new MediaStream(screenAudioTrack ? [screenAudioTrack] : []);
     const screenAudioTransceiver = screenAudioTrack
       ? pc.addTransceiver(screenAudioTrack, { direction: 'sendrecv', streams: [peer.screenAudioStream] })
@@ -503,7 +543,7 @@ makePeer = function makePeerBeta(role = 'offerer') {
     if (event.track.kind === 'audio') {
       const kind = hostedIncomingAudioKind(peer, event.transceiver, event.track);
       const stream = event.streams?.[0] || new MediaStream([event.track]);
-      if (kind === 'screen-audio') { setupManualScreenAudioGain(stream); return; }
+      if (kind === 'screen-audio') { peer.screenAudioBoundTrack = event.track; setupManualScreenAudioGain(stream); return; }
       originalTrackHandler?.(event); setupManualAudioGain(stream); setTimeout(applyOutputMute, 0); setTimeout(applyOutputMute, 250); return;
     }
     const videoTransceivers = pc.getTransceivers().filter((transceiver) => transceiver.receiver?.track?.kind === 'video');
@@ -537,6 +577,8 @@ bindChannel = function bindChannelBeta(channel) {
   channel.onopen = async (...args) => {
     originalOpen?.apply(channel, args);
     syncLiveViewerStateForParticipant(peer);
+    await syncScreenAudioForPeer(peer).catch(() => false);
+    if (sharedAudioTrack?.readyState === 'live' && channel.readyState === 'open') channel.send(JSON.stringify({ type: 'screen-audio-on' }));
     for (const kind of ['camera', 'screen']) {
       const track = betaActiveVideoTrack(kind); const sender = peer?.[`${kind}Sender`];
       if (track && sender) {
@@ -796,6 +838,8 @@ receiveData = async function receiveDataBetaTyping(raw) {
     const msg = JSON.parse(raw);
     if (msg.type === 'typing-state') { applyRemoteTyping('manual-peer', msg, peer || {}); return; }
     if (msg.type === 'live-view-state') { setLocalLiveViewerState('manual-peer', Boolean(msg.viewing)); return; }
+    if (msg.type === 'screen-audio-on') { scheduleIncomingScreenAudio(peer, true); return; }
+    if (msg.type === 'screen-audio-off') { deactivateIncomingScreenAudio(peer, true); return; }
     if (msg.type === 'media-view-request' && ['camera', 'screen'].includes(msg.kind)) {
       const track = betaActiveVideoTrack(msg.kind);
       const sender = peer?.[`${msg.kind}Sender`] || (msg.kind === 'camera' ? peer?.videoSender : null);
@@ -912,7 +956,10 @@ function setParticipantScreenView(participant, viewing, { announce = true } = {}
   const next = Boolean(viewing);
   const changed = state.screen !== next;
   state.screen = next;
-  if (!next) applyLiveAudioLevels();
+  // The screen-audio receiver is negotiated before somebody chooses to watch.
+  // Recalculate on both transitions; otherwise its gain can remain at zero
+  // after opening a live that started with the tile hidden.
+  applyLiveAudioLevels();
   if (changed && announce) sendLiveViewerState(participant, next);
   return changed;
 }
@@ -1373,51 +1420,6 @@ let nativeShareAudioNode = null;
 let nativeShareAudioDestination = null;
 let nativeShareAudioTrack = null;
 let nativeShareAudioWanted = false;
-const nativeShareAudioProcessor = `
-class VoiceUpProcessPcmProcessor extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.queue = [];
-    this.offset = 0;
-    this.queuedFrames = 0;
-    this.port.onmessage = ({ data }) => {
-      if (data?.reset) { this.queue = []; this.offset = 0; this.queuedFrames = 0; return; }
-      if (!(data instanceof ArrayBuffer) || data.byteLength < 4) return;
-      const pcm = new Int16Array(data);
-      this.queue.push(pcm);
-      this.queuedFrames += Math.floor(pcm.length / 2);
-      while (this.queuedFrames > 24000 && this.queue.length > 1) {
-        const removed = this.queue.shift();
-        this.queuedFrames -= Math.floor((removed.length - this.offset) / 2);
-        this.offset = 0;
-      }
-    };
-  }
-  process(_inputs, outputs) {
-    const output = outputs[0];
-    const left = output[0];
-    const right = output[1] || left;
-    left.fill(0); if (right !== left) right.fill(0);
-    for (let frame = 0; frame < left.length;) {
-      const chunk = this.queue[0];
-      if (!chunk) break;
-      if (this.offset + 1 >= chunk.length) { this.queue.shift(); this.offset = 0; continue; }
-      const available = Math.floor((chunk.length - this.offset) / 2);
-      const count = Math.min(left.length - frame, available);
-      for (let index = 0; index < count; index += 1) {
-        left[frame + index] = chunk[this.offset + index * 2] / 32768;
-        right[frame + index] = chunk[this.offset + index * 2 + 1] / 32768;
-      }
-      this.offset += count * 2;
-      this.queuedFrames = Math.max(0, this.queuedFrames - count);
-      frame += count;
-      if (this.offset >= chunk.length) { this.queue.shift(); this.offset = 0; }
-    }
-    return true;
-  }
-}
-registerProcessor('voiceup-process-pcm', VoiceUpProcessPcmProcessor);
-`;
 const processAudioArrayBuffer = (data) => {
   if (data instanceof ArrayBuffer) return data.slice(0);
   if (ArrayBuffer.isView(data)) return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
@@ -1447,9 +1449,7 @@ const startNativeShareAudio = async (sourceId) => {
   if (!window.voiceupDesktop?.startProcessAudio) throw new Error('Esta versão não contém o capturador protegido de áudio.');
   await closeNativeShareAudio();
   nativeShareAudioContext = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 });
-  const moduleUrl = URL.createObjectURL(new Blob([nativeShareAudioProcessor], { type: 'text/javascript' }));
-  try { await nativeShareAudioContext.audioWorklet.addModule(moduleUrl); }
-  finally { URL.revokeObjectURL(moduleUrl); }
+  await nativeShareAudioContext.audioWorklet.addModule('process-audio-worklet.js');
   nativeShareAudioNode = new AudioWorkletNode(nativeShareAudioContext, 'voiceup-process-pcm', {
     numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit'
   });
@@ -1475,7 +1475,8 @@ const startNativeShareAudio = async (sourceId) => {
 stopSharedSystemAudio = async function stopSharedSystemAudioBetaSeparated() {
   const previous = sharedAudioTrack;
   sharedAudioTrack = null;
-  await Promise.allSettled(screenAudioSenders().map((sender) => sender.replaceTrack(null)));
+  const silentTrack = betaScreenAudioTransportTrack();
+  await Promise.allSettled(screenAudioSenders().map((sender) => sender.replaceTrack(silentTrack)));
   if (peer?.channel?.readyState === 'open') peer.channel.send(JSON.stringify({ type: 'screen-audio-off' }));
   if (currentMode === 'hosted') [...hostedPeers.values()].forEach((participant) => participant.channel?.readyState === 'open' && participant.channel.send(JSON.stringify({ type: 'screen-audio-off' })));
   previous?.stop?.();
@@ -1496,6 +1497,8 @@ startSharedSystemAudio = async function startSharedSystemAudioBetaGain() {
   } catch (error) {
     await closeNativeShareAudio();
     sharedAudioTrack = null;
+    const silentTrack = betaScreenAudioTransportTrack();
+    await Promise.allSettled(screenAudioSenders().map((sender) => sender.replaceTrack(silentTrack)));
     toast(error?.message || 'Não foi possível publicar o áudio desta transmissão. A live continuará sem áudio para proteger sua privacidade.');
   }
 };
@@ -1533,25 +1536,70 @@ const setupHostedAudioGain = (participant, stream) => {
 const setupManualScreenAudioGain = (stream) => {
   closeManualScreenAudioGain();
   manualScreenAudio = new Audio(); manualScreenAudio.srcObject = stream; manualScreenAudio.autoplay = true;
+  // Chromium can keep receiving RTP while postponing the audio decoder until
+  // a media element actually plays. Keep this element running but muted; the
+  // independent Web Audio gain below is the only audible live output.
+  manualScreenAudio.muted = true;
+  manualScreenAudio.play().catch(() => {});
   if (audioOutputId && typeof manualScreenAudio.setSinkId === 'function') manualScreenAudio.setSinkId(audioOutputId).catch(() => {});
   try {
     manualScreenAudioGainContext = new AudioContext(); manualScreenAudioGainNode = manualScreenAudioGainContext.createGain();
     manualScreenAudioGainContext.createMediaStreamSource(stream).connect(manualScreenAudioGainNode).connect(manualScreenAudioGainContext.destination);
-    setAudioContextSink(manualScreenAudioGainContext); manualScreenAudioGainContext.resume().catch(() => {}); manualScreenAudio.pause();
-  } catch { manualScreenAudioGainContext = null; manualScreenAudioGainNode = null; manualScreenAudio.play().catch(() => {}); }
+    setAudioContextSink(manualScreenAudioGainContext); manualScreenAudioGainContext.resume().catch(() => {});
+  } catch { manualScreenAudioGainContext = null; manualScreenAudioGainNode = null; }
   applyLiveAudioLevels();
 };
 const setupHostedScreenAudioGain = (participant, stream) => {
   participant.screenAudio?.pause?.(); participant.screenAudioGainContext?.close?.().catch(() => {});
   participant.screenAudio = new Audio(); participant.screenAudio.srcObject = stream; participant.screenAudio.autoplay = true;
+  participant.screenAudio.muted = true;
+  participant.screenAudio.play().catch(() => {});
   if (audioOutputId && typeof participant.screenAudio.setSinkId === 'function') participant.screenAudio.setSinkId(audioOutputId).catch(() => {});
   try {
     participant.screenAudioGainContext = new AudioContext(); participant.screenAudioGainNode = participant.screenAudioGainContext.createGain();
     participant.screenAudioGainContext.createMediaStreamSource(stream).connect(participant.screenAudioGainNode).connect(participant.screenAudioGainContext.destination);
-    setAudioContextSink(participant.screenAudioGainContext); participant.screenAudioGainContext.resume().catch(() => {}); participant.screenAudio.pause();
-  } catch { participant.screenAudioGainContext = null; participant.screenAudioGainNode = null; participant.screenAudio.play().catch(() => {}); }
+    setAudioContextSink(participant.screenAudioGainContext); participant.screenAudioGainContext.resume().catch(() => {});
+  } catch { participant.screenAudioGainContext = null; participant.screenAudioGainNode = null; }
   applyLiveAudioLevels();
 };
+
+function negotiatedScreenAudioTrack(participant) {
+  const direct = participant?.screenAudioReceiver?.track || participant?.screenAudioTransceiver?.receiver?.track;
+  if (direct?.kind === 'audio' && direct.readyState !== 'ended') return direct;
+  const audioTransceivers = participant?.pc?.getTransceivers?.().filter((item) => item.receiver?.track?.kind === 'audio') || [];
+  const fallback = audioTransceivers[1]?.receiver?.track;
+  return fallback?.readyState === 'ended' ? null : fallback;
+}
+
+function activateIncomingScreenAudio(participant, manual = false) {
+  const track = negotiatedScreenAudioTrack(participant);
+  if (!track) return false;
+  if (participant.screenAudioBoundTrack === track) {
+    applyLiveAudioLevels();
+    return true;
+  }
+  participant.screenAudioBoundTrack = track;
+  const stream = new MediaStream([track]);
+  if (manual) setupManualScreenAudioGain(stream);
+  else setupHostedScreenAudioGain(participant, stream);
+  return true;
+}
+
+function scheduleIncomingScreenAudio(participant, manual = false) {
+  [0, 180, 700].forEach((delay) => setTimeout(() => activateIncomingScreenAudio(participant, manual), delay));
+}
+
+function deactivateIncomingScreenAudio(participant, manual = false) {
+  if (participant) participant.screenAudioBoundTrack = null;
+  if (manual) {
+    closeManualScreenAudioGain();
+    return;
+  }
+  participant?.screenAudio?.pause?.();
+  if (participant) participant.screenAudio = null;
+  participant?.screenAudioGainContext?.close?.().catch(() => {});
+  if (participant) { participant.screenAudioGainContext = null; participant.screenAudioGainNode = null; }
+}
 
 const betaApplyAudioOutput = applyAudioOutput;
 applyAudioOutput = async function applyAudioOutputBetaMuteSafe() {
@@ -1681,8 +1729,9 @@ function attachHostedTrack(p, track, streams, kind = 'camera') {
   const stream = track.kind === 'video' ? new MediaStream([track]) : (streams[0] || new MediaStream([track]));
   if (track.kind === 'audio') {
     if (kind === 'screen-audio') {
+      p.screenAudioBoundTrack = track;
       setupHostedScreenAudioGain(p, stream);
-      track.addEventListener('ended', () => { p.screenAudio?.pause?.(); p.screenAudio = null; p.screenAudioGainContext?.close?.().catch(() => {}); p.screenAudioGainContext = null; p.screenAudioGainNode = null; }, { once: true });
+      track.addEventListener('ended', () => deactivateIncomingScreenAudio(p), { once: true });
       return;
     }
     p.audio?.pause(); p.audio = new Audio(); p.audio.srcObject = stream; p.audio.autoplay = true; p.audio.muted = betaOutputMuted || p.muted;
@@ -1730,6 +1779,8 @@ function receiveHostedData(p, raw) {
     const msg = JSON.parse(raw);
     if (msg.type === 'chat') { playNotification('message'); return addMessage(msg.text, msg.name || p.name, false, msg.color || p.color); }
     if (msg.type === 'live-view-state') { setLocalLiveViewerState(p.id, Boolean(msg.viewing)); return; }
+    if (msg.type === 'screen-audio-on') { scheduleIncomingScreenAudio(p); return; }
+    if (msg.type === 'screen-audio-off') { deactivateIncomingScreenAudio(p); return; }
     if (msg.type === 'intro') { p.name = msg.name || p.name; p.color = safeColor(msg.color || p.color); p.avatar = safeAvatar(msg.avatar || p.avatar); return markHostedConnected(p); }
     if (msg.type === 'video-on') return applyHostedVideoState(p, true, msg.description, msg.revision);
     if (msg.type === 'video-off') return applyHostedVideoState(p, false, msg.description || 'camera', msg.revision);
@@ -2079,6 +2130,7 @@ const callIdentity = document.querySelector('#identity-stage');
 if (callIdentity && !document.querySelector('#call-members')) {
   const list = document.createElement('div');
   list.id = 'call-members';
+  list.classList.add('voiceup-square-grid');
   // Keep the legacy stage avatar in the DOM. enterApp, channel changes and
   // older protocol paths still update it while the beta member grid is used.
   // Removing it aborted hosted-room entry before Socket.IO was even created.
@@ -2086,6 +2138,112 @@ if (callIdentity && !document.querySelector('#call-members')) {
   if (wave) wave.insertAdjacentElement('afterend', list);
   else callIdentity.prepend(list);
 }
+const callMembersList = document.querySelector('#call-members');
+const callStageElement = callIdentity?.closest('.stage');
+const callVideoFrame = document.querySelector('#video-frame');
+let callTrayCollapsed = false;
+try { callTrayCollapsed = localStorage.getItem('voiceup-call-tray-collapsed') === '1'; } catch { /* Optional UI preference. */ }
+const callParticipantTray = document.createElement('section');
+callParticipantTray.id = 'call-participant-tray';
+callParticipantTray.className = 'call-participant-tray';
+callParticipantTray.hidden = true;
+callParticipantTray.setAttribute('aria-label', 'Participantes da chamada');
+callParticipantTray.innerHTML = `<button id="call-participant-tray-toggle" class="call-participant-tray-toggle" type="button" aria-controls="call-participant-tray-viewport"><span>Participantes <b id="call-participant-tray-count">0</b></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div id="call-participant-tray-viewport" class="call-participant-tray-viewport"></div>`;
+callVideoFrame?.insertAdjacentElement('afterend', callParticipantTray);
+const callParticipantTrayViewport = callParticipantTray.querySelector('#call-participant-tray-viewport');
+const callParticipantTrayToggle = callParticipantTray.querySelector('#call-participant-tray-toggle');
+const callParticipantTrayCount = callParticipantTray.querySelector('#call-participant-tray-count');
+let callGridFitFrame = 0;
+
+function callHasVisibleMedia() {
+  return Boolean(callVideoFrame && !callVideoFrame.classList.contains('hidden') && document.querySelector('#video-gallery .video-tile:not(.hidden)'));
+}
+
+function applyCallTrayDisclosure() {
+  callParticipantTray.classList.toggle('collapsed', callTrayCollapsed);
+  callParticipantTrayToggle?.setAttribute('aria-expanded', String(!callTrayCollapsed));
+  if (callParticipantTrayToggle) callParticipantTrayToggle.title = callTrayCollapsed ? 'Mostrar participantes' : 'Ocultar participantes';
+  document.body.classList.toggle('call-participant-tray-expanded', !callParticipantTray.hidden && !callTrayCollapsed);
+}
+
+function fitCallMemberSquares() {
+  if (!callMembersList || !callMembersList.children.length) return;
+  const count = callMembersList.children.length;
+  const gap = callMembersList.parentElement === callParticipantTrayViewport ? 8 : 10;
+  if (callMembersList.parentElement === callParticipantTrayViewport) {
+    const availableWidth = Math.max(180, callParticipantTrayViewport.clientWidth - 6);
+    const fitted = Math.floor((availableWidth - gap * Math.max(0, count - 1)) / count);
+    const size = Math.max(76, Math.min(116, fitted));
+    callMembersList.style.setProperty('--call-member-size', `${size}px`);
+    callMembersList.style.setProperty('--call-grid-width', `${Math.max(availableWidth, size * count + gap * Math.max(0, count - 1))}px`);
+    callMembersList.style.setProperty('--call-grid-height', `${size}px`);
+    return;
+  }
+
+  const bounds = callIdentity?.getBoundingClientRect();
+  // A flex child can initially report only the height of its old contents.
+  // The stage is the real available canvas and lets a small call use genuinely
+  // large squares instead of inheriting the former compact row height.
+  const stageStyle = callStageElement ? getComputedStyle(callStageElement) : null;
+  const stageWidth = callStageElement ? callStageElement.clientWidth - (parseFloat(stageStyle.paddingLeft) || 0) - (parseFloat(stageStyle.paddingRight) || 0) : 0;
+  const stageHeight = callStageElement ? callStageElement.clientHeight - (parseFloat(stageStyle.paddingTop) || 0) - (parseFloat(stageStyle.paddingBottom) || 0) : 0;
+  const availableWidth = Math.max(240, Math.floor((stageWidth || bounds?.width || 760) - 12));
+  const availableHeight = Math.max(190, Math.floor((stageHeight || bounds?.height || 560) - 12));
+  let best = { columns: 1, rows: count, size: 0 };
+  for (let columns = 1; columns <= count; columns += 1) {
+    const rows = Math.ceil(count / columns);
+    const size = Math.floor(Math.min(
+      (availableWidth - gap * Math.max(0, columns - 1)) / columns,
+      (availableHeight - gap * Math.max(0, rows - 1)) / rows,
+      520
+    ));
+    if (size > best.size || (size === best.size && rows < best.rows)) best = { columns, rows, size };
+  }
+  const size = Math.max(64, best.size);
+  callMembersList.style.setProperty('--call-member-size', `${size}px`);
+  callMembersList.style.setProperty('--call-grid-width', `${size * best.columns + gap * Math.max(0, best.columns - 1)}px`);
+  callMembersList.style.setProperty('--call-grid-height', `${size * best.rows + gap * Math.max(0, best.rows - 1)}px`);
+}
+
+function queueCallMemberSquareFit() {
+  cancelAnimationFrame(callGridFitFrame);
+  callGridFitFrame = requestAnimationFrame(fitCallMemberSquares);
+}
+
+function syncCallParticipantSurface() {
+  if (!callMembersList || !callIdentity || !callParticipantTrayViewport) return;
+  const belowLive = callHasVisibleMedia() && callMembersList.children.length > 0;
+  if (belowLive) {
+    if (callMembersList.parentElement !== callParticipantTrayViewport) callParticipantTrayViewport.append(callMembersList);
+  } else if (callMembersList.parentElement !== callIdentity) {
+    const wave = callIdentity.querySelector('.wave-wrap');
+    if (wave) wave.insertAdjacentElement('afterend', callMembersList);
+    else callIdentity.prepend(callMembersList);
+  }
+  callParticipantTray.hidden = !belowLive;
+  callParticipantTrayCount.textContent = String(callMembersList.children.length);
+  callMembersList.classList.toggle('in-live-tray', belowLive);
+  callStageElement?.classList.toggle('call-participants-below-live', belowLive);
+  applyCallTrayDisclosure();
+  queueCallMemberSquareFit();
+}
+
+callParticipantTrayToggle?.addEventListener('click', () => {
+  callTrayCollapsed = !callTrayCollapsed;
+  try { localStorage.setItem('voiceup-call-tray-collapsed', callTrayCollapsed ? '1' : '0'); } catch { /* Optional UI preference. */ }
+  applyCallTrayDisclosure();
+  queueCallMemberSquareFit();
+});
+if (typeof ResizeObserver === 'function') {
+  const callGridResizeObserver = new ResizeObserver(queueCallMemberSquareFit);
+  if (callStageElement) callGridResizeObserver.observe(callStageElement);
+  if (callParticipantTrayViewport) callGridResizeObserver.observe(callParticipantTrayViewport);
+}
+if (callVideoFrame) {
+  new MutationObserver(syncCallParticipantSurface).observe(callVideoFrame, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+}
+window.addEventListener('resize', queueCallMemberSquareFit);
+applyCallTrayDisclosure();
 const rightPanel = document.querySelector('#right-panel');
 const membersPanel = document.querySelector('#members-panel');
 const chatPanel = document.querySelector('#chat-panel');
@@ -2118,13 +2276,14 @@ const syncHostedLobbyLayout = () => {
 const renderCentralCallMembers = () => {
   syncHostedLobbyLayout();
   const list = document.querySelector('#call-members');
-  if (!list || document.querySelector('#video-frame')?.classList.contains('hidden') === false) return;
+  if (!list) return;
   if (currentMode === 'hosted' && !activeVoiceChannel) {
     list.innerHTML = '';
     delete list.dataset.structureKey;
     callIdentity.classList.remove('group-call');
     $('stage-name').textContent = betaT('lobby.title') || 'Você entrou no servidor';
     $('stage-message').textContent = betaT('lobby.subtitle') || 'Escolha um canal de voz para entrar na chamada.';
+    syncCallParticipantSurface();
     return;
   }
   // Manual P2P still needs its invitation step. Do not show a fake one-person
@@ -2132,6 +2291,7 @@ const renderCentralCallMembers = () => {
   if (currentMode !== 'hosted' && !peer?.name) {
     list.innerHTML = '';
     callIdentity.classList.remove('group-call');
+    syncCallParticipantSurface();
     return;
   }
   let hostedMembers = [];
@@ -2183,6 +2343,7 @@ const renderCentralCallMembers = () => {
     $('stage-name').textContent = betaT('state.groupCount', { count: participants.length }) || `${participants.length} pessoas na chamada`;
     $('stage-message').textContent = betaT('state.groupSubtitle') || 'Conectadas neste canal de voz.';
   }
+  syncCallParticipantSurface();
 };
 const betaShowHostedStage = showHostedStage;
 showHostedStage = function showHostedStageBeta(p, connected = false) { betaShowHostedStage(p, connected); renderCentralCallMembers(); };
@@ -2383,6 +2544,28 @@ document.head.insertAdjacentHTML('beforeend', `<style>
 #identity-stage:not(.group-call) #call-members:empty{display:none}#identity-stage.group-call>.wave-wrap,#identity-stage.group-call>#stage-name,#identity-stage.group-call>#stage-message{display:none}.pair-panel{position:relative!important;z-index:2}.pair-panel textarea{width:100%!important}.pair-panel .share-button{display:inline-flex!important;align-items:center;justify-content:center;min-width:138px}.pair-panel .answer-box{display:grid;gap:8px}.pair-panel .answer-box .share-button{justify-self:end;float:none!important}
 #identity-stage.group-call{display:grid;width:100%;height:100%;min-height:0;place-items:center}#identity-stage.group-call #call-members{display:grid;width:min(1180px,100%);height:min(700px,100%);max-width:none;max-height:100%;margin:auto;padding:4px;gap:10px;grid-auto-rows:minmax(160px,1fr);align-content:center;overflow:auto}#call-members[data-grid-size="single"]{grid-template-columns:minmax(280px,680px);justify-content:center}#call-members[data-grid-size="balanced"]{grid-template-columns:repeat(2,minmax(0,1fr))}#call-members[data-grid-size="many"]{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}#call-members[data-member-count="3"] .call-member:last-child{grid-column:1/-1;width:calc(50% - 5px);justify-self:center}.call-member{position:relative;width:100%;height:100%;min-width:0;min-height:160px;display:grid;place-items:center;overflow:hidden;padding:20px;border:1px solid var(--line);border-radius:14px;background:color-mix(in srgb,var(--surface-2) 86%,var(--night));color:var(--ink);text-align:left;box-shadow:0 8px 26px rgba(0,0,0,.12)}.call-member-visual{display:grid;place-items:center;min-width:0;min-height:0}.call-member-visual .avatar{width:96px;height:96px;border-radius:50%;font-size:30px}.call-member-caption{position:absolute;z-index:3;left:10px;bottom:10px;display:grid;gap:2px;max-width:calc(100% - 20px);padding:6px 9px;border:1px solid color-mix(in srgb,var(--line) 68%,transparent);border-radius:8px;background:color-mix(in srgb,var(--panel) 90%,transparent);box-shadow:0 7px 18px rgba(0,0,0,.2);backdrop-filter:blur(8px)}.call-member-caption strong,.call-member-caption small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.call-member-caption strong{font-size:12px}.call-member-caption small{color:var(--muted);font-size:9px}.call-member.speaking{border-color:var(--focus);background:color-mix(in srgb,var(--focus) 7%,var(--surface-2));box-shadow:0 0 0 1px color-mix(in srgb,var(--focus) 42%,transparent),0 0 22px color-mix(in srgb,var(--focus) 22%,transparent)}.call-member.speaking .call-member-caption small{color:var(--focus);font-weight:800}@media(max-width:700px){#identity-stage.group-call #call-members{height:auto;max-height:100%;grid-template-columns:1fr!important;grid-auto-rows:minmax(150px,1fr);gap:8px}#call-members[data-member-count="3"] .call-member:last-child{grid-column:auto;width:100%}.call-member{min-height:150px}.call-member-visual .avatar{width:72px;height:72px;font-size:23px}}
 .channel-avatars{overflow:visible!important}.channel-avatar{position:relative;cursor:default}.channel-avatar::after{content:attr(data-nickname);position:absolute;z-index:20;right:0;bottom:calc(100% + 8px);width:max-content;max-width:150px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--ink);font:600 11px/1.2 'DM Sans',sans-serif;box-shadow:var(--shadow);opacity:0;pointer-events:none;transform:translateY(3px);transition:opacity .14s,transform .14s}.channel-avatar:hover::after,.channel-avatar:focus-visible::after{opacity:1;transform:translateY(0)}
+</style>`);
+document.head.insertAdjacentHTML('beforeend', `<style>
+/* Participant stage: responsive square cards in calls and a collapsible strip
+   below active media. The same DOM is moved between both surfaces so speaking,
+   mute and media states never diverge. */
+#identity-stage.group-call #call-members.voiceup-square-grid{display:flex!important;flex-wrap:wrap!important;align-items:center!important;align-content:center!important;justify-content:center!important;gap:10px!important;width:var(--call-grid-width,min(100%,760px))!important;height:var(--call-grid-height,auto)!important;max-width:none!important;max-height:100%!important;margin:auto!important;padding:0!important;overflow:visible!important}
+#call-members.voiceup-square-grid .call-member{box-sizing:border-box!important;flex:0 0 var(--call-member-size,220px)!important;width:var(--call-member-size,220px)!important;height:var(--call-member-size,220px)!important;min-width:0!important;min-height:0!important;aspect-ratio:1/1!important;padding:clamp(10px,2vw,22px)!important}
+#call-members.voiceup-square-grid .call-member-visual{width:clamp(52px,30%,150px)!important;height:auto!important;aspect-ratio:1/1!important}
+#call-members.voiceup-square-grid .call-member-visual .avatar{width:100%!important;height:100%!important;aspect-ratio:1/1!important;font-size:clamp(18px,4vw,38px)!important}
+.stage.call-participants-below-live{justify-content:flex-start!important;gap:9px!important;overflow:hidden!important}
+.stage.call-participants-below-live>#video-frame{flex:1 1 auto!important;width:min(100%,1180px)!important;height:auto!important;min-height:160px!important;margin:0 auto!important}
+.call-participant-tray[hidden]{display:none!important}.call-participant-tray{position:relative;z-index:12;flex:0 0 auto;width:min(100%,1180px);margin:0 auto;border:1px solid color-mix(in srgb,var(--line) 76%,var(--focus));border-radius:13px;background:color-mix(in srgb,var(--panel) 94%,transparent);box-shadow:0 9px 25px rgba(0,0,0,.2);overflow:hidden;backdrop-filter:blur(12px)}
+.call-participant-tray-toggle{width:100%;min-height:31px;display:flex;align-items:center;justify-content:center;gap:7px;padding:5px 10px;border:0;background:color-mix(in srgb,var(--night) 64%,transparent);color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.02em}.call-participant-tray-toggle:hover,.call-participant-tray-toggle:focus-visible{color:var(--focus);outline:none;background:color-mix(in srgb,var(--focus) 9%,var(--night))}.call-participant-tray-toggle span{display:inline-flex;align-items:center;gap:6px}.call-participant-tray-toggle b{min-width:19px;padding:2px 5px;border:1px solid color-mix(in srgb,var(--focus) 42%,var(--line));border-radius:999px;color:var(--focus);font-size:9px}.call-participant-tray-toggle svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;transition:transform .18s ease}.call-participant-tray.collapsed .call-participant-tray-toggle svg{transform:rotate(180deg)}
+.call-participant-tray-viewport{height:124px;padding:4px 8px 8px;overflow-x:auto;overflow-y:hidden;scrollbar-gutter:stable}.call-participant-tray.collapsed .call-participant-tray-viewport{display:none}.call-participant-tray.collapsed{width:min(220px,calc(100% - 24px));align-self:center}
+#call-participant-tray #call-members.voiceup-square-grid{display:flex!important;flex-wrap:nowrap!important;align-items:center!important;justify-content:center!important;gap:8px!important;width:var(--call-grid-width,max-content)!important;min-width:100%!important;height:var(--call-grid-height,108px)!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;overflow:visible!important}
+#call-participant-tray #call-members.voiceup-square-grid .call-member{flex:0 0 var(--call-member-size,108px)!important;width:var(--call-member-size,108px)!important;height:var(--call-member-size,108px)!important;padding:8px!important;border-radius:11px!important}
+#call-participant-tray #call-members.voiceup-square-grid .call-member-visual{width:clamp(42px,46%,62px)!important;height:auto!important}
+#call-participant-tray #call-members.voiceup-square-grid .call-member-visual .avatar{width:100%!important;height:100%!important;font-size:18px!important}
+#call-participant-tray .call-member-caption{left:6px;right:6px;bottom:6px;max-width:none;padding:4px 6px;border-radius:6px}.call-participant-tray .call-member-caption strong{font-size:9px}.call-participant-tray .call-member-caption small{display:none}.call-participant-tray .call-member>.voiceup-mute-badges{right:5px;top:5px}.call-participant-tray .call-member>.media-live-badge{right:7px;top:7px}
+body.video-theater .call-participant-tray{position:fixed!important;z-index:105!important;left:50%!important;bottom:max(15px,env(safe-area-inset-bottom))!important;transform:translateX(-50%);width:min(980px,calc(100vw - 28px))!important;margin:0!important;background:rgba(8,12,20,.88)!important;border-color:rgba(255,255,255,.2)!important}body.video-theater.call-participant-tray-expanded #local-video{bottom:176px!important}
+body[data-motion="reduced"] .call-participant-tray-toggle svg{transition:none!important}
+@media(max-width:700px){#identity-stage.group-call #call-members.voiceup-square-grid{gap:8px!important}.call-participant-tray-viewport{height:108px}#call-participant-tray #call-members.voiceup-square-grid .call-member{max-width:92px;max-height:92px}.stage.call-participants-below-live{padding:10px!important}.stage.call-participants-below-live>#video-frame{min-height:150px!important}body.video-theater.call-participant-tray-expanded #local-video{bottom:156px!important}}
 </style>`);
 
 // The legacy source list changes after WebRTC events. It must never replace the
@@ -2926,7 +3109,26 @@ const themeCatalog = [
   { id: 'peach', name: 'Pêssego fosco', detail: 'Coral quente', light: true, colors: ['#e4c8be', '#eed9d1', '#d9b9ae', '#a64f67', '#c96542'] },
   { id: 'mist', name: 'Névoa fosca', detail: 'Cinza azulado', light: true, colors: ['#c8d1dc', '#d9e0e8', '#bbc6d2', '#426e9d', '#aa6077'] },
   { id: 'lagoon', name: 'Lagoa fosca', detail: 'Turquesa suave', light: true, colors: ['#bcd8d5', '#d1e5e1', '#acd0cb', '#1d776f', '#b25f79'] },
-  { id: 'sunset', name: 'Entardecer', detail: 'Rosa e dourado', light: true, colors: ['#dfc7cf', '#ead8dc', '#d4b8c2', '#9b4d78', '#b77035'] }
+  { id: 'sunset', name: 'Entardecer', detail: 'Rosa e dourado', light: true, colors: ['#dfc7cf', '#ead8dc', '#d4b8c2', '#9b4d78', '#b77035'] },
+  { id: 'nebula', name: 'Nebulosa', detail: 'Gradiente · roxo cósmico e azul', colors: ['#09071a', '#17113a', '#0d0a24', '#8298ff', '#e47bff'], gradient: 'linear-gradient(135deg,#25115a 0%,#112b58 52%,#09071a 100%)' },
+  { id: 'arctic', name: 'Ártico noturno', detail: 'Gradiente · azul-marinho e ciano', colors: ['#06131d', '#0a2635', '#071c29', '#58e5ff', '#8aa8ff'], gradient: 'linear-gradient(135deg,#0b3b50 0%,#112949 50%,#06131d 100%)' },
+  { id: 'eclipse', name: 'Eclipse', detail: 'Gradiente · preto e ouro', colors: ['#0d0c0a', '#201b0d', '#15120a', '#f1c75b', '#ff8a4c'], gradient: 'linear-gradient(135deg,#3a2d0c 0%,#1d190e 45%,#080808 100%)' },
+  { id: 'matrix', name: 'Matrix', detail: 'Gradiente · verde digital e grafite', colors: ['#050f0a', '#0b2417', '#07180f', '#4bf58a', '#b7ff49'], gradient: 'linear-gradient(135deg,#123c24 0%,#0a2317 48%,#050b08 100%)' },
+  { id: 'noir', name: 'Rosa noir', detail: 'Gradiente · rosa e carvão', colors: ['#150912', '#2a1022', '#1b0b18', '#ff73b8', '#9e7dff'], gradient: 'linear-gradient(135deg,#4b1737 0%,#281126 50%,#100911 100%)' },
+  { id: 'inferno', name: 'Inferno', detail: 'Gradiente · vermelho e laranja', colors: ['#180706', '#32100c', '#210a08', '#ff6048', '#ffad43'], gradient: 'linear-gradient(135deg,#5a150d 0%,#35100a 48%,#150504 100%)' },
+  { id: 'abyss', name: 'Abismo', detail: 'Gradiente · petróleo e turquesa', colors: ['#031317', '#082b33', '#051e25', '#45e0d0', '#6da9ff'], gradient: 'linear-gradient(135deg,#0a4650 0%,#082a35 48%,#031217 100%)' },
+  { id: 'galaxy', name: 'Galáxia', detail: 'Gradiente · índigo e magenta', colors: ['#0c071d', '#1c103d', '#120a29', '#9c7dff', '#ff69c6'], gradient: 'linear-gradient(135deg,#40206f 0%,#21154d 48%,#0b071c 100%)' },
+  { id: 'copper', name: 'Cobre', detail: 'Gradiente · marrom e cobre', colors: ['#150d08', '#2b1a10', '#1e120b', '#e39a55', '#64d0c2'], gradient: 'linear-gradient(135deg,#55301b 0%,#2d1c13 50%,#130c08 100%)' },
+  { id: 'toxic', name: 'Tóxico', detail: 'Gradiente · lima e violeta', colors: ['#0d1207', '#202a0e', '#151c0a', '#b8ff48', '#a46cff'], gradient: 'linear-gradient(135deg,#354b12 0%,#202813 50%,#0b0f06 100%)' },
+  { id: 'borealis', name: 'Boreal', detail: 'Gradiente · esmeralda, ciano e violeta', colors: ['#04130f', '#092a20', '#071c17', '#55f2bd', '#9d7cff'], gradient: 'linear-gradient(135deg,#0d4937 0%,#12384a 48%,#160f38 100%)' },
+  { id: 'sapphire', name: 'Safira profunda', detail: 'Gradiente · azul profundo e ciano', colors: ['#050b1c', '#0b1d45', '#08132f', '#59a5ff', '#54e0ff'], gradient: 'linear-gradient(135deg,#123a7a 0%,#101f52 50%,#050a1b 100%)' },
+  { id: 'plum', name: 'Ameixa noturna', detail: 'Gradiente · vinho e rosa', colors: ['#170716', '#35102d', '#260b22', '#ff79c6', '#ff9b62'], gradient: 'linear-gradient(135deg,#5b163f 0%,#38112f 49%,#150714 100%)' },
+  { id: 'storm', name: 'Tempestade', detail: 'Gradiente · grafite e azul elétrico', colors: ['#090d16', '#1b2638', '#111927', '#82a7ff', '#6ee7d8'], gradient: 'linear-gradient(135deg,#30405f 0%,#1c2840 46%,#090d16 100%)' },
+  { id: 'dawn', name: 'Alvorada', detail: 'Gradiente · pêssego e violeta', light: true, colors: ['#ead0d0', '#f8e5dc', '#e2c1cb', '#a6467a', '#d7783f'], gradient: 'linear-gradient(135deg,#f5c7ad 0%,#ead1df 50%,#d8caec 100%)' },
+  { id: 'glacier', name: 'Geleira', detail: 'Gradiente · azul gelo e ciano', light: true, colors: ['#c8e2eb', '#def2f5', '#bad8e4', '#176f8d', '#5476bd'], gradient: 'linear-gradient(135deg,#bfe8f1 0%,#dff4f5 48%,#cbdcf1 100%)' },
+  { id: 'lavender', name: 'Céu lavanda', detail: 'Gradiente · lavanda e rosa', light: true, colors: ['#ddd2ed', '#f0e7f6', '#d1c2e2', '#6f4ba5', '#b84e82'], gradient: 'linear-gradient(135deg,#d7c9f0 0%,#eee4f5 50%,#f1d7e5 100%)' },
+  { id: 'mint', name: 'Brisa menta', detail: 'Gradiente · menta e azul', light: true, colors: ['#cae5da', '#e4f4ed', '#bcdaca', '#26725e', '#4d72a8'], gradient: 'linear-gradient(135deg,#bfe6d1 0%,#e2f3e8 50%,#d3e5f0 100%)' },
+  { id: 'solar', name: 'Solar', detail: 'Gradiente · creme e laranja', light: true, colors: ['#eadab7', '#fbefd2', '#dfcba4', '#9a531e', '#bb3f52'], gradient: 'linear-gradient(135deg,#f5d89c 0%,#fbefd0 50%,#efd4bf 100%)' }
 ];
 const themeSelect = document.querySelector('#theme-select');
 const themeLabel = themeSelect?.closest('label');
@@ -2935,12 +3137,23 @@ if (themeLabel && !document.querySelector('#theme-samples')) {
   const samples = document.createElement('section');
   samples.id = 'theme-samples';
   samples.setAttribute('aria-label', 'Temas');
-  samples.innerHTML = `<div class="theme-samples-heading"><strong>Temas</strong><small>Clique em um tema para aplicar.</small></div><div class="theme-samples-grid">${themeCatalog.map(({ id, name, detail, light, colors }) => `
-    <button class="theme-sample-card${light ? ' light' : ''}" type="button" data-theme-sample="${id}" aria-label="Selecionar tema ${name}" style="--sample-base:${colors[0]};--sample-content:${colors[1]};--sample-side:${colors[2]};--sample-focus:${colors[3]};--sample-coral:${colors[4]}">
+  const themeCards = (items) => items.map(({ id, name, detail, light, colors, gradient }) => `
+    <button class="theme-sample-card${light ? ' light' : ''}${gradient ? ' gradient' : ''}" type="button" data-theme-sample="${id}" aria-label="Selecionar tema ${name}" style="--sample-base:${colors[0]};--sample-content:${gradient || colors[1]};--sample-side:${colors[2]};--sample-focus:${colors[3]};--sample-coral:${colors[4]}">
       <span class="theme-sample-window" aria-hidden="true"><i></i><b><em></em><em></em></b><u></u></span>
       <span class="theme-sample-copy"><strong>${name}</strong><small>${detail}</small></span>
       <span class="theme-sample-check" aria-hidden="true">✓</span>
-    </button>`).join('')}</div>`;
+    </button>`).join('');
+  const solidThemes = themeCatalog.filter((item) => !item.gradient);
+  const gradientThemes = themeCatalog.filter((item) => item.gradient);
+  samples.innerHTML = `<div class="theme-samples-heading"><strong>Temas</strong><small>Clique em um tema para aplicar.</small></div>
+    <section class="theme-samples-group" data-theme-category="solid" aria-labelledby="theme-solid-heading">
+      <div class="theme-samples-category-heading"><strong id="theme-solid-heading">Cores sólidas</strong><small>Clássicas, foscas e claras</small></div>
+      <div class="theme-samples-grid">${themeCards(solidThemes)}</div>
+    </section>
+    <section class="theme-samples-group" data-theme-category="gradient" aria-labelledby="theme-gradient-heading">
+      <div class="theme-samples-category-heading"><strong id="theme-gradient-heading">Gradientes</strong><small>Escuros e claros</small></div>
+      <div class="theme-samples-grid">${themeCards(gradientThemes)}</div>
+    </section>`;
   themeLabel.insertAdjacentElement('afterend', samples);
   // The cards are the visible selector. Keep the native select as an internal
   // value holder so saving and legacy settings code remain compatible.
@@ -3305,6 +3518,29 @@ body.theme-peach{--ink:#422a31;--muted:#785f67;--night:#e4c8be;--night2:#eed9d1;
 body.theme-mist{--ink:#233348;--muted:#5d6e82;--night:#c8d1dc;--night2:#d9e0e8;--line:#a4b1c0;--cyan:#426e9d;--coral:#aa6077;--focus:#426e9d;--focus-contrast:#fff;--beta-button-ink:#fff}body.theme-mist .sidebar{background:#bbc6d2!important}body.theme-mist #right-panel{background:#c5cfda!important}body.theme-mist .content{background:radial-gradient(circle at 52% 32%,#c2d2e2 0,#d9e0e8 54%,#c8d1dc 100%)!important}
 body.theme-lagoon{--ink:#183b3a;--muted:#567571;--night:#bcd8d5;--night2:#d1e5e1;--line:#91bab5;--cyan:#1d776f;--coral:#b25f79;--focus:#1d776f;--focus-contrast:#fff;--beta-button-ink:#fff}body.theme-lagoon .sidebar{background:#acd0cb!important}body.theme-lagoon #right-panel{background:#b6d5d1!important}body.theme-lagoon .content{background:radial-gradient(circle at 52% 32%,#b4dad5 0,#d1e5e1 54%,#bcd8d5 100%)!important}
 body.theme-sunset{--ink:#402635;--muted:#765b69;--night:#dfc7cf;--night2:#ead8dc;--line:#c5a5b1;--cyan:#9b4d78;--coral:#b77035;--focus:#9b4d78;--focus-contrast:#fff;--beta-button-ink:#fff}body.theme-sunset .sidebar{background:#d4b8c2!important}body.theme-sunset #right-panel{background:#dbc2ca!important}body.theme-sunset .content{background:radial-gradient(circle at 52% 32%,#e4c2cd 0,#ead8dc 54%,#dfc7cf 100%)!important}
+body.theme-nebula{--ink:#f3efff;--muted:#afa5d2;--night:#09071a;--night2:#17113a;--line:#40356f;--cyan:#8298ff;--coral:#e47bff;--focus:#8298ff;--focus-contrast:#0b1025;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 18% 18%,rgba(228,123,255,.2),transparent 31%),linear-gradient(135deg,#25115a 0%,#112b58 52%,#09071a 100%);--theme-sidebar-gradient:linear-gradient(180deg,#160b35 0%,#0d1531 55%,#080718 100%);--theme-panel-gradient:linear-gradient(180deg,#101432 0%,#0b0a21 100%)}
+body.theme-arctic{--ink:#ecfbff;--muted:#93b6c6;--night:#06131d;--night2:#0a2635;--line:#24556a;--cyan:#58e5ff;--coral:#8aa8ff;--focus:#58e5ff;--focus-contrast:#041b22;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 78% 16%,rgba(88,229,255,.2),transparent 30%),linear-gradient(135deg,#0b3b50 0%,#112949 50%,#06131d 100%);--theme-sidebar-gradient:linear-gradient(180deg,#092c3d 0%,#081e31 58%,#06131d 100%);--theme-panel-gradient:linear-gradient(180deg,#0a2b3b 0%,#071822 100%)}
+body.theme-eclipse{--ink:#fff8e5;--muted:#b9a978;--night:#0d0c0a;--night2:#201b0d;--line:#5b4c22;--cyan:#f1c75b;--coral:#ff8a4c;--focus:#f1c75b;--focus-contrast:#241903;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 72% 22%,rgba(241,199,91,.18),transparent 27%),linear-gradient(135deg,#3a2d0c 0%,#1d190e 45%,#080808 100%);--theme-sidebar-gradient:linear-gradient(180deg,#211b0c 0%,#11100b 65%,#080808 100%);--theme-panel-gradient:linear-gradient(180deg,#1d180c 0%,#0c0b09 100%)}
+body.theme-matrix{--ink:#edfff4;--muted:#8fbba0;--night:#050f0a;--night2:#0b2417;--line:#24583b;--cyan:#4bf58a;--coral:#b7ff49;--focus:#4bf58a;--focus-contrast:#062012;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 22% 16%,rgba(183,255,73,.14),transparent 28%),linear-gradient(135deg,#123c24 0%,#0a2317 48%,#050b08 100%);--theme-sidebar-gradient:linear-gradient(180deg,#0d2b1a 0%,#07170f 62%,#040b07 100%);--theme-panel-gradient:linear-gradient(180deg,#0c2518 0%,#06110b 100%)}
+body.theme-noir{--ink:#fff0f8;--muted:#c09aaf;--night:#150912;--night2:#2a1022;--line:#61304e;--cyan:#ff73b8;--coral:#9e7dff;--focus:#ff73b8;--focus-contrast:#2a071a;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 80% 20%,rgba(158,125,255,.2),transparent 31%),linear-gradient(135deg,#4b1737 0%,#281126 50%,#100911 100%);--theme-sidebar-gradient:linear-gradient(180deg,#321126 0%,#1c0c19 60%,#110910 100%);--theme-panel-gradient:linear-gradient(180deg,#2b1021 0%,#140a12 100%)}
+body.theme-inferno{--ink:#fff0eb;--muted:#c19a90;--night:#180706;--night2:#32100c;--line:#6b3024;--cyan:#ff6048;--coral:#ffad43;--focus:#ff6048;--focus-contrast:#2b0703;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 70% 20%,rgba(255,173,67,.2),transparent 28%),linear-gradient(135deg,#5a150d 0%,#35100a 48%,#150504 100%);--theme-sidebar-gradient:linear-gradient(180deg,#3a0e09 0%,#220907 60%,#130504 100%);--theme-panel-gradient:linear-gradient(180deg,#32100a 0%,#170605 100%)}
+body.theme-abyss{--ink:#ebffff;--muted:#8eb7ba;--night:#031317;--night2:#082b33;--line:#205961;--cyan:#45e0d0;--coral:#6da9ff;--focus:#45e0d0;--focus-contrast:#052522;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 74% 18%,rgba(109,169,255,.18),transparent 30%),linear-gradient(135deg,#0a4650 0%,#082a35 48%,#031217 100%);--theme-sidebar-gradient:linear-gradient(180deg,#07333b 0%,#051e26 60%,#031216 100%);--theme-panel-gradient:linear-gradient(180deg,#082d34 0%,#04171c 100%)}
+body.theme-galaxy{--ink:#f7efff;--muted:#b0a0cf;--night:#0c071d;--night2:#1c103d;--line:#49386f;--cyan:#9c7dff;--coral:#ff69c6;--focus:#9c7dff;--focus-contrast:#160a30;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 24% 18%,rgba(255,105,198,.2),transparent 30%),linear-gradient(135deg,#40206f 0%,#21154d 48%,#0b071c 100%);--theme-sidebar-gradient:linear-gradient(180deg,#29134d 0%,#160d32 60%,#0a071a 100%);--theme-panel-gradient:linear-gradient(180deg,#241143 0%,#0f081f 100%)}
+body.theme-copper{--ink:#fff3e8;--muted:#bd9e88;--night:#150d08;--night2:#2b1a10;--line:#62432f;--cyan:#e39a55;--coral:#64d0c2;--focus:#e39a55;--focus-contrast:#2a1305;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 76% 20%,rgba(100,208,194,.14),transparent 29%),linear-gradient(135deg,#55301b 0%,#2d1c13 50%,#130c08 100%);--theme-sidebar-gradient:linear-gradient(180deg,#342012 0%,#1d130c 62%,#120b07 100%);--theme-panel-gradient:linear-gradient(180deg,#2d1b11 0%,#160e09 100%)}
+body.theme-toxic{--ink:#f5ffe9;--muted:#a9bd82;--night:#0d1207;--night2:#202a0e;--line:#4a5f25;--cyan:#b8ff48;--coral:#a46cff;--focus:#b8ff48;--focus-contrast:#182304;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 78% 18%,rgba(164,108,255,.18),transparent 30%),linear-gradient(135deg,#354b12 0%,#202813 50%,#0b0f06 100%);--theme-sidebar-gradient:linear-gradient(180deg,#26340f 0%,#171e0b 60%,#0a0e06 100%);--theme-panel-gradient:linear-gradient(180deg,#202b0e 0%,#0d1207 100%)}
+body.theme-borealis{--ink:#effff8;--muted:#95bcae;--night:#04130f;--night2:#092a20;--line:#255c4b;--cyan:#55f2bd;--coral:#9d7cff;--focus:#55f2bd;--focus-contrast:#04251a;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 18% 18%,rgba(85,242,189,.19),transparent 30%),radial-gradient(circle at 80% 22%,rgba(157,124,255,.18),transparent 32%),linear-gradient(135deg,#0d4937 0%,#12384a 48%,#160f38 100%);--theme-sidebar-gradient:linear-gradient(180deg,#0b3529 0%,#102735 58%,#100b2a 100%);--theme-panel-gradient:linear-gradient(180deg,#0d302a 0%,#10152b 100%)}
+body.theme-sapphire{--ink:#eef5ff;--muted:#93abd0;--night:#050b1c;--night2:#0b1d45;--line:#244e85;--cyan:#59a5ff;--coral:#54e0ff;--focus:#59a5ff;--focus-contrast:#061a36;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 76% 16%,rgba(84,224,255,.19),transparent 30%),linear-gradient(135deg,#123a7a 0%,#101f52 50%,#050a1b 100%);--theme-sidebar-gradient:linear-gradient(180deg,#0d2b61 0%,#0b193d 60%,#050a1b 100%);--theme-panel-gradient:linear-gradient(180deg,#0c2757 0%,#071127 100%)}
+body.theme-plum{--ink:#fff1fb;--muted:#c09aae;--night:#170716;--night2:#35102d;--line:#71305d;--cyan:#ff79c6;--coral:#ff9b62;--focus:#ff79c6;--focus-contrast:#350821;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 78% 18%,rgba(255,155,98,.17),transparent 29%),linear-gradient(135deg,#5b163f 0%,#38112f 49%,#150714 100%);--theme-sidebar-gradient:linear-gradient(180deg,#40102f 0%,#280b23 60%,#140613 100%);--theme-panel-gradient:linear-gradient(180deg,#37102d 0%,#1a0817 100%)}
+body.theme-storm{--ink:#f1f5ff;--muted:#9da9c0;--night:#090d16;--night2:#1b2638;--line:#40506a;--cyan:#82a7ff;--coral:#6ee7d8;--focus:#82a7ff;--focus-contrast:#101a30;--beta-button-ink:var(--focus-contrast);--theme-main-gradient:radial-gradient(circle at 22% 16%,rgba(110,231,216,.14),transparent 29%),linear-gradient(135deg,#30405f 0%,#1c2840 46%,#090d16 100%);--theme-sidebar-gradient:linear-gradient(180deg,#232f49 0%,#151e30 60%,#080c15 100%);--theme-panel-gradient:linear-gradient(180deg,#202c42 0%,#0d1320 100%)}
+body.theme-dawn{--ink:#422438;--muted:#775a68;--night:#ead0d0;--night2:#f8e5dc;--line:#c99eac;--cyan:#a6467a;--coral:#d7783f;--focus:#a6467a;--focus-contrast:#fff;--beta-button-ink:#fff;--theme-main-gradient:radial-gradient(circle at 76% 18%,rgba(166,70,122,.13),transparent 30%),linear-gradient(135deg,#f5c7ad 0%,#ead1df 50%,#d8caec 100%);--theme-sidebar-gradient:linear-gradient(180deg,#e8c1c8 0%,#e2cddc 58%,#d4c7e2 100%);--theme-panel-gradient:linear-gradient(180deg,#edd1d5 0%,#dfcbe3 100%)}
+body.theme-glacier{--ink:#183343;--muted:#567381;--night:#c8e2eb;--night2:#def2f5;--line:#97becd;--cyan:#176f8d;--coral:#5476bd;--focus:#176f8d;--focus-contrast:#fff;--beta-button-ink:#fff;--theme-main-gradient:radial-gradient(circle at 22% 18%,rgba(23,111,141,.12),transparent 30%),linear-gradient(135deg,#bfe8f1 0%,#dff4f5 48%,#cbdcf1 100%);--theme-sidebar-gradient:linear-gradient(180deg,#b7dce8 0%,#c5e4e9 55%,#bfd3e8 100%);--theme-panel-gradient:linear-gradient(180deg,#c4e5eb 0%,#c4d8ea 100%)}
+body.theme-lavender{--ink:#352345;--muted:#6e5d7b;--night:#ddd2ed;--night2:#f0e7f6;--line:#bba8ce;--cyan:#6f4ba5;--coral:#b84e82;--focus:#6f4ba5;--focus-contrast:#fff;--beta-button-ink:#fff;--theme-main-gradient:radial-gradient(circle at 78% 18%,rgba(184,78,130,.12),transparent 30%),linear-gradient(135deg,#d7c9f0 0%,#eee4f5 50%,#f1d7e5 100%);--theme-sidebar-gradient:linear-gradient(180deg,#cec0e4 0%,#ded1e9 55%,#e5cbdc 100%);--theme-panel-gradient:linear-gradient(180deg,#dccce9 0%,#e8cfdd 100%)}
+body.theme-mint{--ink:#203a35;--muted:#5c746d;--night:#cae5da;--night2:#e4f4ed;--line:#9dc5b5;--cyan:#26725e;--coral:#4d72a8;--focus:#26725e;--focus-contrast:#fff;--beta-button-ink:#fff;--theme-main-gradient:radial-gradient(circle at 76% 18%,rgba(77,114,168,.12),transparent 30%),linear-gradient(135deg,#bfe6d1 0%,#e2f3e8 50%,#d3e5f0 100%);--theme-sidebar-gradient:linear-gradient(180deg,#b6dbc9 0%,#cbe6d9 55%,#c8dce9 100%);--theme-panel-gradient:linear-gradient(180deg,#c8e6d7 0%,#cbdfea 100%)}
+body.theme-solar{--ink:#432d1b;--muted:#796750;--night:#eadab7;--night2:#fbefd2;--line:#c9ad78;--cyan:#9a531e;--coral:#bb3f52;--focus:#9a531e;--focus-contrast:#fff;--beta-button-ink:#fff;--theme-main-gradient:radial-gradient(circle at 78% 16%,rgba(187,63,82,.11),transparent 29%),linear-gradient(135deg,#f5d89c 0%,#fbefd0 50%,#efd4bf 100%);--theme-sidebar-gradient:linear-gradient(180deg,#ead09b 0%,#f0dfb9 55%,#e5c7b2 100%);--theme-panel-gradient:linear-gradient(180deg,#f0ddb2 0%,#e8cdbc 100%)}
+body:is(.theme-nebula,.theme-arctic,.theme-eclipse,.theme-matrix,.theme-noir,.theme-inferno,.theme-abyss,.theme-galaxy,.theme-copper,.theme-toxic,.theme-borealis,.theme-sapphire,.theme-plum,.theme-storm,.theme-dawn,.theme-glacier,.theme-lavender,.theme-mint,.theme-solar) .welcome,body:is(.theme-nebula,.theme-arctic,.theme-eclipse,.theme-matrix,.theme-noir,.theme-inferno,.theme-abyss,.theme-galaxy,.theme-copper,.theme-toxic,.theme-borealis,.theme-sapphire,.theme-plum,.theme-storm,.theme-dawn,.theme-glacier,.theme-lavender,.theme-mint,.theme-solar) .content{background:var(--theme-main-gradient)!important}
+body:is(.theme-nebula,.theme-arctic,.theme-eclipse,.theme-matrix,.theme-noir,.theme-inferno,.theme-abyss,.theme-galaxy,.theme-copper,.theme-toxic,.theme-borealis,.theme-sapphire,.theme-plum,.theme-storm,.theme-dawn,.theme-glacier,.theme-lavender,.theme-mint,.theme-solar) .sidebar{background:var(--theme-sidebar-gradient)!important}
+body:is(.theme-nebula,.theme-arctic,.theme-eclipse,.theme-matrix,.theme-noir,.theme-inferno,.theme-abyss,.theme-galaxy,.theme-copper,.theme-toxic,.theme-borealis,.theme-sapphire,.theme-plum,.theme-storm,.theme-dawn,.theme-glacier,.theme-lavender,.theme-mint,.theme-solar) #right-panel{background:var(--theme-panel-gradient)!important}
+body:is(.theme-dawn,.theme-glacier,.theme-lavender,.theme-mint,.theme-solar){--panel:color-mix(in srgb,var(--night) 88%,var(--night2));--surface:color-mix(in srgb,var(--night2) 82%,#fff 8%);--surface-2:color-mix(in srgb,var(--night) 72%,var(--night2))}body:is(.theme-dawn,.theme-glacier,.theme-lavender,.theme-mint,.theme-solar) .video-frame{background:#26313f!important}
 body.theme-snow,body.theme-lilac,body.theme-sage,body.theme-peach,body.theme-mist,body.theme-lagoon,body.theme-sunset{--panel:color-mix(in srgb,var(--night) 88%,var(--night2));--surface:color-mix(in srgb,var(--night2) 82%,#fff 8%);--surface-2:color-mix(in srgb,var(--night) 72%,var(--night2))}body.theme-snow .video-frame,body.theme-lilac .video-frame,body.theme-sage .video-frame,body.theme-peach .video-frame,body.theme-mist .video-frame,body.theme-lagoon .video-frame,body.theme-sunset .video-frame{background:#26313f!important}
 #settings-tabs{flex-wrap:wrap}.appearance-options{display:grid;gap:12px;padding:14px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--surface) 76%,transparent)}.appearance-options-heading{display:grid;gap:3px}.appearance-options-heading small{color:var(--muted);font-size:11px}.appearance-options-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.appearance-options-grid label{display:grid;gap:6px;font-size:12px}.appearance-effects{display:flex!important;align-items:center;gap:8px!important;font-weight:600}.appearance-effects input{width:auto!important}.settings-panel[data-settings-panel="appearance"]>#theme-samples{order:2}.settings-panel[data-settings-panel="appearance"]>#appearance-options{order:3}
 body[data-interface-density="compact"] .room-channel{padding-block:6px!important}body[data-interface-density="compact"] .participant,body[data-interface-density="compact"] .members-clone .participant{padding-block:6px}body[data-interface-density="compact"] .messages{gap:3px!important;padding-block:9px!important}body[data-interface-density="compact"] .message{padding-block:5px!important}body[data-interface-density="compact"] .self-card{padding-block:10px 7px}

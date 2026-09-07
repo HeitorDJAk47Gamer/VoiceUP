@@ -55,10 +55,10 @@ app.whenReady().then(async () => {
     currentMode = 'hosted'; activeVoiceChannel = 'Geral'; myName = 'Ana'; myAvatar = ''; myColor = '#4fd6c7';
     hostedSocket = { id: 'multi-self', connected: true, on() {}, emit() {} };
     serverMembers.clear(); hostedPeers.clear();
-    serverMembers.set('multi-self', { id: 'multi-self', name: 'Ana', color: '#4fd6c7', avatar: '', status: 'online', voiceChannel: 'Geral' });
+    serverMembers.set('multi-self', { id: 'multi-self', name: 'Ana', color: '#4fd6c7', avatar: '', status: 'online', platform: 'windows', voiceChannel: 'Geral' });
     const peers = [
-      { id: 'live-bruno', name: 'Bruno', color: '#f08a75' },
-      { id: 'live-carla', name: 'Carla', color: '#8f75ef' }
+      { id: 'live-bruno', name: 'Bruno', color: '#f08a75', platform: 'linux' },
+      { id: 'live-carla', name: 'Carla', color: '#8f75ef', platform: 'android' }
     ];
     for (const item of peers) {
       const participant = { ...item, avatar: '', connected: true, left: false, speaking: false, pc: { connectionState: 'connected' }, videoExpectedKinds: { camera: false, screen: true }, mediaViewKinds: { camera: true, screen: true }, videoStreams: {}, liveVolume: 100, volume: 100 };
@@ -76,21 +76,62 @@ app.whenReady().then(async () => {
   const participantGrid = await evaluate(`(() => {
     const list = document.querySelector('#call-members');
     const cards = [...list.querySelectorAll('.call-member')];
+    const visual = cards[0]?.querySelector('.call-member-visual');
+    const avatar = visual?.querySelector('.avatar')?.getBoundingClientRect();
+    const badgeElement = visual?.querySelector('.platform-presence');
+    const badge = badgeElement?.getBoundingClientRect();
     return {
       count: cards.length,
       gridSize: list.dataset.gridSize,
       memberCount: list.dataset.memberCount,
       captions: cards.map((card) => card.querySelector('.call-member-caption strong')?.textContent || ''),
-      rectangular: cards.every((card) => { const box = card.getBoundingClientRect(); return box.width > box.height && box.height >= 150; })
+      tileSize: Math.round(cards[0]?.getBoundingClientRect().width || 0),
+      square: cards.every((card) => { const box = card.getBoundingClientRect(); return Math.abs(box.width - box.height) <= 2 && box.height >= 150; }),
+      platformBadge: { wrapperWidth: visual?.getBoundingClientRect().width || 0, avatarWidth: avatar?.width || 0, rightGap: (badge?.right || 0) - (avatar?.right || 0), bottomGap: (badge?.bottom || 0) - (avatar?.bottom || 0), padding: parseFloat(getComputedStyle(badgeElement).paddingLeft) }
     };
   })()`);
   assert.deepEqual(participantGrid.captions, ['Ana (você)', 'Bruno', 'Carla']);
   assert.equal(participantGrid.count, 3);
   assert.equal(participantGrid.gridSize, 'balanced');
   assert.equal(participantGrid.memberCount, '3');
-  assert.ok(participantGrid.rectangular, `Participant cards must be rectangular: ${JSON.stringify(participantGrid)}`);
-  await evaluate(`document.querySelector('#release-notes-modal')?.classList.add('hidden');`);
-  fs.writeFileSync(path.join(__dirname, 'call-grid-beta15.png'), (await window.webContents.capturePage()).toPNG());
+  assert.ok(participantGrid.square, `Participant cards must remain square: ${JSON.stringify(participantGrid)}`);
+  assert.ok(Math.abs(participantGrid.platformBadge.wrapperWidth - participantGrid.platformBadge.avatarWidth) <= 1, `Badge anchor must match the avatar: ${JSON.stringify(participantGrid.platformBadge)}`);
+  assert.ok(participantGrid.platformBadge.rightGap >= 1 && participantGrid.platformBadge.rightGap <= 3 && participantGrid.platformBadge.bottomGap >= 1 && participantGrid.platformBadge.bottomGap <= 3, `Platform badge must stay on the avatar corner: ${JSON.stringify(participantGrid.platformBadge)}`);
+  assert.equal(participantGrid.platformBadge.padding, 1, 'The platform badge must use only 1 px around its icon.');
+  await evaluate(`
+    for (const item of [
+      { id: 'extra-davi', name: 'Davi', color: '#d89052' },
+      { id: 'extra-elisa', name: 'Elisa', color: '#62a3e8' },
+      { id: 'extra-fabio', name: 'Fábio', color: '#7ebf74' },
+      { id: 'extra-gabi', name: 'Gabi', color: '#df718e' },
+      { id: 'extra-hugo', name: 'Hugo', color: '#a775dc' },
+      { id: 'extra-iris', name: 'Íris', color: '#65b4a4' }
+    ]) {
+      hostedPeers.set(item.id, { ...item, avatar: '', connected: true, left: false, speaking: false, videoExpectedKinds: {}, mediaViewKinds: { camera: true, screen: false } });
+      serverMembers.set(item.id, { ...item, avatar: '', status: 'online', voiceChannel: 'Geral' });
+    }
+    renderCentralCallMembers();
+  `);
+  await pause(120);
+  const expandedGrid = await evaluate(`(() => {
+    const cards = [...document.querySelectorAll('#call-members .call-member')];
+    return {
+      count: cards.length,
+      tileSize: Math.round(cards[0]?.getBoundingClientRect().width || 0),
+      square: cards.every((card) => { const box = card.getBoundingClientRect(); return Math.abs(box.width - box.height) <= 2; })
+    };
+  })()`);
+  assert.equal(expandedGrid.count, 9);
+  assert.equal(expandedGrid.square, true);
+  assert.ok(expandedGrid.tileSize < participantGrid.tileSize, `More participants must reduce square size: ${JSON.stringify({ participantGrid, expandedGrid })}`);
+  await evaluate(`
+    for (const id of ['extra-davi', 'extra-elisa', 'extra-fabio', 'extra-gabi', 'extra-hugo', 'extra-iris']) { hostedPeers.delete(id); serverMembers.delete(id); }
+    renderCentralCallMembers();
+  `);
+  await pause(120);
+  await evaluate(`document.querySelector('#release-notes-close')?.click(); document.querySelector('#release-notes-modal')?.classList.add('hidden');`);
+  await pause(100);
+  fs.writeFileSync(path.join(__dirname, 'call-grid-beta5.png'), (await window.webContents.capturePage()).toPNG());
 
   await evaluate(`
     const makeStream = (color) => {
@@ -119,6 +160,28 @@ app.whenReady().then(async () => {
   assert.equal(liveGrid.fullscreenButtons, 2);
   assert.ok(liveGrid.labels.every((label) => label.includes('Tela compartilhada')));
   assert.ok(liveGrid.sideBySide, `Two lives must share the stage: ${JSON.stringify(liveGrid)}`);
+  const liveParticipantTray = await evaluate(`(() => {
+    const tray = document.querySelector('#call-participant-tray');
+    const list = document.querySelector('#call-members');
+    const cards = [...list.querySelectorAll('.call-member')];
+    return {
+      visible: !tray.hidden,
+      parent: list.parentElement?.id || '',
+      count: document.querySelector('#call-participant-tray-count')?.textContent || '',
+      expanded: document.querySelector('#call-participant-tray-toggle')?.getAttribute('aria-expanded'),
+      square: cards.every((card) => { const box = card.getBoundingClientRect(); return Math.abs(box.width - box.height) <= 2; }),
+      badgeCorners: cards.every((card) => { const visual = card.querySelector('.call-member-visual'); const avatar = visual.querySelector('.avatar').getBoundingClientRect(); const badge = visual.querySelector('.platform-presence').getBoundingClientRect(); return badge.right > avatar.right && badge.bottom > avatar.bottom && parseFloat(getComputedStyle(visual.querySelector('.platform-presence')).paddingLeft) === 1; })
+    };
+  })()`);
+  assert.deepEqual(liveParticipantTray, { visible: true, parent: 'call-participant-tray-viewport', count: '3', expanded: 'true', square: true, badgeCorners: true });
+  await evaluate(`document.querySelector('#call-participant-tray-toggle').click()`);
+  const collapsedTray = await evaluate(`(() => ({
+    collapsed: document.querySelector('#call-participant-tray').classList.contains('collapsed'),
+    expanded: document.querySelector('#call-participant-tray-toggle').getAttribute('aria-expanded'),
+    viewportDisplay: getComputedStyle(document.querySelector('#call-participant-tray-viewport')).display
+  }))()`);
+  assert.deepEqual(collapsedTray, { collapsed: true, expanded: 'false', viewportDisplay: 'none' });
+  await evaluate(`document.querySelector('#call-participant-tray-toggle').click()`);
   await evaluate(`document.querySelector('#release-notes-modal')?.classList.add('hidden');`);
   fs.writeFileSync(path.join(__dirname, 'multi-live-grid-beta15.png'), (await window.webContents.capturePage()).toPNG());
 
@@ -131,7 +194,8 @@ app.whenReady().then(async () => {
       single: document.body.classList.contains('video-theater-single'),
       focused: document.querySelector('#video-gallery .theater-focused')?.dataset.mediaOwner || '',
       displays: tiles.map((tile) => getComputedStyle(tile).display),
-      stopLabel: document.querySelector('.theater-stop-share span')?.textContent || ''
+      stopLabel: document.querySelector('.theater-stop-share span')?.textContent || '',
+      participantTray: !document.querySelector('#call-participant-tray').hidden && getComputedStyle(document.querySelector('#call-participant-tray')).position === 'fixed'
     };
   })()`);
   assert.equal(focused.theater, true);
@@ -139,6 +203,7 @@ app.whenReady().then(async () => {
   assert.equal(focused.focused, 'live-carla');
   assert.deepEqual(focused.displays, ['none', 'flex']);
   assert.equal(focused.stopLabel, 'Sair da live');
+  assert.equal(focused.participantTray, true);
 
   await evaluate(`document.querySelector('.theater-exit').click();`);
   await pause(250);
@@ -150,7 +215,7 @@ app.whenReady().then(async () => {
   }))()`);
   assert.deepEqual(restored, { theater: false, single: false, focused: 0, visible: 2 });
   assert.deepEqual(rendererErrors, [], 'The Client must render the multi-live grid without uncaught errors.');
-  console.log('PASS multi-live UI: participant cards, two simultaneous lives, individual fullscreen and exact grid restoration.');
+  console.log('PASS multi-live UI: adaptive square participants, collapsible live tray, two simultaneous lives and individual fullscreen.');
 }).catch((error) => {
   console.error(error);
   process.exitCode = 1;

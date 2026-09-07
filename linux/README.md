@@ -1,27 +1,27 @@
-# VoiceUP 1.2.0 para Linux
+# VoiceUP 1.2.1 para Linux
 
 Cliente e ServerHost usam a mesma base do Desktop e têm pacotes separados para
 Linux x64. O Electron está incluído; não é necessário instalar Node.js.
 
 ## Pacotes
 
-- `VoiceUP-1.2.0-linux-x64.AppImage`: Cliente portátil.
-- `VoiceUP-1.2.0-linux-x64.deb`: Cliente para Debian/Ubuntu e derivados.
-- `VoiceUPServer-1.2.0-linux-x64.AppImage`: ServerHost portátil.
-- `VoiceUPServer-1.2.0-linux-x64.deb`: ServerHost para Debian/Ubuntu e derivados.
+- `VoiceUP-1.2.1-linux-x64.AppImage`: Cliente portátil.
+- `VoiceUP-1.2.1-linux-x64.deb`: Cliente para Debian/Ubuntu e derivados.
+- `VoiceUPServer-1.2.1-linux-x64.AppImage`: ServerHost portátil.
+- `VoiceUPServer-1.2.1-linux-x64.deb`: ServerHost para Debian/Ubuntu e derivados.
 
-Use somente os arquivos da Release oficial `v1.2.0`. O site redireciona para
+Use somente os arquivos da Release oficial `v1.2.1`. O site redireciona para
 essa Release com base no catálogo assinado, sem duplicar os binários no Cloud.
 
 ```bash
-chmod +x VoiceUP-1.2.0-linux-x64.AppImage
-./VoiceUP-1.2.0-linux-x64.AppImage
+chmod +x VoiceUP-1.2.1-linux-x64.AppImage
+./VoiceUP-1.2.1-linux-x64.AppImage
 ```
 
 Sem suporte FUSE, tente `--appimage-extract-and-run`. Para instalar o DEB:
 
 ```bash
-sudo apt install ./VoiceUP-1.2.0-linux-x64.deb
+sudo apt install ./VoiceUP-1.2.1-linux-x64.deb
 ```
 
 Execute o aplicativo como usuário normal, sem `sudo` e sem `--no-sandbox`.

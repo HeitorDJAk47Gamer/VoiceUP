@@ -36,6 +36,29 @@ const { loadPlugins } = require('../plugin-runtime');
     fs.rmSync(externalDirectory, { recursive: true, force: true });
   }
 
+  const lengthDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceup-plugin-length-'));
+  try {
+    fs.writeFileSync(path.join(lengthDirectory, 'longo.js'), `module.exports = { id: 'longo', name: 'Longo', onTextMessage({ api }) { api.systemMessage('sala', 'geral', 'x'.repeat(15000)); } };`);
+    const longMessages = [];
+    let configuredLimit = 1200;
+    const lengthRuntime = loadPlugins({
+      directories: [lengthDirectory],
+      trustedPluginDirectories: [lengthDirectory],
+      maxSystemMessageLength: () => configuredLimit,
+      emitSystemMessage: (message) => longMessages.push(message)
+    });
+    await lengthRuntime.onTextMessage({ text: 'teste' });
+    assert.equal(longMessages.at(-1).text.length, 1200, 'O limite configurado do plugin não foi aplicado.');
+    configuredLimit = 900;
+    await lengthRuntime.onTextMessage({ text: 'teste dinâmico' });
+    assert.equal(longMessages.at(-1).text.length, 900, 'O limite do plugin não foi atualizado em execução.');
+    configuredLimit = 50000;
+    await lengthRuntime.onTextMessage({ text: 'teste teto' });
+    assert.equal(longMessages.at(-1).text.length, 10000, 'O teto seguro de mensagens dos plugins foi ultrapassado.');
+  } finally {
+    fs.rmSync(lengthDirectory, { recursive: true, force: true });
+  }
+
   const messages = [];
   const events = [];
   const runtime = loadPlugins({

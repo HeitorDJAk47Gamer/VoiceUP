@@ -6,7 +6,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const packageInfo = require('./package.json');
 const { loadPlugins } = require('./plugin-runtime');
-const { createPersistentChatStore, createBugReportStore } = require('./persistent-storage');
+const { createPersistentChatStore, createBugReportStore, createChatModerationStore } = require('./persistent-storage');
 const { createSiteRouter } = require('./site-assets');
 
 const port = Number(process.env.PORT || process.env.SERVER_PORT || 80);
@@ -72,6 +72,8 @@ const dataDirectory = path.resolve(process.env.VOICEUP_DATA_DIR || process.env.D
 const databaseFile = path.join(dataDirectory, 'voiceup.db');
 const chatStore = createPersistentChatStore({ filePath: databaseFile, legacyFilePath: path.join(dataDirectory, 'chat-history.json'), maxPerRoom: positiveInteger(process.env.VOICEUP_CHAT_MAX_PER_ROOM, 300), retentionDays: nonNegativeInteger(process.env.VOICEUP_CHAT_RETENTION_DAYS, 30) });
 const reportStore = createBugReportStore({ filePath: databaseFile, legacyFilePath: path.join(dataDirectory, 'bug-reports.json') });
+const moderationStore = createChatModerationStore({ filePath: databaseFile, cooldownSeconds: nonNegativeInteger(process.env.VOICEUP_CHAT_COOLDOWN_SECONDS, 0), pluginMessageMaxLength: positiveInteger(process.env.VOICEUP_PLUGIN_MESSAGE_MAX_LENGTH, 2000) });
+const chatPolicy = () => moderationStore.policy();
 const reportRateLimits = new Map();
 const roomPasswords = (() => { try { const value = JSON.parse(process.env.VOICEUP_ROOM_PASSWORDS || '{}'); return value && typeof value === 'object' ? value : {}; } catch { return {}; } })();
 // O cloud oficial usa a marca VoiceUP. Outros clouds podem apontar esta variável
@@ -148,6 +150,16 @@ const consumeRate = (socket, bucket, limit, windowMs) => {
   if (recent.length >= limit) { if (now - Number(socket.data.lastRateWarningAt || 0) > 2500) { socket.data.lastRateWarningAt = now; socket.emit('app-error', 'Muitas ações em pouco tempo. Aguarde alguns segundos.'); } socket.data.rateLimits.set(bucket, recent); return false; }
   recent.push(now); socket.data.rateLimits.set(bucket, recent); return true;
 };
+const punishmentMessage = (entry) => {
+  const expiry = entry?.expiresAt ? ` até ${new Date(entry.expiresAt).toLocaleString('pt-BR')}` : '';
+  return `Você está de castigo e não pode enviar mensagens${expiry}.${entry?.reason ? ` Motivo: ${entry.reason}` : ''}`;
+};
+const canWriteChat = (socket) => {
+  const entry = moderationStore.get(socket.data.clientId);
+  if (!entry) return true;
+  socket.emit('app-error', punishmentMessage(entry));
+  return false;
+};
 const safeClientPlatform = (value) => typeof value === 'string' && ['windows', 'linux', 'android', 'selfweb'].includes(value) ? value : '';
 const safePresenceStatus = (value) => ['online', 'idle', 'dnd'].includes(String(value || '').toLowerCase()) ? String(value).toLowerCase() : 'online';
 const safeAudioState = (value) => ({ micMuted: value?.micMuted === true, outputMuted: value?.outputMuted === true });
@@ -223,6 +235,7 @@ const plugins = loadPlugins({
   directories: [path.join(__dirname, 'plugins')],
   trustedPluginHashes: [...officialPluginHashes, ...operatorPluginHashes],
   stateFile: process.env.PLUGIN_STATE_FILE || path.join(__dirname, 'data', 'plugin-settings.json'),
+  maxSystemMessageLength: () => chatPolicy().pluginMessageMaxLength,
   addLog: addPluginLog,
   emitSystemMessage: ({ room, textChannel, text, name, color, avatar, pluginId }) => {
     if (room && text) {
@@ -237,7 +250,7 @@ function aggregateStats() {
   const rooms = [...io.sockets.adapter.rooms.entries()].filter(([key, value]) => key.startsWith('server:') && value.size > 0).length;
   const voiceChannels = [...io.sockets.adapter.rooms.entries()].filter(([key, value]) => key.startsWith('voice:') && !key.endsWith(`:${LOBBY_CHANNEL}`) && value.size > 0).length;
   const connections = [...io.sockets.sockets.values()].filter((socket) => Boolean(socket.data.serverRoom)).length;
-  return { ok: true, service: 'VoiceUP Server Cloud', version: packageInfo.version, mode: 'signaling', uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), connections, rooms, voiceChannels, memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024), maxHumanVoiceChannelSize: MAX_HUMAN_VOICE_CHANNEL_SIZE, maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, storage: { chat: chatStore.stats(), reports: reportStore.stats() }, counters: { ...counters } };
+  return { ok: true, service: 'VoiceUP Server Cloud', version: packageInfo.version, mode: 'signaling', uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), connections, rooms, voiceChannels, memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024), maxHumanVoiceChannelSize: MAX_HUMAN_VOICE_CHANNEL_SIZE, maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, chatPolicy: chatPolicy(), storage: { chat: chatStore.stats(), reports: reportStore.stats(), moderation: moderationStore.stats() }, counters: { ...counters } };
 }
 function publicStats() {
   const stats = aggregateStats();
@@ -272,9 +285,9 @@ app.get('/downloads/linux/:target', (request, response) => {
 });
 app.get('/api/linux-release', (_request, response) => {
   response.set('Cache-Control', 'no-store');
-  try { const client=releaseDownloads.entryFor('linux'); const server=releaseDownloads.entryFor('linux-server');
-    response.json({ok:true,available:true,version:packageInfo.version,platform:'linux',arch:'x64',format:'AppImage',clientUrl:'/downloads/linux/client',serverUrl:'/downloads/linux/server',checksumsUrl:'/downloads/linux/checksums'});
-  } catch { response.json({ok:true,available:false,version:packageInfo.version,platform:'linux'}); }
+  try { const catalog=releaseDownloads.catalog().payload; const client=releaseDownloads.entryFor('linux'); const server=releaseDownloads.entryFor('linux-server');
+    response.json({ok:true,available:true,version:catalog.version,platform:'linux',arch:'x64',format:'AppImage',clientUrl:'/downloads/linux/client',serverUrl:'/downloads/linux/server',checksumsUrl:'/downloads/linux/checksums'});
+  } catch { response.json({ok:true,available:false,version:packageInfo.releaseCatalogVersion||packageInfo.version,platform:'linux'}); }
 });
 const downloadablePlugins = new Map([['dados', 'dados.js'], ['musica', 'musica.js'], ['xp-chat', 'xp-chat.js']]);
 app.get('/downloads/plugins/:plugin', (request, response) => {
@@ -285,13 +298,44 @@ app.get('/downloads/plugins/:plugin', (request, response) => {
 });
 app.get('/health', (_request, response) => { response.set('Cache-Control', 'no-store'); response.json(publicStats()); });
 app.get('/stats', (_request, response) => { response.set('Cache-Control', 'no-store'); response.json(publicStats()); });
-app.get(['/admin/health', '/api/admin/health'], (request, response) => {
+const requireAdmin = (request, response, next) => {
   const configuredToken = String(process.env.VOICEUP_ADMIN_TOKEN || '');
   if (configuredToken.length < 24) return response.status(404).json({ ok: false, message: 'Não encontrado.' });
   const suppliedToken = String(request.headers.authorization || '').match(/^Bearer\s+(.+)$/i)?.[1] || '';
   if (!safeSecretEqual(suppliedToken, configuredToken)) { response.set('WWW-Authenticate', 'Bearer'); return response.status(401).json({ ok: false, message: 'Não autorizado.' }); }
   response.set('Cache-Control', 'no-store');
-  return response.json({ ...aggregateStats(), plugins: plugins.list(), pluginErrors: plugins.errors(), pluginLogs, musicFiles: musicFiles() });
+  return next();
+};
+const adminMembers = () => [...io.sockets.sockets.values()].filter((socket) => socket.data.serverRoom).map((socket) => ({ id: socket.id, clientId: socket.data.clientId || '', name: socket.data.name || 'Visitante', room: socket.data.room || '', voiceChannel: socket.data.voiceChannel === LOBBY_CHANNEL ? '' : socket.data.voiceChannel || '' }));
+app.get(['/admin/health', '/api/admin/health'], requireAdmin, (_request, response) => {
+  return response.json({ ...aggregateStats(), members: adminMembers(), chatPunishments: moderationStore.list(), plugins: plugins.list(), pluginErrors: plugins.errors(), pluginLogs, musicFiles: musicFiles() });
+});
+app.get('/api/admin/chat-policy', requireAdmin, (_request, response) => response.json({ ok: true, ...chatPolicy() }));
+app.put('/api/admin/chat-policy', requireAdmin, (request, response) => {
+  const policy = moderationStore.configure(request.body || {});
+  addPluginLog('admin', `Política do chat atualizada: cooldown ${policy.cooldownSeconds}s, plugins ${policy.pluginMessageMaxLength} caracteres`);
+  return response.json({ ok: true, message: 'Política do chat atualizada.', ...policy });
+});
+app.get('/api/admin/chat-punishments', requireAdmin, (_request, response) => response.json({ ok: true, punishments: moderationStore.list() }));
+app.post('/api/admin/chat-punishments', requireAdmin, (request, response) => {
+  const input = request.body || {};
+  const requestedId = String(input.id || input.clientId || '');
+  const target = io.sockets.sockets.get(requestedId) || [...io.sockets.sockets.values()].find((socket) => socket.data.clientId && socket.data.clientId === safeIdentity(input.clientId));
+  const clientId = safeIdentity(target?.data?.clientId || input.clientId);
+  if (!clientId) return response.status(400).json({ ok: false, message: 'Informe a identidade persistente ou o id de uma conexão compatível.' });
+  const rawDuration = Number(input.durationMinutes);
+  const durationMinutes = Number.isFinite(rawDuration) ? Math.round(Math.min(525600, Math.max(0, rawDuration))) : 60;
+  const expiresAt = durationMinutes > 0 ? new Date(Date.now() + durationMinutes * 60000).toISOString() : null;
+  const entry = moderationStore.set({ clientId, name: target?.data?.name || input.name || 'Visitante', reason: input.reason, punishedAt: new Date().toISOString(), expiresAt });
+  if (!entry) return response.status(400).json({ ok: false, message: 'Não foi possível registrar o castigo.' });
+  [...io.sockets.sockets.values()].filter((socket) => socket.data.clientId === clientId).forEach((socket) => socket.emit('app-error', punishmentMessage(entry)));
+  addPluginLog('admin', `${entry.name} recebeu castigo no chat`);
+  return response.status(201).json({ ok: true, message: `${entry.name} recebeu castigo no chat.`, punishment: entry });
+});
+app.delete('/api/admin/chat-punishments/:clientId', requireAdmin, (request, response) => {
+  const clientId = safeIdentity(request.params.clientId);
+  const removed = clientId && moderationStore.remove(clientId);
+  return response.status(removed ? 200 : 404).json({ ok: Boolean(removed), message: removed ? 'Castigo removido.' : 'Castigo não encontrado.' });
 });
 app.get('/api/status', (_request, response) => {
   const stats = publicStats();
@@ -300,7 +344,7 @@ app.get('/api/status', (_request, response) => {
 });
 app.get('/api/mobile-release', (_request, response) => {
   response.set('Cache-Control', 'no-store');
-  try { const file=releaseDownloads.entryFor('android'); response.json({ok:true,platform:'android',version:packageInfo.version,fileName:file.name,sha256:file.sha256,minAndroid:'6.0',downloadUrl:'/downloads/android'}); }
+  try { const catalog=releaseDownloads.catalog().payload; const file=releaseDownloads.entryFor('android'); response.json({ok:true,platform:'android',version:catalog.version,fileName:file.name,sha256:file.sha256,minAndroid:'6.0',downloadUrl:'/downloads/android'}); }
   catch { response.status(503).json({ok:false,message:'APK verificado indisponível.'}); }
 });
 app.get('/api/release-integrity', (_request, response) => {
@@ -364,6 +408,7 @@ io.on('connection', (socket) => {
     const peers = channel === LOBBY_CHANNEL ? [] : peersIn(voiceRoom).filter((peer) => peer.id !== socket.id && !staleSessionIds.has(peer.id));
     socket.emit('room-joined', { roomId: room, voiceChannel: channel, peers, limits: { humansPerCall: MAX_HUMAN_VOICE_CHANNEL_SIZE, membersPerCall: MAX_VOICE_CHANNEL_SIZE }, serverProfile: { ...serverProfile } });
     socket.emit('chat-history', { messages: historyFor(room) });
+    const activePunishment = moderationStore.get(identity); if (activePunishment) socket.emit('app-error', punishmentMessage(activePunishment));
     if (channel !== LOBBY_CHANNEL) socket.to(voiceRoom).emit('peer-joined', { id: socket.id, name: safeName, color: safeColor, avatar: safeAvatar, clientId: identity, status: socket.data.status, platform: safeClientPlatform(socket.data.platform) });
     broadcastPresence(serverKey(room));
   });
@@ -407,8 +452,14 @@ io.on('connection', (socket) => {
   });
   socket.on('text-message', ({ text, textChannel, messageId, createdAt, mentions, reply } = {}) => {
     if (!socket.data.serverRoom || !consumeRate(socket, 'text', 30, 10000)) return;
+    if (!canWriteChat(socket)) return;
     const safeText = String(text || '').trim().slice(0, 500); if (!safeText) return;
     const safeTextChannel = safeChannel(textChannel, 'geral'); const id = safeMessageId(messageId, socket.id); const sentAt = Number.isFinite(Number(createdAt)) ? Number(createdAt) : Date.now();
+    socket.data.lastTextAt ||= new Map();
+    const lastTextAt = Number(socket.data.lastTextAt.get(safeTextChannel) || 0);
+    const waitMs = Math.max(0, chatPolicy().cooldownSeconds * 1000 - (Date.now() - lastTextAt));
+    if (waitMs > 0) return socket.emit('app-error', `Cooldown ativo. Aguarde ${Math.ceil(waitMs / 1000)}s.`);
+    socket.data.lastTextAt.set(safeTextChannel, Date.now());
     const safeMentionIds = safeMentions(socket.data.serverRoom, mentions);
     const mentionClientIds = stableMentionIds(socket.data.serverRoom, safeMentionIds);
     const replyPacket = safeReply(socket.data.room, reply);
@@ -421,6 +472,7 @@ io.on('connection', (socket) => {
   });
   socket.on('edit-message', ({ messageId, text, textChannel, mentions } = {}) => {
     if (!socket.data.serverRoom || !consumeRate(socket, 'message-edit', 24, 10000)) return;
+    if (!canWriteChat(socket)) return;
     const id = String(messageId || ''); const stored = messageById(socket.data.room, id); const known = socket.data.chatMessages?.get(id); const safeText = String(text || '').trim().slice(0, 500);
     const ownsMessage = stored && (stored.authorIdentityFingerprint ? stored.authorIdentityFingerprint === socket.data.identityFingerprint : (stored.authorClientId && socket.data.clientId ? stored.authorClientId === socket.data.clientId : stored.from === socket.id));
     if ((!known && !ownsMessage) || !safeText || safeChannel(textChannel, 'geral') !== (stored?.textChannel || known?.textChannel)) return socket.emit('app-error', 'Não foi possível editar essa mensagem.');
@@ -469,5 +521,5 @@ io.on('connection', (socket) => {
 });
 
 server.listen(port, '0.0.0.0', () => console.log(`VoiceUP Server Cloud ${packageInfo.version} ativo na porta ${port}`));
-function shutdown() { chatStore.close(); reportStore.close(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
+function shutdown() { chatStore.close(); reportStore.close(); moderationStore.close(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

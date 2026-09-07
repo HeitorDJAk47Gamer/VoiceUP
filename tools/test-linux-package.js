@@ -6,28 +6,34 @@ const asar = require('@electron/asar');
 const workspace = path.resolve(__dirname, '..');
 const version = require(path.join(workspace, 'package.json')).version;
 const release = process.argv.includes('--release');
+function outputArgument(name, fallback) {
+  const index = process.argv.indexOf(name);
+  return path.resolve(workspace, index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback);
+}
+const clientOutput = outputArgument('--client-output', 'release-linux');
+const serverOutput = outputArgument('--server-output', 'release-linux-server');
 
 const packages = [
   {
     label: 'Cliente',
-    directory: path.join(workspace, 'release-linux', 'linux-unpacked'),
+    directory: path.join(clientOutput, 'linux-unpacked'),
     executable: 'voiceup',
     main: 'electron-main.js',
     expectedName: 'voiceup',
     expectedProductName: undefined,
     requiredFiles: ['electron-main.js', path.join('public', 'index.html')],
-    output: path.join(workspace, 'release-linux'),
+    output: clientOutput,
     productName: 'VoiceUP'
   },
   {
     label: 'ServerHost',
-    directory: path.join(workspace, 'release-linux-server', 'linux-unpacked'),
+    directory: path.join(serverOutput, 'linux-unpacked'),
     executable: 'voiceup-server',
     main: 'server-host-main.js',
     expectedName: 'voiceup-server',
     expectedProductName: 'VoiceUPServer',
     requiredFiles: ['server-host-main.js', path.join('host', 'index.html')],
-    output: path.join(workspace, 'release-linux-server'),
+    output: serverOutput,
     productName: 'VoiceUPServer'
   }
 ];
@@ -71,6 +77,7 @@ for (const item of packages) {
   const updater = asar.extractFile(appAsar, 'update-helper.js').toString();
   assert.match(updater, /packageUnavailable/, `${item.label}: atualizador Linux sem proteção para pacote não verificado.`);
   const metadata = JSON.parse(asar.extractFile(appAsar, 'package.json').toString());
+  assert.equal(metadata.version, version, `${item.label}: versão empacotada incorreta.`);
   assert.equal(metadata.main, item.main, `${item.label}: ponto de entrada incorreto.`);
   assert.equal(metadata.name, item.expectedName, `${item.label}: identidade de pacote incorreta.`);
   if (item.expectedProductName) assert.equal(metadata.productName, item.expectedProductName, `${item.label}: productName incorreto.`);

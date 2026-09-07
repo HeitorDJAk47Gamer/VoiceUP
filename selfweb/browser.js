@@ -21,7 +21,7 @@
   document.querySelector('.join-card')?.insertAdjacentHTML('beforeend',limitations);
   document.querySelector('[data-settings-panel="general"]')?.insertAdjacentHTML('beforeend',limitations);
   const releaseDetails = document.createElement('details'); releaseDetails.className = 'selfweb-help';
-  const releaseSummary = document.createElement('summary'); releaseSummary.textContent = 'Novidades da 1.2.0';
+  const releaseSummary = document.createElement('summary'); releaseSummary.textContent = `Novidades da ${window.voiceupReleaseHistory.version}`;
   const releaseBody = document.createElement('div');
   const releaseSubtitle = document.createElement('p'); releaseSubtitle.textContent = window.voiceupReleaseHistory.locales['pt-BR'].subtitle;
   const releaseList = document.createElement('ul');

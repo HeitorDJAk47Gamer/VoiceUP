@@ -233,7 +233,7 @@
     $('member-list').innerHTML = members.length ? members.map((member) => {
       const avatar = member.avatar ? `<img src="${escapeHtml(member.avatar)}" alt="">` : escapeHtml(initials(member.name));
       const channel = member.voiceChannel === '__lobby__' || !member.voiceChannel ? 'fora da call' : member.voiceChannel;
-      return `<div class="member"><span class="member-avatar" style="--member-color:${escapeHtml(member.color || '#56e2cf')}">${avatar}${globalThis.voiceupPlatform.badge(member.platform, member.status)}</span><span class="member-info"><b>${escapeHtml(member.name || 'Visitante')}${member.isBot ? ' · Bot' : ''}</b><small>Sala ${escapeHtml(member.room || '—')} · ${escapeHtml(channel)} · ${formatTime(member.connectedSeconds)}${member.remote ? ' · outro host' : ''}</small></span>${pingBars(member.ping)}${member.isBot || member.remote ? '' : `<span class="member-actions"><button class="button secondary" data-moderate="kick" data-member="${escapeHtml(member.id)}">Expulsar</button><button class="button danger" data-moderate="ban" data-member="${escapeHtml(member.id)}">Banir</button></span>`}</div>`;
+      return `<div class="member"><span class="member-avatar" style="--member-color:${escapeHtml(member.color || '#56e2cf')}">${avatar}${globalThis.voiceupPlatform.badge(member.platform, member.status)}</span><span class="member-info"><b>${escapeHtml(member.name || 'Visitante')}${member.isBot ? ' · Bot' : ''}</b><small>Sala ${escapeHtml(member.room || '—')} · ${escapeHtml(channel)} · ${formatTime(member.connectedSeconds)}${member.remote ? ' · outro host' : ''}</small></span>${pingBars(member.ping)}${member.isBot ? '' : `<span class="member-actions"><button class="button secondary" data-moderate="kick" data-member="${escapeHtml(member.id)}">Expulsar</button><button class="button warning" data-moderate="punish" data-member="${escapeHtml(member.id)}">Castigar</button><button class="button danger" data-moderate="ban" data-member="${escapeHtml(member.id)}">Banir</button></span>`}</div>`;
     }).join('') : '<div class="empty">Nenhum participante conectado.</div>';
     const bans = Array.isArray(stats.bans) ? stats.bans : [];
     $('ban-list').innerHTML = bans.length ? bans.map((ban) => {
@@ -241,13 +241,21 @@
       const reason = ban.reason ? ` · ${ban.reason}` : '';
       return `<div class="member"><span class="member-avatar">!</span><span class="member-info"><b>${escapeHtml(ban.name || 'Visitante')}</b><small>${escapeHtml(expiry + reason)}</small></span><span class="member-actions"><button class="button secondary" data-unban="${escapeHtml(ban.clientId)}">Remover ban</button></span></div>`;
     }).join('') : '<div class="empty">Nenhum banimento ativo.</div>';
+    const punishments = Array.isArray(stats.chatPunishments) ? stats.chatPunishments : [];
+    $('punishment-list').innerHTML = punishments.length ? punishments.map((punishment) => {
+      const expiry = punishment.expiresAt ? `Expira ${new Date(punishment.expiresAt).toLocaleString('pt-BR')}` : 'Permanente';
+      const reason = punishment.reason ? ` · ${punishment.reason}` : '';
+      return `<div class="member"><span class="member-avatar punishment-avatar">⌁</span><span class="member-info"><b>${escapeHtml(punishment.name || 'Visitante')}</b><small>${escapeHtml(expiry + reason)}</small></span><span class="member-actions"><button class="button secondary" data-unpunish="${escapeHtml(punishment.clientId)}">Remover castigo</button></span></div>`;
+    }).join('') : '<div class="empty">Nenhum castigo ativo.</div>';
     document.querySelectorAll('[data-moderate]').forEach((button) => {
       button.onclick = async () => {
         const action = button.dataset.moderate;
-        const accepted = await showDialog({ title: action === 'ban' ? 'Banir participante' : 'Expulsar participante', message: action === 'ban' ? 'Escolha por quanto tempo esta identidade ficará bloqueada.' : 'Esta pessoa será removida do servidor agora.', detail: action === 'ban' ? 'O bloqueio usa a identidade persistente do Client, não apenas o nome, e expira automaticamente.' : 'Ela poderá entrar novamente depois.', tone: 'danger', icon: action === 'ban' ? '!' : '×', fields: action === 'ban' ? [{ name: 'durationMinutes', label: 'Duração', type: 'select', value: '60', options: [{ value: '10', label: '10 minutos' }, { value: '60', label: '1 hora' }, { value: '1440', label: '1 dia' }, { value: '10080', label: '7 dias' }, { value: '43200', label: '30 dias' }, { value: '0', label: 'Permanente' }] }, { name: 'reason', label: 'Motivo (opcional)', type: 'textarea', maxlength: 160, placeholder: 'Explique por que a pessoa foi banida' }] : [], returnFields: action === 'ban', actions: [{ value: 'confirm', label: action === 'ban' ? 'Banir' : 'Expulsar', style: 'danger' }, { value: 'cancel', label: 'Cancelar', style: 'secondary' }] });
-        if ((action === 'ban' ? accepted?.value : accepted) !== 'confirm') return;
+        const timed = action === 'ban' || action === 'punish';
+        const punishing = action === 'punish';
+        const accepted = await showDialog({ title: punishing ? 'Castigar no chat' : action === 'ban' ? 'Banir participante' : 'Expulsar participante', message: punishing ? 'A pessoa continuará na call, mas não poderá enviar nem editar mensagens.' : action === 'ban' ? 'Escolha por quanto tempo esta identidade ficará bloqueada.' : 'Esta pessoa será removida do servidor agora.', detail: timed ? 'A punição usa a identidade persistente do Client, não apenas o nome, e expira automaticamente.' : 'Ela poderá entrar novamente depois.', tone: action === 'kick' ? 'danger' : 'normal', icon: punishing ? '⌁' : action === 'ban' ? '!' : '×', fields: timed ? [{ name: 'durationMinutes', label: 'Duração', type: 'select', value: '60', options: [{ value: '10', label: '10 minutos' }, { value: '60', label: '1 hora' }, { value: '1440', label: '1 dia' }, { value: '10080', label: '7 dias' }, { value: '43200', label: '30 dias' }, { value: '0', label: 'Permanente' }] }, { name: 'reason', label: 'Motivo (opcional)', type: 'textarea', maxlength: 160, placeholder: punishing ? 'Explique por que a pessoa não pode usar o chat' : 'Explique por que a pessoa foi banida' }] : [], returnFields: timed, actions: [{ value: 'confirm', label: punishing ? 'Aplicar castigo' : action === 'ban' ? 'Banir' : 'Expulsar', style: action === 'punish' ? 'primary' : 'danger' }, { value: 'cancel', label: 'Cancelar', style: 'secondary' }] });
+        if ((timed ? accepted?.value : accepted) !== 'confirm') return;
         button.disabled = true;
-        const result = await window.voiceupServer.moderate(action, button.dataset.member, action === 'ban' ? { durationMinutes: Number(accepted.fields.durationMinutes), reason: accepted.fields.reason } : {});
+        const result = await window.voiceupServer.moderate(action, button.dataset.member, timed ? { durationMinutes: Number(accepted.fields.durationMinutes), reason: accepted.fields.reason } : {});
         showNotice(result.message, result.ok ? 'success' : 'error');
         button.disabled = false;
         refresh();
@@ -257,6 +265,15 @@
       button.onclick = async () => {
         button.disabled = true;
         const result = await window.voiceupServer.unban(button.dataset.unban);
+        showNotice(result.message, result.ok ? 'success' : 'error');
+        button.disabled = false;
+        refresh();
+      };
+    });
+    document.querySelectorAll('[data-unpunish]').forEach((button) => {
+      button.onclick = async () => {
+        button.disabled = true;
+        const result = await window.voiceupServer.unpunish(button.dataset.unpunish);
         showNotice(result.message, result.ok ? 'success' : 'error');
         button.disabled = false;
         refresh();
@@ -276,7 +293,7 @@
     const voice = type === 'voice';
     const detail = voice
       ? `<label><span>Limite</span><input data-channel-field="userLimit" type="number" min="0" max="99" value="${Number(channel.userLimit || 0)}"><small>0 usa o limite global</small></label><label><span>Bitrate</span><select data-channel-field="bitrateKbps">${[32,48,64,96,128,192,256,384,510].map((value) => `<option value="${value}"${Number(channel.bitrateKbps) === value ? ' selected' : ''}>${value} Kbps</option>`).join('')}</select></label><label><span>Região</span><select data-channel-field="region"><option value="auto">Automática</option><option value="brazil"${channel.region === 'brazil' ? ' selected' : ''}>Brasil</option><option value="us-east"${channel.region === 'us-east' ? ' selected' : ''}>EUA Leste</option><option value="eu-central"${channel.region === 'eu-central' ? ' selected' : ''}>Europa Central</option></select></label><label class="channel-check"><input data-channel-field="locked" type="checkbox"${channel.locked ? ' checked' : ''}><span>Canal fechado</span></label>`
-      : `<label class="channel-topic"><span>Tópico</span><input data-channel-field="topic" maxlength="240" value="${escapeHtml(channel.topic || '')}" placeholder="Descrição do canal"></label><label><span>Modo lento</span><select data-channel-field="slowModeSeconds">${[[0,'Desativado'],[5,'5 segundos'],[15,'15 segundos'],[30,'30 segundos'],[60,'1 minuto'],[300,'5 minutos']].map(([value,label]) => `<option value="${value}"${Number(channel.slowModeSeconds) === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label><label class="channel-check"><input data-channel-field="readOnly" type="checkbox"${channel.readOnly ? ' checked' : ''}><span>Somente leitura</span></label>`;
+      : `<label class="channel-topic"><span>Tópico</span><input data-channel-field="topic" maxlength="240" value="${escapeHtml(channel.topic || '')}" placeholder="Descrição do canal"></label><label><span>Cooldown (s)</span><input data-channel-field="slowModeSeconds" type="number" min="0" max="21600" step="1" value="${Number(channel.slowModeSeconds || 0)}"><small>0 desativa neste canal</small></label><label class="channel-check"><input data-channel-field="readOnly" type="checkbox"${channel.readOnly ? ' checked' : ''}><span>Somente leitura</span></label>`;
     return `<article class="channel-editor-card" data-channel-index="${index}" data-channel-type="${type}"><header><span class="channel-kind">${voice ? '◖' : '#'}</span><input class="channel-name-input" data-channel-field="name" maxlength="24" value="${escapeHtml(channel.name)}" aria-label="Nome do canal"><span class="channel-order"><button type="button" data-channel-action="up"${index === 0 ? ' disabled' : ''} title="Mover para cima">↑</button><button type="button" data-channel-action="down"${index === total - 1 ? ' disabled' : ''} title="Mover para baixo">↓</button><button type="button" data-channel-action="delete" title="Remover">×</button></span></header><div class="channel-fields"><label><span>Categoria</span><input data-channel-field="category" maxlength="36" value="${escapeHtml(channel.category || '')}" placeholder="Opcional"></label>${detail}</div></article>`;
   };
   const renderChannelEditors = () => {
@@ -473,7 +490,7 @@
     ['participants', 'rooms'].forEach((key) => { $(key).textContent = Number(stats[key] || 0); });
     $('call-limit').textContent = `canais em uso · ${Number(stats.maxHumanVoiceChannelSize || 12)} pessoas/call`;
     const signals = Number(stats.signals ?? stats.events?.signals ?? 0);
-    $('ping').innerHTML = pingBars(stats.averagePing, true);
+    $('ping').innerHTML = pingBars(stats.averagePing);
     $('cpu').textContent = `${Number(stats.cpuPercent || 0).toFixed(1).replace('.0', '')}%`;
     $('memory').textContent = `${stats.memoryMb || 0} MB`;
     $('uptime').textContent = formatTime(stats.uptimeSeconds);
@@ -481,7 +498,7 @@
     const storage = stats.storage || {};
     const storageCategories = storage.categories || {};
     $('storage-total').textContent = formatBytes(storage.totalBytes || 0);
-    const storageLabels = { chats: 'Chats', reports: 'Relatórios', bans: 'Banimentos', settings: 'Configurações', plugins: 'Plugins', music: 'Músicas', other: 'Outros' };
+    const storageLabels = { chats: 'Chats', reports: 'Relatórios', bans: 'Banimentos', punishments: 'Castigos', settings: 'Configurações', plugins: 'Plugins', music: 'Músicas', other: 'Outros' };
     $('storage-categories').innerHTML = Object.entries(storageLabels).map(([key, label]) => `<div class="storage-category"><span>${escapeHtml(label)}</span><strong>${escapeHtml(formatBytes(storageCategories[key] || 0))}</strong></div>`).join('');
     const reports = Array.isArray(stats.reports) ? stats.reports : [];
     $('bug-report-list').innerHTML = reports.length ? reports.map((report) => `<article class="bug-report"><b>${escapeHtml(report.name || 'Cliente')} · ${escapeHtml(report.category || 'erro')}</b><time>${escapeHtml(new Date(Number(report.receivedAt) || Date.now()).toLocaleString('pt-BR'))}</time><p>${escapeHtml(report.description || '')}</p><small>${escapeHtml(report.version || 'versão não informada')} · ${escapeHtml(report.id || '')}</small></article>`).join('') : '<div class="empty">Nenhum relatório recebido.</div>';
@@ -551,6 +568,8 @@
       renderHostServerIconPreview();
       $('chat-retention-days').value = Number(settings.storage?.retentionDays ?? 30);
       $('chat-max-per-room').value = Number(settings.storage?.maxPerRoom ?? 300);
+      $('chat-cooldown-seconds').value = Number(settings.chatPolicy?.cooldownSeconds ?? 0);
+      $('plugin-message-max-length').value = Number(settings.chatPolicy?.pluginMessageMaxLength ?? 2000);
       $('public-access-automatic').checked = settings.publicAccess?.automatic === true;
       publicAccessAcknowledged = $('public-access-automatic').checked && Number(settings.publicAccess?.consentVersion || 0) >= 1;
       setTheme($('host-theme').value);
@@ -684,10 +703,12 @@
       refresh();
     };
     const saveHostSettings = async (notify = false) => {
-      const settings = await window.voiceupServer.saveSettings({ closeBehavior: $('host-close-behavior').value, theme: $('host-theme').value, serverIcon: hostServerIcon, hardwareAcceleration: $('host-hardware-acceleration').checked, publicAccess: { automatic: $('public-access-automatic').checked, confirmed: publicAccessAcknowledged }, storage: { retentionDays: Number($('chat-retention-days').value), maxPerRoom: Number($('chat-max-per-room').value) } });
+      const settings = await window.voiceupServer.saveSettings({ closeBehavior: $('host-close-behavior').value, theme: $('host-theme').value, serverIcon: hostServerIcon, hardwareAcceleration: $('host-hardware-acceleration').checked, publicAccess: { automatic: $('public-access-automatic').checked, confirmed: publicAccessAcknowledged }, storage: { retentionDays: Number($('chat-retention-days').value), maxPerRoom: Number($('chat-max-per-room').value) }, chatPolicy: { cooldownSeconds: Number($('chat-cooldown-seconds').value), pluginMessageMaxLength: Number($('plugin-message-max-length').value) } });
       $('host-close-behavior').value = settings.closeBehavior || 'ask';
       setTheme(settings.theme);
       updateHardwareAccelerationUi(settings);
+      $('chat-cooldown-seconds').value = Number(settings.chatPolicy?.cooldownSeconds ?? 0);
+      $('plugin-message-max-length').value = Number(settings.chatPolicy?.pluginMessageMaxLength ?? 2000);
       if (notify) showNotice('Configurações do ServerHost salvas.');
     };
     const scheduleHostSettingsSave = () => { clearTimeout(settingsSaveTimer); settingsSaveTimer = window.setTimeout(() => void saveHostSettings(false), 220); };
@@ -696,6 +717,8 @@
     $('host-hardware-acceleration').onchange = scheduleHostSettingsSave;
     $('chat-retention-days').onchange = scheduleHostSettingsSave;
     $('chat-max-per-room').onchange = scheduleHostSettingsSave;
+    $('chat-cooldown-seconds').onchange = scheduleHostSettingsSave;
+    $('plugin-message-max-length').onchange = scheduleHostSettingsSave;
     $('public-access-automatic').onchange = async () => {
       if (!$('public-access-automatic').checked) {
         publicAccessAcknowledged = false;

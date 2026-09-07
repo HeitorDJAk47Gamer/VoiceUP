@@ -6,8 +6,12 @@ instaladores desktop já publicados.
 
 ## Compatibilidade
 
-A edição **1.2.0** mantém o protocolo compatível com **VoiceUP 1.1.2** e
+A edição **1.2.1** mantém o protocolo compatível com **VoiceUP 1.1.2+** e
 adapta os recursos de servidor e cliente para o celular.
+
+Nesta versão, o ícone e a tela de abertura do Android usam a identidade do
+VoiceUP. Os controles da call e as ferramentas das mensagens usam ícones
+compactos, enquanto a saída do servidor ganhou um botão maior em vermelho.
 
 ### Servidores e perfil
 
@@ -64,15 +68,14 @@ O aplicativo pede autorização de microfone e câmera quando cada recurso é us
 ServerHosts locais em `http://` são permitidos para testes na mesma rede; em um
 servidor público, use `https://`.
 
-## APK de teste
+## APK oficial
 
-Depois de gerar a beta 4, o APK distribuível fica em:
+O workflow de publicação gera o APK estável como:
 
-`../test-1.1.3-mobile-beta.5/VoiceUP-1.1.3-mobile-beta.5.apk`
+`VoiceUP-1.2.1-android.apk`
 
-O pacote de teste usa a assinatura de desenvolvimento do Android. Ele pode ser
-instalado sobre as betas 2 e 3 e preserva perfil, servidores e preferências
-locais.
+O APK release não é depurável e usa a mesma identidade de assinatura do APK
+oficial 1.2.0, preservando perfil, servidores e preferências ao atualizar.
 
 ## Desenvolver e validar
 
@@ -88,6 +91,13 @@ Para preparar o projeto Android:
 ```powershell
 npm run sync
 npx cap open android
+```
+
+Os ícones e splashes já ficam versionados. Se a arte principal mudar, regenere-os
+com Python e Pillow antes do `sync`:
+
+```powershell
+python tools/generate-android-brand-assets.py
 ```
 
 Use Android 15 / API 35 e as Build Tools correspondentes. O script detecta um

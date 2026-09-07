@@ -3,10 +3,11 @@ const path = require('path');
 const crypto = require('node:crypto');
 
 const safeText = (value, max = 500) => String(value || '').replace(/[\r\n]+/g, ' ').trim().slice(0, max);
+const pluginMessageLimit = (value) => Math.round(Math.min(10_000, Math.max(500, Number(value) || 2_000)));
 const safeIcon = (value) => typeof value === 'string' && /^data:image\/(?:png|webp|svg\+xml);/i.test(value) && value.length <= 60_000 ? value : '';
 const clone = (value, fallback = null) => { try { return JSON.parse(JSON.stringify(value)); } catch { return fallback; } };
 
-function loadPlugins({ directories = [], trustedPluginHashes = [], trustedPluginDirectories = [], addLog = () => {}, emitSystemMessage, emitPluginEvent = () => {}, media = {}, stateFile = '' }) {
+function loadPlugins({ directories = [], trustedPluginHashes = [], trustedPluginDirectories = [], addLog = () => {}, emitSystemMessage, emitPluginEvent = () => {}, media = {}, stateFile = '', maxSystemMessageLength = 2_000 }) {
   const loaded = [];
   const seenIds = new Set();
   const seenFingerprints = new Set();
@@ -105,13 +106,14 @@ function loadPlugins({ directories = [], trustedPluginHashes = [], trustedPlugin
   }
   persist();
 
+  const currentSystemMessageLimit = () => pluginMessageLimit(typeof maxSystemMessageLength === 'function' ? maxSystemMessageLength() : maxSystemMessageLength);
   const entryApi = (entry) => {
     const record = pluginRecord(entry.id);
     return {
       systemMessage: (room, textChannel, text, options = {}) => emitSystemMessage({
         room,
         textChannel: safeText(textChannel || 'geral', 24) || 'geral',
-        text: safeText(text),
+        text: safeText(text, currentSystemMessageLimit()),
         name: safeText(options.name || entry.name || 'VoiceUP Bot', 24) || 'VoiceUP Bot',
         color: options.color || '#a879ff',
         avatar: safeIcon(options.avatarSetting || record.settings.botAvatar || options.avatar || entry.icon),

@@ -3,11 +3,12 @@ const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
 const integrity=require('./release-integrity');
+const packageInfo=require('./package.json');
 const folder=path.join(__dirname,'downloads');
 const manifestPath=path.join(folder,'release-downloads.json');
 function catalog(){
   const envelope=JSON.parse(fs.readFileSync(manifestPath,'utf8'));
-  return {envelope,payload:integrity.verifySync(envelope,require('./package.json').version)};
+  return {envelope,payload:integrity.verifySync(envelope,packageInfo.releaseCatalogVersion||packageInfo.version)};
 }
 const targets={client:['client','windows','x64'],server:['serverhost','windows','x64'],android:['client','android','universal'],selfweb:['selfweb','web','universal'],linux:['client','linux','x64'], 'linux-server':['serverhost','linux','x64']};
 function entryFor(target){const tuple=targets[target];if(!tuple)throw new Error('Plataforma desconhecida.');return integrity.select(catalog().payload,...tuple);}

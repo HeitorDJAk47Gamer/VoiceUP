@@ -1,4 +1,4 @@
-window.voiceupVersion = new URLSearchParams(location.search).get('version') || '1.2.0';
+window.voiceupVersion = new URLSearchParams(location.search).get('version') || '1.2.1';
 window.voiceupDiagnostics = [];
 window.voiceupAddDiagnostic = (kind, value, source = '') => {
   const clean = String(value || 'Erro sem detalhes')
@@ -30,6 +30,7 @@ document.head.insertAdjacentHTML('beforeend', '<style>.room-channel{display:flex
 document.head.insertAdjacentHTML('beforeend', '<style>#video-gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;width:100%;height:100%;padding:7px}.video-tile{position:relative;min-width:0;min-height:0;overflow:hidden;border:1px solid #34415b;border-radius:12px;background:#070b13}.video-tile:only-child{grid-column:1/-1}.video-tile video{width:100%;height:100%;object-fit:contain;background:#070b13}.video-tile-label{position:absolute;left:8px;bottom:7px;border-radius:6px;padding:4px 7px;background:rgba(7,11,19,.8);font-size:11px;color:#eaf2ff}.video-tile.hidden{display:none}.video-frame:has(.video-tile:nth-child(3)){aspect-ratio:16/10}.video-frame .video-label{display:none}body.video-theater .sidebar,body.video-theater .content>header,body.video-theater .chat,body.video-theater .media-settings,body.video-theater .controls{display:none!important}body.video-theater .app,body.video-theater .content,body.video-theater .stage{display:block;height:100vh;min-height:100vh;padding:0;background:#05070d}body.video-theater #video-frame{position:fixed;inset:0;z-index:90;width:100vw;height:100vh;max-width:none;aspect-ratio:auto;margin:0;border:0;border-radius:0}body.video-theater #fullscreen-button{z-index:3;background:#273650}@media(max-width:760px){#video-gallery{grid-template-columns:1fr}.video-frame:has(.video-tile:nth-child(3)){aspect-ratio:16/11}}</style>');
 
 document.querySelector('#device-settings').insertAdjacentHTML('beforebegin', '<div id="client-preferences" style="border-top:1px solid #39445c;margin-top:17px;padding-top:14px"><strong>Preferências</strong><div style="display:grid;gap:10px;margin-top:10px"><label style="display:grid;gap:6px">Idioma<select id="language-select"><option value="pt-BR">Português (Brasil)</option><option value="en-US">English</option><option value="es-ES">Español</option><option value="fr-FR">Français</option></select></label><label style="display:flex;align-items:center;gap:8px;font-weight:600"><input id="carry-media-toggle" type="checkbox"/> Manter câmera/live ao trocar de canal de voz</label><label style="display:grid;gap:6px">Ao fechar o aplicativo<select id="client-close-behavior"><option value="tray">Manter aberto na bandeja do sistema</option><option value="ask">Perguntar o que fazer</option><option value="quit">Encerrar o aplicativo</option></select></label><small style="color:#aeb9cc;font-weight:400">Idioma e preferências afetam apenas este computador.</small></div></div>');
+document.querySelector('#client-close-behavior')?.closest('label')?.insertAdjacentHTML('afterend', '<label id="start-with-windows-setting" class="native-preference-toggle hidden"><input id="start-with-windows-toggle" type="checkbox"/><span><b id="start-with-windows-title">Iniciar com o Windows</b><small id="start-with-windows-note">Abre o VoiceUP automaticamente ao entrar no Windows. Desativado por padrão.</small></span></label>');
 document.querySelector('#carry-media-toggle')?.closest('label')?.insertAdjacentHTML('afterend', '<label style="display:flex;align-items:flex-start;gap:8px;font-weight:600"><input id="external-media-toggle" type="checkbox"/><span>Carregar mídia externa automaticamente<small style="display:block;color:#aeb9cc;font-weight:400;margin-top:3px">Desativado por padrão. Imagens, prévias e vídeos externos podem informar seu IP ao provedor.</small></span></label>');
 document.querySelector('#external-media-toggle')?.closest('label')?.insertAdjacentHTML('afterend', '<div id="hardware-acceleration-setting"><label><input id="hardware-acceleration-toggle" type="checkbox" checked/><span><b id="hardware-acceleration-title">Usar aceleração de hardware</b><small id="hardware-acceleration-note">Melhora vídeos e animações. Desative apenas se houver tela preta, cintilação ou travamentos de GPU. A alteração exige reiniciar.</small></span></label><label id="fullscreen-game-capture-setting"><input id="fullscreen-game-capture-toggle" type="checkbox" checked/><span><b id="fullscreen-game-capture-title">Compatibilidade com jogos em tela cheia</b><small id="fullscreen-game-capture-note">Usa o capturador alternativo do Windows para manter o cursor local visível. O cursor continua aparecendo normalmente na live. A alteração exige reiniciar.</small></span></label><div id="hardware-acceleration-restart" class="hidden" role="status"><small id="hardware-acceleration-restart-message">As alterações gráficas e de captura serão aplicadas após reiniciar o VoiceUP.</small><button id="hardware-acceleration-restart-button" type="button">Reiniciar agora</button></div></div>');
 document.body.insertAdjacentHTML('beforeend', '<div id="capture-picker" class="hidden" style="position:fixed;inset:0;z-index:50;background:rgba(4,8,17,.76);padding:22px;overflow:auto"><section style="width:min(940px,96vw);margin:4vh auto;background:#182136;border:1px solid #43516c;border-radius:18px;padding:22px;color:#e8edf8"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center"><div><h2 style="margin:0;font:700 23px Outfit,sans-serif">Compartilhar tela</h2><p style="color:#aeb9cc;margin:5px 0 0;font-size:13px">Escolha uma tela inteira ou janela antes de iniciar a live.</p></div><button id="capture-cancel" style="background:transparent;color:#e8edf8;font-size:24px">×</button></div><div id="capture-source-list" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin:18px 0"></div><label style="display:flex;gap:8px;align-items:center;color:#cbd6e8;font-size:13px"><input id="capture-audio-toggle" type="checkbox"/> Compartilhar áudio do sistema quando disponível</label><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px"><button id="capture-start" style="padding:10px 14px;border-radius:9px;background:#56e2cf;color:#102026;font-weight:700">Iniciar transmissão</button></div></section></div>');
@@ -83,6 +84,8 @@ let carryMediaOnChannelChange = storedProfile.carryMediaOnChannelChange !== fals
 let externalMediaAutoLoad = storedProfile.externalMediaAutoLoad === true;
 let language = ['pt-BR', 'en-US', 'es-ES', 'fr-FR'].includes(storedProfile.language) ? storedProfile.language : 'pt-BR';
 let clientCloseBehavior = ['tray', 'ask', 'quit'].includes(storedProfile.clientCloseBehavior) ? storedProfile.clientCloseBehavior : 'tray';
+let startWithWindowsEnabled = false;
+let startWithWindowsSupported = false;
 let hardwareAccelerationEnabled = true;
 let hardwareAccelerationAtStartup = true;
 let fullscreenGameCaptureCompatibilityEnabled = true;
@@ -147,7 +150,48 @@ $('host-room').value = storedProfile.roomId || '';
 $('settings-voice-channel')?.closest('div[style*="border-top"]')?.remove();
 if (['360', '480', '720', '1080', '1440', '2160'].includes(storedProfile.quality)) $('quality-select').value = storedProfile.quality;
 if (['15', '30', '60'].includes(String(storedProfile.frameRate))) $('fps-select').value = String(storedProfile.frameRate);
-$('theme-select').innerHTML = '<option value="aurora">Aurora - turquesa e coral</option><option value="midnight">Meia-noite - indigo e rosa</option><option value="ember">Brasa - laranja e dourado</option><option value="forest">Floresta - verde e ambar</option><option value="ocean">Oceano - azul profundo</option><option value="grape">Uva - roxo e rosa</option><option value="cyber">Cyber - azul e neon</option><option value="crimson">Carmesim - vinho e rubi</option><option value="obsidian">Obsidiana - grafite e jade</option><option value="cobalt">Cobalto - azul e laranja</option><option value="amethyst">Ametista - violeta e ciano</option><option value="volcano">Vulcão - carvão e lava</option><option value="snow">Neve colorida - azul sereno</option><option value="lilac">Lilas fosco - violeta suave</option><option value="sage">Salvia fosca - verde natural</option><option value="peach">Pessego fosco - coral quente</option><option value="mist">Nevoa fosca - cinza azulado</option><option value="lagoon">Lagoa fosca - turquesa suave</option><option value="sunset">Entardecer - rosa e dourado</option>';
+const clientThemeOptions = [
+  ['aurora', 'Aurora - turquesa e coral'],
+  ['midnight', 'Meia-noite - indigo e rosa'],
+  ['ember', 'Brasa - laranja e dourado'],
+  ['forest', 'Floresta - verde e ambar'],
+  ['ocean', 'Oceano - azul profundo'],
+  ['grape', 'Uva - roxo e rosa'],
+  ['cyber', 'Cyber - azul e neon'],
+  ['crimson', 'Carmesim - vinho e rubi'],
+  ['obsidian', 'Obsidiana - grafite e jade'],
+  ['cobalt', 'Cobalto - azul e laranja'],
+  ['amethyst', 'Ametista - violeta e ciano'],
+  ['volcano', 'Vulcão - carvão e lava'],
+  ['snow', 'Neve colorida - azul sereno'],
+  ['lilac', 'Lilas fosco - violeta suave'],
+  ['sage', 'Salvia fosca - verde natural'],
+  ['peach', 'Pessego fosco - coral quente'],
+  ['mist', 'Nevoa fosca - cinza azulado'],
+  ['lagoon', 'Lagoa fosca - turquesa suave'],
+  ['sunset', 'Entardecer - rosa e dourado'],
+  ['nebula', 'Nebulosa gradiente - roxo cosmico e azul'],
+  ['arctic', 'Artico noturno gradiente - azul-marinho e ciano'],
+  ['eclipse', 'Eclipse gradiente - preto e ouro'],
+  ['matrix', 'Matrix gradiente - verde digital e grafite'],
+  ['noir', 'Rosa noir gradiente - rosa e carvao'],
+  ['inferno', 'Inferno gradiente - vermelho e laranja'],
+  ['abyss', 'Abismo gradiente - azul petroleo e turquesa'],
+  ['galaxy', 'Galaxia gradiente - indigo e magenta'],
+  ['copper', 'Cobre gradiente - marrom e cobre'],
+  ['toxic', 'Toxico gradiente - lima e violeta'],
+  ['borealis', 'Boreal gradiente - esmeralda, ciano e violeta'],
+  ['sapphire', 'Safira gradiente - azul profundo e ciano'],
+  ['plum', 'Ameixa noturna gradiente - vinho e rosa'],
+  ['storm', 'Tempestade gradiente - grafite e azul eletrico'],
+  ['dawn', 'Alvorada gradiente - pessego e violeta'],
+  ['glacier', 'Geleira gradiente - azul gelo e ciano'],
+  ['lavender', 'Ceu lavanda gradiente - lavanda e rosa'],
+  ['mint', 'Brisa menta gradiente - menta e azul'],
+  ['solar', 'Solar gradiente - creme e laranja']
+];
+const clientThemeIds = new Set(clientThemeOptions.map(([id]) => id));
+$('theme-select').innerHTML = clientThemeOptions.map(([id, label]) => `<option value="${id}">${label}</option>`).join('');
 $('noise-select').innerHTML = '<option value="standard">Padrão do navegador</option><option value="rnnoise">RNNoise · ML local</option><option value="strong">Redução forte</option><option value="enhanced">Adaptativa aprimorada</option><option value="studio">Estúdio — eco e ruído máximo</option><option value="off">Desativada</option>';
 const noiseModeNote = $('noise-select').closest('label')?.querySelector('small');
 if (noiseModeNote) { noiseModeNote.id = 'noise-mode-note'; noiseModeNote.textContent = 'RNNoise roda localmente dentro do VoiceUP. Os demais modos usam os filtros disponíveis no sistema.'; }
@@ -332,8 +376,8 @@ function renderFormattedText(value) {
   html = html.replace(/(^|[^_])_([^_\n][^_\n]*?)_(?!_)/g, '$1<em>$2</em>');
   return html.replace(/\uE000(\d+)\uE001/g, (_match, index) => tokens[Number(index)] || '');
 }
-function renderMessageContent(value) {
-  const text = String(value || '').slice(0, 500); const matcher = /https?:\/\/[^\s<>]+/gi; let cursor = 0; let html = ''; let match;
+function renderMessageContent(value, maxLength = 500) {
+  const text = String(value || '').slice(0, Math.min(10000, Math.max(500, Number(maxLength) || 500))); const matcher = /https?:\/\/[^\s<>]+/gi; let cursor = 0; let html = ''; let match;
   while ((match = matcher.exec(text))) {
     html += renderFormattedText(text.slice(cursor, match.index)); const parsed = messageUrlParts(match[0]);
     if (!parsed) { html += escapeHtml(match[0]); cursor = matcher.lastIndex; continue; }
@@ -355,8 +399,9 @@ function addMessage(text, author, mine = false, color = mine ? myColor : peer?.c
   const id = String(details.id || ''); const createdAt = Number(details.createdAt) || Date.now(); const editedAt = Number(details.editedAt) || 0;
   const date = messageDate(createdAt); const photo = details.avatar || (mine ? myAvatar : peer?.avatar || '');
   m.className = `message${mine ? ' mine' : ''}${details.mentioned ? ' mentioned-me' : ''}`; if (id) m.dataset.messageId = id;
-  m.innerHTML = `${messageAvatar(author, color, photo)}<div class="message-body"><div class="message-meta"><span class="author" style="color:${safeColor(color)}">${escapeHtml(author)}</span><time datetime="${new Date(createdAt).toISOString()}" title="${escapeHtml(date.full)}">${escapeHtml(date.short)}</time><span class="message-edited${editedAt ? '' : ' hidden'}">editada</span>${details.mentioned ? '<span class="message-mention-label" title="Você foi mencionado nesta mensagem">@ menção</span>' : ''}</div><div class="message-text">${renderMessageContent(text)}</div></div>${mine && id ? `<button type="button" class="message-edit" title="Editar mensagem" aria-label="Editar mensagem"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16-.8 4.8L8 20l11-11-4-4zM13.5 6.5l4 4"/></svg></button>` : ''}`;
-  m.querySelector('.message-text').dataset.rawText = String(text || '').slice(0, 500);
+  const textLimit = details.pluginId ? 10000 : 500;
+  m.innerHTML = `${messageAvatar(author, color, photo)}<div class="message-body"><div class="message-meta"><span class="author" style="color:${safeColor(color)}">${escapeHtml(author)}</span><time datetime="${new Date(createdAt).toISOString()}" title="${escapeHtml(date.full)}">${escapeHtml(date.short)}</time><span class="message-edited${editedAt ? '' : ' hidden'}">editada</span>${details.mentioned ? '<span class="message-mention-label" title="Você foi mencionado nesta mensagem">@ menção</span>' : ''}</div><div class="message-text">${renderMessageContent(text, textLimit)}</div></div>${mine && id ? `<button type="button" class="message-edit" title="Editar mensagem" aria-label="Editar mensagem"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16-.8 4.8L8 20l11-11-4-4zM13.5 6.5l4 4"/></svg></button>` : ''}`;
+  m.querySelector('.message-text').dataset.rawText = String(text || '').slice(0, textLimit);
   m.querySelector('.message-edit')?.addEventListener('click', () => startMessageEdit(m));
   $('messages').append(m); void hydrateMessageEmbeds(m); $('messages').scrollTop = $('messages').scrollHeight;
 }
@@ -482,13 +527,13 @@ function selectTextChannel(channel) {
   refreshChatUnreadIndicator();
   saveProfile();
 }
-function receiveHostedText({ from, authorClientId, text, textChannel, name, color, avatar: photo, messageId: id, createdAt, editedAt, mentions, mentionClientIds }) {
+function receiveHostedText({ from, authorClientId, text, textChannel, name, color, avatar: photo, messageId: id, createdAt, editedAt, mentions, mentionClientIds, pluginId }) {
   const channel = ROOM_CHANNELS.text.includes(textChannel) ? textChannel : 'geral';
   const mine = from === hostedSocket?.id || Boolean(authorClientId && authorClientId === clientId);
   const mentionIds = Array.isArray(mentions) ? mentions.map(String) : [];
   const stableMentionIds = Array.isArray(mentionClientIds) ? mentionClientIds.map(String) : [];
   const mentioned = !mine && isMentionedForCurrentUser(mentionIds, stableMentionIds);
-  const message = { id: String(id || ''), text, name, color, avatar: photo || serverMembers.get(from)?.avatar || '', createdAt: Number(createdAt) || Date.now(), editedAt: Number(editedAt) || 0, mentions: mentionIds, mentionClientIds: stableMentionIds, mentioned, mine, authorClientId: authorClientId || '' };
+  const message = { id: String(id || ''), text: String(text || '').slice(0, pluginId ? 10000 : 500), name, color, avatar: photo || serverMembers.get(from)?.avatar || '', createdAt: Number(createdAt) || Date.now(), editedAt: Number(editedAt) || 0, mentions: mentionIds, mentionClientIds: stableMentionIds, mentioned, mine, authorClientId: authorClientId || '', pluginId: pluginId || '' };
   if (!channelMessages.has(channel)) channelMessages.set(channel, []);
   channelMessages.get(channel).push(message);
   registerIncomingChannelActivity(channel, mentioned);
@@ -636,7 +681,7 @@ function readProfilePhoto(file) {
   };
   reader.readAsDataURL(file);
 }
-function applyTheme(nextTheme) { theme = ['aurora', 'midnight', 'ember', 'forest', 'ocean', 'grape', 'cyber', 'crimson', 'obsidian', 'cobalt', 'amethyst', 'volcano', 'snow', 'lilac', 'sage', 'peach', 'mist', 'lagoon', 'sunset'].includes(nextTheme) ? nextTheme : 'aurora'; document.body.classList.remove('theme-midnight', 'theme-ember', 'theme-forest', 'theme-ocean', 'theme-grape', 'theme-cyber', 'theme-crimson', 'theme-obsidian', 'theme-cobalt', 'theme-amethyst', 'theme-volcano', 'theme-snow', 'theme-lilac', 'theme-sage', 'theme-peach', 'theme-mist', 'theme-lagoon', 'theme-sunset'); if (theme !== 'aurora') document.body.classList.add(`theme-${theme}`); }
+function applyTheme(nextTheme) { theme = clientThemeIds.has(nextTheme) ? nextTheme : 'aurora'; document.body.classList.remove(...clientThemeOptions.filter(([id]) => id !== 'aurora').map(([id]) => `theme-${id}`)); if (theme !== 'aurora') document.body.classList.add(`theme-${theme}`); }
 const UI_TEXT = {
   'pt-BR': { settings: 'Configurações', leave: 'Sair da chamada', mode: 'MODO ATUAL', message: 'Escreva uma mensagem', join: 'Entrar na sala', copy: 'Copiar código', pair: 'Conectar agora', share: 'Iniciar transmissão de tela', camera: 'Ligar câmera' },
   'en-US': { settings: 'Settings', leave: 'Leave call', mode: 'CURRENT MODE', message: 'Write a message', join: 'Join room', copy: 'Copy code', pair: 'Connect now', share: 'Start screen share', camera: 'Turn on camera' },
@@ -1514,6 +1559,8 @@ function updateHardwareAccelerationUi(restartRequired = hardwareAccelerationEnab
   const supported = Boolean(window.voiceupDesktop?.windowSettings);
   setting.classList.toggle('hidden', !supported);
   if (!supported) return;
+  $('start-with-windows-setting')?.classList.toggle('hidden', !startWithWindowsSupported);
+  if ($('start-with-windows-toggle')) $('start-with-windows-toggle').checked = startWithWindowsEnabled;
   $('hardware-acceleration-toggle').checked = hardwareAccelerationEnabled;
   $('fullscreen-game-capture-setting')?.classList.toggle('hidden', !fullscreenGameCaptureCompatibilitySupported);
   if ($('fullscreen-game-capture-toggle')) $('fullscreen-game-capture-toggle').checked = fullscreenGameCaptureCompatibilityEnabled;
@@ -1535,6 +1582,7 @@ async function commitSettings({ close = false, notify = false } = {}) {
   const previouslyLoadedExternalMedia = externalMediaAutoLoad;
   externalMediaAutoLoad = $('external-media-toggle').checked;
   clientCloseBehavior = $('client-close-behavior').value;
+  startWithWindowsEnabled = $('start-with-windows-toggle')?.checked === true;
   hardwareAccelerationEnabled = $('hardware-acceleration-toggle')?.checked !== false;
   fullscreenGameCaptureCompatibilityEnabled = $('fullscreen-game-capture-toggle')?.checked !== false;
   applyLanguage(language);
@@ -1542,10 +1590,12 @@ async function commitSettings({ close = false, notify = false } = {}) {
   await applyAudioOutput();
   if (!$('app').classList.contains('hidden') && (oldInput !== audioInputId || oldNoiseMode !== noiseMode)) await replaceMicrophone();
   if (cameraStream && oldCameraInput !== cameraInputId) await startCamera();
-  const savedWindowSettings = await window.voiceupDesktop?.saveWindowSettings?.({ closeBehavior: clientCloseBehavior, hardwareAcceleration: hardwareAccelerationEnabled, fullscreenGameCaptureCompatibility: fullscreenGameCaptureCompatibilityEnabled });
+  const savedWindowSettings = await window.voiceupDesktop?.saveWindowSettings?.({ closeBehavior: clientCloseBehavior, startWithWindows: startWithWindowsEnabled, hardwareAcceleration: hardwareAccelerationEnabled, fullscreenGameCaptureCompatibility: fullscreenGameCaptureCompatibilityEnabled });
   if (savedWindowSettings) {
     clientCloseBehavior = savedWindowSettings.closeBehavior || clientCloseBehavior;
     $('client-close-behavior').value = clientCloseBehavior;
+    startWithWindowsEnabled = savedWindowSettings.startWithWindows === true;
+    startWithWindowsSupported = savedWindowSettings.startWithWindowsSupported === true;
     hardwareAccelerationEnabled = savedWindowSettings.hardwareAcceleration !== false;
     hardwareAccelerationAtStartup = savedWindowSettings.hardwareAccelerationActive !== false;
     fullscreenGameCaptureCompatibilityEnabled = savedWindowSettings.fullscreenGameCaptureCompatibility !== false;
@@ -1562,12 +1612,15 @@ async function commitSettings({ close = false, notify = false } = {}) {
 }
 window.voiceupCommitSettings = commitSettings;
 $('settings-save').addEventListener('click', () => void commitSettings({ close: false, notify: false }));
+$('start-with-windows-toggle')?.addEventListener('change', () => void commitSettings({ close: false, notify: false }));
 $('hardware-acceleration-toggle')?.addEventListener('change', () => void commitSettings({ close: false, notify: false }));
 $('fullscreen-game-capture-toggle')?.addEventListener('change', () => void commitSettings({ close: false, notify: false }));
 $('refresh-devices').addEventListener('click', refreshDeviceControls);
 applyLanguage(language);
 window.voiceupDesktop?.windowSettings?.().then((settings) => {
   clientCloseBehavior = settings.closeBehavior || clientCloseBehavior;
+  startWithWindowsEnabled = settings.startWithWindows === true;
+  startWithWindowsSupported = settings.startWithWindowsSupported === true;
   hardwareAccelerationEnabled = settings.hardwareAcceleration !== false;
   hardwareAccelerationAtStartup = settings.hardwareAccelerationActive !== false;
   fullscreenGameCaptureCompatibilityEnabled = settings.fullscreenGameCaptureCompatibility !== false;

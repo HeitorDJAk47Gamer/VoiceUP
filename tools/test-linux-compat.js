@@ -2,13 +2,18 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseLinuxRouteTable } = require('../network-access');
-const { assetFor, preferredLinuxExtension, updateAvailability } = require('../update-helper');
+const { assetFor, isNewer, preferredLinuxExtension, updateAvailability } = require('../update-helper');
 
 const workspace = path.resolve(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(workspace, file), 'utf8');
 const packageJson = JSON.parse(read('package.json'));
 
-assert.equal(packageJson.version, require('../public/release-history').version, 'Linux deve usar a mesma versão estável e histórico das outras edições.');
+const stableHistoryVersion = require('../public/release-history').version;
+if (/-beta\.\d+$/.test(packageJson.version)) {
+  assert.equal(isNewer(packageJson.version, stableHistoryVersion), true, 'A beta Linux deve ser posterior ao histórico estável preservado.');
+} else {
+  assert.equal(packageJson.version, stableHistoryVersion, 'Linux estável deve usar a mesma versão e histórico das outras edições.');
+}
 assert.equal(packageJson.desktopName, 'com.voiceup.app.desktop');
 assert.match(packageJson.scripts['dist:linux'], /--linux AppImage deb --x64/);
 assert.match(packageJson.scripts['dist:linux:server'], /--linux AppImage deb --x64/);

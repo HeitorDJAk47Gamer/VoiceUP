@@ -24,7 +24,7 @@ import { signIdentityChallenge } from './identity-utils.js';
 const LOBBY_CHANNEL = '__lobby__';
 const DEFAULT_HOST = 'https://voiceup.shardweb.app';
 const DEFAULT_ROOM = 'ggk';
-const MOBILE_VERSION = '1.2.0';
+const MOBILE_VERSION = '1.2.1';
 const CLIENT_ID = getOrCreateClientId();
 const CLIENT_PLATFORM = Capacitor.getPlatform() === 'android' ? 'android' : 'selfweb';
 const COLORS = ['#55d6c9', '#7d8cff', '#f06aa6', '#ffbd57', '#6ee786', '#a970ff'];
@@ -58,6 +58,69 @@ function formatTime(value) {
   } catch {
     return '';
   }
+}
+
+function UiIcon({ name }) {
+  let content;
+  switch (name) {
+    case 'mic':
+      content = <><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6" /></>;
+      break;
+    case 'mic-off':
+      content = <><path d="m4 4 16 16M9 9v2a3 3 0 0 0 4.8 2.4M15 10V6a3 3 0 0 0-5.8-1M18.5 11a6.5 6.5 0 0 1-1.1 3.6M6.5 14.5A6.5 6.5 0 0 0 12 17.5V21M9 21h6" /></>;
+      break;
+    case 'volume':
+      content = <><path d="M11 5 6 9H3v6h3l5 4V5Z" /><path d="M15 8.5a5 5 0 0 1 0 7M18 6a9 9 0 0 1 0 12" /></>;
+      break;
+    case 'volume-off':
+      content = <><path d="M11 5 6 9H3v6h3l5 4V5Z" /><path d="m16 10 5 5m0-5-5 5" /></>;
+      break;
+    case 'camera':
+      content = <><rect x="3" y="6" width="13" height="12" rx="2" /><path d="m16 10 5-3v10l-5-3Z" /></>;
+      break;
+    case 'camera-off':
+      content = <><path d="M10.7 6H14a2 2 0 0 1 2 2v2l5-3v8.5M16 16v0a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8c0-.6.2-1.1.6-1.4M4 4l16 16" /></>;
+      break;
+    case 'switch-camera':
+      content = <><path d="M20 9V6h-3l-2-2H9L7 6H4v13h16v-5" /><circle cx="12" cy="12" r="3" /><path d="m16 2 3 3-3 3" /></>;
+      break;
+    case 'screen':
+      content = <><rect x="3" y="4" width="18" height="14" rx="2" /><path d="M8 22h8M12 18v4" /></>;
+      break;
+    case 'settings':
+      content = <><path d="M4 6h10M18 6h2M4 12h3M11 12h9M4 18h8M16 18h4" /><circle cx="16" cy="6" r="2" /><circle cx="9" cy="12" r="2" /><circle cx="14" cy="18" r="2" /></>;
+      break;
+    case 'hangup':
+      content = <path d="M7.6 10.2a15 15 0 0 0 6.2 6.2l2-2a1.7 1.7 0 0 1 1.8-.4l3 1.2a1.7 1.7 0 0 1 1.1 1.6v2.4a1.8 1.8 0 0 1-1.9 1.8A19 19 0 0 1 3 4.2 1.8 1.8 0 0 1 4.8 2.3h2.4a1.7 1.7 0 0 1 1.6 1.1l1.2 3a1.7 1.7 0 0 1-.4 1.8l-2 2Z" />;
+      break;
+    case 'reply':
+      content = <><path d="m9 17-5-5 5-5" /><path d="M20 18v-2a4 4 0 0 0-4-4H4" /></>;
+      break;
+    case 'smile':
+      content = <><circle cx="12" cy="12" r="9" /><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9h.01M15 9h.01" /></>;
+      break;
+    case 'pin':
+      content = <><path d="M8 3h8l-1 6 3 3v2H6v-2l3-3-1-6Z" /><path d="M12 14v7" /></>;
+      break;
+    case 'unpin':
+      content = <><path d="M9.5 3H16l-1 6 3 3v2h-4M10 14H6v-2l2-2M12 16v5M4 4l16 16" /></>;
+      break;
+    case 'edit':
+      content = <><path d="M4 20h4l11-11-4-4L4 16v4Z" /><path d="m13.5 6.5 4 4" /></>;
+      break;
+    case 'trash':
+      content = <><path d="M4 7h16M9 3h6l1 4M7 7l1 14h8l1-14M10 11v6M14 11v6" /></>;
+      break;
+    case 'logout':
+      content = <><path d="m10 17 5-5-5-5M15 12H3" /><path d="M13 4h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6" /></>;
+      break;
+    case 'close':
+      content = <path d="m6 6 12 12M18 6 6 18" />;
+      break;
+    default:
+      content = <circle cx="12" cy="12" r="8" />;
+  }
+  return <svg className="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{content}</svg>;
 }
 
 function Avatar({ name, color, avatar, size = 'normal', status, platform }) {
@@ -174,12 +237,12 @@ function MessageItem({ message, mine, mentioned, memberNames, externalMediaAutoL
       <p><InlineMessage text={message.text} memberNames={memberNames} /></p>
       <MessageEmbed text={message.text} autoLoad={externalMediaAutoLoad} />
       {reactions.length > 0 && <div className="message-reactions">{reactions.map(([emoji, actors]) => <button type="button" key={emoji} onClick={() => onReact(message.messageId, emoji)}><span>{emoji}</span><b>{actors.length}</b></button>)}</div>}
-      <div className="message-actions">
-        <button type="button" onClick={() => onReply(message)}>Responder</button>
-        <button type="button" onClick={() => onToggleReactions(message.messageId)}>Reagir</button>
-        <button type="button" onClick={() => onTogglePin(message)}>{message.pinned ? 'Desafixar' : 'Fixar'}</button>
-        {mine && <button type="button" onClick={() => onEdit(message)}>Editar</button>}
-        {mine && <button type="button" className="danger-text" onClick={() => onDelete(message)}>Apagar</button>}
+      <div className="message-actions" role="toolbar" aria-label={`Ferramentas da mensagem de ${message.name || 'participante'}`}>
+        <button type="button" title="Responder" aria-label={`Responder a ${message.name || 'participante'}`} onClick={() => onReply(message)}><UiIcon name="reply" /></button>
+        <button type="button" title="Reagir" aria-label="Adicionar reação" aria-expanded={reactionOpen} onClick={() => onToggleReactions(message.messageId)}><UiIcon name="smile" /></button>
+        <button type="button" title={message.pinned ? 'Desafixar' : 'Fixar'} aria-label={message.pinned ? 'Desafixar mensagem' : 'Fixar mensagem'} aria-pressed={Boolean(message.pinned)} onClick={() => onTogglePin(message)}><UiIcon name={message.pinned ? 'unpin' : 'pin'} /></button>
+        {mine && <button type="button" title="Editar" aria-label="Editar mensagem" onClick={() => onEdit(message)}><UiIcon name="edit" /></button>}
+        {mine && <button type="button" className="danger-text" title="Apagar" aria-label="Apagar mensagem" onClick={() => onDelete(message)}><UiIcon name="trash" /></button>}
       </div>
       {reactionOpen && <div className="reaction-picker" role="group" aria-label="Escolher reação">{REACTION_CHOICES.map((emoji) => <button type="button" key={emoji} onClick={() => onReact(message.messageId, emoji)}>{emoji}</button>)}</div>}
     </div>
@@ -219,7 +282,7 @@ function SettingsPanel({ preferences, setPreferences, connectionState, latency, 
       <section className="settings-card app-about">
         <h2>Sobre</h2>
         <p><span>Versão mobile</span><strong>{MOBILE_VERSION}</strong></p>
-        <details className="release-history"><summary>Novidades da 1.2.0</summary><p>{window.voiceupReleaseHistory.locales['pt-BR'].subtitle}</p><ul>{window.voiceupReleaseHistory.locales['pt-BR'].notes.map(note => <li key={note}>{note}</li>)}</ul></details>
+        <details className="release-history"><summary>Novidades da {MOBILE_VERSION}</summary><p>{window.voiceupReleaseHistory.locales['pt-BR'].subtitle}</p><ul>{window.voiceupReleaseHistory.locales['pt-BR'].notes.map(note => <li key={note}>{note}</li>)}</ul></details>
         <p><span>Compatibilidade</span><strong>VoiceUP 1.1.2+</strong></p>
         <p><span>Conexão</span><strong>{connectionState === 'connected' ? `Online${latency !== null ? ` · ${latency} ms` : ''}` : connectionState === 'reconnecting' ? 'Reconectando' : 'Offline'}</strong></p>
       </section>
@@ -1316,7 +1379,7 @@ function App() {
           const settings = roomLayout.textChannelSettings?.find((item) => item.name === channel) || {};
           return <button key={channel} className={`channel-button ${activeText === channel && tab === 'chat' ? 'active' : ''}`} aria-pressed={activeText === channel && tab === 'chat'} onClick={() => selectTextChannel(channel)}><span className="channel-icon" aria-hidden="true">#</span><span className="channel-name">{channel}</span>{settings.readOnly && <span title="Somente leitura">🔒</span>}{count > 0 && <b className="unread-badge">{count}</b>}</button>;
         })}</section>
-        <section className="my-card"><Avatar name={profile.name} color={profile.color} avatar={profile.avatar} status={profile.status} platform={CLIENT_PLATFORM} /><div><strong>{profile.name}</strong><label className="presence-select"><select value={profile.status} onChange={(event) => { const status = event.target.value; setProfile((current) => ({ ...current, status })); profileRef.current = { ...profileRef.current, status }; socketRef.current?.emit('presence-update', { status, platform: CLIENT_PLATFORM }); for (const peer of peersRef.current.values()) { if (peer.channel?.readyState === 'open') peer.channel.send(JSON.stringify({ type: 'presence-state', status, platform: CLIENT_PLATFORM })); } }}><option value="online">Online</option><option value="idle">Ausente</option><option value="dnd">Não perturbe</option></select></label></div><button title="Sair do servidor" onClick={disconnectServer}>↪</button></section>
+        <section className="my-card"><Avatar name={profile.name} color={profile.color} avatar={profile.avatar} status={profile.status} platform={CLIENT_PLATFORM} /><div><strong>{profile.name}</strong><label className="presence-select"><select value={profile.status} onChange={(event) => { const status = event.target.value; setProfile((current) => ({ ...current, status })); profileRef.current = { ...profileRef.current, status }; socketRef.current?.emit('presence-update', { status, platform: CLIENT_PLATFORM }); for (const peer of peersRef.current.values()) { if (peer.channel?.readyState === 'open') peer.channel.send(JSON.stringify({ type: 'presence-state', status, platform: CLIENT_PLATFORM })); } }}><option value="online">Online</option><option value="idle">Ausente</option><option value="dnd">Não perturbe</option></select></label></div><button type="button" className="server-exit-button" title="Sair do servidor" aria-label="Sair do servidor" onClick={disconnectServer}><UiIcon name="logout" /><span>Sair</span></button></section>
       </aside>
       <section className="main-panel">
         {(tab === 'call' || tab === 'channels') && <section className="call-view">
@@ -1327,15 +1390,23 @@ function App() {
               {!cameraOn && !screenOn && <article className="member-tile local"><Avatar name={profile.name} color={profile.color} avatar={profile.avatar} size="hero" status={profile.status} platform={CLIENT_PLATFORM} /><strong>{profile.name} (você)</strong><small>{micMuted ? 'Microfone desligado' : `Canal ${activeVoice}${activeCallDuration ? ` · ${activeCallDuration}` : ''}`}</small></article>}
               {activeRemotePeers.map((peer) => <section className="peer-media" key={peer.id}>{peer.screenStream && <MediaTile stream={peer.screenStream} label={`${peer.name} · tela`} badge="Ao vivo" />}{peer.cameraStream && <MediaTile stream={peer.cameraStream} label={`${peer.name} · câmera`} />}{!peer.cameraStream && !peer.screenStream && <article className="member-tile"><Avatar name={peer.name} color={peer.color} avatar={peer.avatar} size="hero" status={members.find((member) => member.id === peer.id)?.status || peer.status || 'online'} platform={members.find((member) => member.id === peer.id)?.platform || peer.platform} /><strong>{peer.name}</strong><MediaBadges state={{ camera: peer.cameraActive, screen: peer.screenActive }} /><small>{peer.audioState?.micMuted ? 'Microfone desligado' : 'Conectado ao canal'}</small></article>}</section>)}
             </div>
-            <div className="call-controls"><button className={micMuted ? 'danger' : ''} onClick={toggleMic} title="Mutar ou desmutar microfone">{micMuted ? 'Mic desligado' : 'Microfone'}</button><button className={preferences.outputMuted ? 'danger' : ''} onClick={toggleOutput}>{preferences.outputMuted ? 'Som desligado' : 'Áudio'}</button><button className={cameraOn ? 'on' : ''} onClick={toggleCamera}>Câmera</button>{cameraOn && <button onClick={switchCamera}>Trocar câmera</button>}<button className={screenOn ? 'on' : ''} onClick={toggleScreen}>Tela</button><button onClick={() => setTab('settings')}>Ajustes</button><button className="hangup" onClick={leaveVoice}>Sair da call</button></div>
+            <div className="call-controls" role="toolbar" aria-label="Controles da chamada">
+              <button type="button" className={micMuted ? 'danger' : ''} aria-label={micMuted ? 'Ativar microfone' : 'Desativar microfone'} aria-pressed={micMuted} title={micMuted ? 'Ativar microfone' : 'Desativar microfone'} onClick={toggleMic}><UiIcon name={micMuted ? 'mic-off' : 'mic'} /></button>
+              <button type="button" className={preferences.outputMuted ? 'danger' : ''} aria-label={preferences.outputMuted ? 'Ativar áudio' : 'Desativar áudio'} aria-pressed={Boolean(preferences.outputMuted)} title={preferences.outputMuted ? 'Ativar áudio' : 'Desativar áudio'} onClick={toggleOutput}><UiIcon name={preferences.outputMuted ? 'volume-off' : 'volume'} /></button>
+              <button type="button" className={cameraOn ? 'on' : ''} aria-label={cameraOn ? 'Desativar câmera' : 'Ativar câmera'} aria-pressed={cameraOn} title={cameraOn ? 'Desativar câmera' : 'Ativar câmera'} onClick={toggleCamera}><UiIcon name={cameraOn ? 'camera' : 'camera-off'} /></button>
+              {cameraOn && <button type="button" aria-label="Trocar câmera" title="Trocar câmera" onClick={switchCamera}><UiIcon name="switch-camera" /></button>}
+              <button type="button" className={screenOn ? 'on' : ''} aria-label={screenOn ? 'Parar compartilhamento de tela' : 'Compartilhar tela'} aria-pressed={screenOn} title={screenOn ? 'Parar compartilhamento de tela' : 'Compartilhar tela'} onClick={toggleScreen}><UiIcon name="screen" /></button>
+              <button type="button" aria-label="Abrir ajustes" title="Ajustes" onClick={() => setTab('settings')}><UiIcon name="settings" /></button>
+              <button type="button" className="hangup" aria-label="Sair da call" title="Sair da call" onClick={leaveVoice}><UiIcon name="hangup" /></button>
+            </div>
           </>}
         </section>}
         {tab === 'chat' && <section className="chat-view">
-          <header><div><p className="eyebrow">CANAL DE TEXTO</p><h1># {activeText}</h1>{activeTextSettings.slowModeSeconds > 0 && <small>Modo lento · {activeTextSettings.slowModeSeconds}s</small>}</div><button className={showPinned ? 'active' : ''} onClick={() => setShowPinned((value) => !value)}>📌 {pinnedMessages.length}</button></header>
-          {showPinned && <aside className="pinned-drawer"><header><strong>Mensagens fixadas</strong><button onClick={() => setShowPinned(false)}>×</button></header>{pinnedMessages.length === 0 ? <p>Nenhuma mensagem fixada neste canal.</p> : pinnedMessages.map((message) => <article key={message.messageId}><strong>{message.name}</strong><p>{message.text}</p></article>)}</aside>}
+          <header><div><p className="eyebrow">CANAL DE TEXTO</p><h1># {activeText}</h1>{activeTextSettings.slowModeSeconds > 0 && <small>Modo lento · {activeTextSettings.slowModeSeconds}s</small>}</div><button type="button" className={`pinned-toggle ${showPinned ? 'active' : ''}`} aria-label={`${pinnedMessages.length} mensagem(ns) fixada(s)`} aria-expanded={showPinned} title="Mensagens fixadas" onClick={() => setShowPinned((value) => !value)}><UiIcon name="pin" /><span>{pinnedMessages.length}</span></button></header>
+          {showPinned && <aside className="pinned-drawer"><header><strong>Mensagens fixadas</strong><button type="button" aria-label="Fechar mensagens fixadas" title="Fechar" onClick={() => setShowPinned(false)}><UiIcon name="close" /></button></header>{pinnedMessages.length === 0 ? <p>Nenhuma mensagem fixada neste canal.</p> : pinnedMessages.map((message) => <article key={message.messageId}><strong>{message.name}</strong><p>{message.text}</p></article>)}</aside>}
           <div className="messages">{activeMessages.length === 0 && <p className="empty-messages">Nenhuma mensagem em #{activeText} ainda.</p>}{activeMessages.map((message) => <MessageItem key={message.messageId} message={message} mine={isOwnMessage(message, socketRef.current?.id, CLIENT_ID)} mentioned={isMessageMention(message, socketRef.current?.id, CLIENT_ID)} memberNames={memberNames} externalMediaAutoLoad={preferences.externalMediaAutoLoad === true} reactionOpen={reactionTarget === message.messageId} onReply={beginReply} onEdit={beginEdit} onDelete={deleteMessage} onReact={reactToMessage} onToggleReactions={(id) => setReactionTarget((current) => current === id ? '' : id)} onTogglePin={togglePinnedMessage} />)}<div ref={messagesEndRef} /></div>
           {typingNames.length > 0 && <p className="typing-indicator">{typingNames.slice(0, 2).join(' e ')} {typingNames.length > 1 ? 'estão digitando…' : 'está digitando…'}</p>}
-          {(replyingTo || editingMessage) && <div className="composer-context"><div><small>{editingMessage ? 'Editando mensagem' : `Respondendo a ${replyingTo.name}`}</small><p>{editingMessage?.text || replyingTo?.text}</p></div><button type="button" onClick={cancelComposerAction}>×</button></div>}
+          {(replyingTo || editingMessage) && <div className="composer-context"><div><small>{editingMessage ? 'Editando mensagem' : `Respondendo a ${replyingTo.name}`}</small><p>{editingMessage?.text || replyingTo?.text}</p></div><button type="button" aria-label="Cancelar" title="Cancelar" onClick={cancelComposerAction}><UiIcon name="close" /></button></div>}
           <form className="chat-form" onSubmit={sendMessage}><input value={draft} onChange={(event) => changeDraft(event.target.value)} placeholder={activeTextSettings.readOnly ? 'Este canal é somente leitura' : `Mensagem em #${activeText}`} maxLength="500" disabled={Boolean(activeTextSettings.readOnly)} /><button type="submit" disabled={Boolean(activeTextSettings.readOnly) || !draft.trim()}>{editingMessage ? 'Salvar' : 'Enviar'}</button></form>
         </section>}
         {tab === 'members' && <section className="members-mobile"><h1>Membros</h1><MemberList members={membersById} selfId={socketRef.current?.id} activeVoice={activeVoice} peerAudio={peerAudio} onPeerAudio={updatePeerAudio} onMention={mentionMember} /></section>}

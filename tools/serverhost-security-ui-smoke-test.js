@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const http = require('node:http');
+const path = require('node:path');
 const WebSocket = require('ws');
 
 const port = Number(process.argv[2] || 9476);
@@ -29,6 +31,8 @@ async function waitForTarget() {
 }
 
 (async () => {
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'host', 'renderer.js'), 'utf8');
+  assert.match(renderer, /\$\('ping'\)\.innerHTML\s*=\s*pingBars\(stats\.averagePing\);/, 'O painel voltou a esconder o valor numérico do ping.');
   const target = await waitForTarget();
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   const pending = new Map();
@@ -71,6 +75,13 @@ async function waitForTarget() {
       initialPublicAccess: initial.publicAccess,
       withoutConfirmation: withoutConfirmation.publicAccess,
       publicToggle: document.querySelector('#public-access-automatic')?.checked,
+      chatPolicy: initial.chatPolicy,
+      chatPolicyControls: {
+        cooldown: Boolean(document.querySelector('#chat-cooldown-seconds')),
+        pluginLimit: Boolean(document.querySelector('#plugin-message-max-length')),
+        punishmentList: Boolean(document.querySelector('#punishment-list')),
+        pingValue: Boolean(document.querySelector('#ping .ping-bars em'))
+      },
       hardware: { initial: { hardwareAcceleration: initial.hardwareAcceleration, restartRequired: initial.restartRequired }, disabledHardwareSettings: { hardwareAcceleration: disabledHardwareSettings.hardwareAcceleration, restartRequired: disabledHardwareSettings.restartRequired }, hardwareRestartVisible, restoredHardwareSettings: { hardwareAcceleration: restoredHardwareSettings.hardwareAcceleration, restartRequired: restoredHardwareSettings.restartRequired } },
       plugins: stats.plugins?.map((plugin) => ({ id: plugin.id, requiresApproval: plugin.requiresApproval })),
       csp: document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content || ''
@@ -84,6 +95,9 @@ async function waitForTarget() {
   assert.equal(result.initialPublicAccess.automatic, false, 'UPnP iniciou habilitado.');
   assert.equal(result.withoutConfirmation.automatic, false, 'O IPC habilitou UPnP sem confirmação explícita.');
   assert.equal(result.publicToggle, false, 'O controle visual de UPnP iniciou habilitado.');
+  assert.ok(Number.isInteger(result.chatPolicy.cooldownSeconds) && result.chatPolicy.cooldownSeconds >= 0, 'O cooldown configurável não foi carregado.');
+  assert.ok(Number.isInteger(result.chatPolicy.pluginMessageMaxLength) && result.chatPolicy.pluginMessageMaxLength >= 500, 'O limite de mensagens dos plugins não foi carregado.');
+  assert.deepEqual(result.chatPolicyControls, { cooldown: true, pluginLimit: true, punishmentList: true, pingValue: true });
   assert.equal(result.hardware.initial.hardwareAcceleration, true, 'A aceleração do ServerHost precisa iniciar ligada.');
   assert.equal(result.hardware.disabledHardwareSettings.hardwareAcceleration, false, 'O controle do ServerHost não salvou a opção desligada.');
   assert.equal(result.hardware.disabledHardwareSettings.restartRequired, true, 'O ServerHost não indicou o reinício necessário.');

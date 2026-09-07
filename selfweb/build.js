@@ -64,10 +64,13 @@ function build() {
   const out = path.join(__dirname, 'dist');
   fs.mkdirSync(out, {recursive:true});
   fs.writeFileSync(path.join(out, 'VoiceUP-SelfWeb.html'), html);
-  // Stage the identical standalone file for the website; this never deploys it.
-  const siteDownloads = path.join(root, 'deploy/shardcloud/downloads');
-  fs.mkdirSync(siteDownloads, {recursive:true});
-  fs.writeFileSync(path.join(siteDownloads, 'VoiceUP-SelfWeb.html'), html);
+  // A release pode pedir a preparação explícita do download do site. Builds
+  // locais não devem substituir silenciosamente um artefato já assinado.
+  if (process.env.VOICEUP_STAGE_CLOUD_DOWNLOAD === '1') {
+    const siteDownloads = path.join(root, 'deploy/shardcloud/downloads');
+    fs.mkdirSync(siteDownloads, {recursive:true});
+    fs.writeFileSync(path.join(siteDownloads, 'VoiceUP-SelfWeb.html'), html);
+  }
   fs.copyFileSync(path.join(__dirname, 'README.md'), path.join(out, 'LEIA-ME.md'));
   fs.writeFileSync(path.join(out, 'THIRD-PARTY-LICENSES.txt'), licenses);
   const result = {version:manifest.version, sourceVersion, file:'VoiceUP-SelfWeb.html', bytes:Buffer.byteLength(html), sha256:sha256(html), inputs};

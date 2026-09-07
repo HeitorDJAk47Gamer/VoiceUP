@@ -61,7 +61,7 @@ const MUSIC_BOT_ENTRY = path.join(__dirname, 'host', 'music-bot.html');
 const APP_ICON = path.join(__dirname, 'assets', process.platform === 'win32' ? 'voiceup-icon.ico' : 'voiceup-logo-2d.png');
 const musicBotToken = crypto.randomBytes(32).toString('hex');
 const defaultHostCloseBehavior = () => process.platform === 'linux' ? 'ask' : 'tray';
-let hostSettings = { closeBehavior: defaultHostCloseBehavior(), theme: 'ocean', serverIcon: '', hardwareAcceleration: true, rooms: [], storage: { retentionDays: 30, maxPerRoom: 300 }, publicAccess: { automatic: false, consentVersion: 0 }, cluster: { enabled: false, role: 'primary', primaryUrl: '', publicUrl: '', secret: '', nodeId: '', capacity: 100, weight: 1, failover: true, smartDistribution: true, heartbeatMs: 3000 } };
+let hostSettings = { closeBehavior: defaultHostCloseBehavior(), theme: 'ocean', serverIcon: '', hardwareAcceleration: true, rooms: [], storage: { retentionDays: 30, maxPerRoom: 300 }, chatPolicy: { cooldownSeconds: 0, pluginMessageMaxLength: 2000 }, publicAccess: { automatic: false, consentVersion: 0 }, cluster: { enabled: false, role: 'primary', primaryUrl: '', publicUrl: '', secret: '', nodeId: '', capacity: 100, weight: 1, failover: true, smartDistribution: true, heartbeatMs: 3000 } };
 
 function normalizeServerIcon(value) {
   const icon = String(value || '');
@@ -111,7 +111,7 @@ function migrateLegacyServerProfile() {
     path.join(app.getPath('appData'), 'voiceup'),
     path.join(app.getPath('appData'), 'VoiceUP')
   ];
-  const serverFiles = ['server-settings.json', 'bans.json', 'chat-history.json', 'bug-reports.json', 'plugin-settings.json'];
+  const serverFiles = ['server-settings.json', 'bans.json', 'chat-punishments.json', 'chat-history.json', 'bug-reports.json', 'plugin-settings.json'];
   for (const legacy of legacyFolders) {
     if (!fs.existsSync(legacy) || path.resolve(legacy).toLowerCase() === path.resolve(target).toLowerCase()) continue;
     const hasServerData = serverFiles.some((name) => fs.existsSync(path.join(legacy, name)))
@@ -140,6 +140,9 @@ function loadSettings() {
   hostSettings.storage = { retentionDays: 30, maxPerRoom: 300, ...(hostSettings.storage || {}) };
   hostSettings.storage.retentionDays = Math.max(0, Math.min(3650, Math.round(Number(hostSettings.storage.retentionDays) || 0)));
   hostSettings.storage.maxPerRoom = Math.max(50, Math.min(5000, Math.round(Number(hostSettings.storage.maxPerRoom) || 300)));
+  hostSettings.chatPolicy = { cooldownSeconds: 0, pluginMessageMaxLength: 2000, ...(hostSettings.chatPolicy || {}) };
+  hostSettings.chatPolicy.cooldownSeconds = Math.max(0, Math.min(21600, Math.round(Number(hostSettings.chatPolicy.cooldownSeconds) || 0)));
+  hostSettings.chatPolicy.pluginMessageMaxLength = Math.max(500, Math.min(10000, Math.round(Number(hostSettings.chatPolicy.pluginMessageMaxLength) || 2000)));
   hostSettings.publicAccess = { automatic: false, consentVersion: 0, ...(hostSettings.publicAccess || {}) };
   hostSettings.publicAccess.consentVersion = Number(hostSettings.publicAccess.consentVersion) >= 1 ? 1 : 0;
   hostSettings.publicAccess.automatic = hostSettings.publicAccess.consentVersion >= 1 && hostSettings.publicAccess.automatic === true;
@@ -173,6 +176,7 @@ function categorizedStorage() {
     chats: fileSize(path.join(userData, 'chat-history.json')),
     reports: fileSize(path.join(userData, 'bug-reports.json')),
     bans: fileSize(path.join(userData, 'bans.json')),
+    punishments: fileSize(path.join(userData, 'chat-punishments.json')),
     settings: fileSize(settingsPath()) + fileSize(pluginStateFile),
     plugins: directorySize(pluginFolder),
     music: directorySize(musicFolder)
@@ -296,10 +300,13 @@ async function startHostedSignaling() {
     musicDirectory: musicFolder,
     pluginStateFile,
     bansFile: path.join(app.getPath('userData'), 'bans.json'),
+    punishmentsFile: path.join(app.getPath('userData'), 'chat-punishments.json'),
     historyFile: path.join(app.getPath('userData'), 'chat-history.json'),
     reportsFile: path.join(app.getPath('userData'), 'bug-reports.json'),
     chatRetentionDays: hostSettings.storage.retentionDays,
     chatMaxPerRoom: hostSettings.storage.maxPerRoom,
+    chatCooldownSeconds: () => hostSettings.chatPolicy.cooldownSeconds,
+    pluginMessageMaxLength: () => hostSettings.chatPolicy.pluginMessageMaxLength,
     version: app.getVersion(),
     serverIcon: hostSettings.serverIcon,
     roomLayouts: hostSettings.rooms,
@@ -374,16 +381,18 @@ secureHostHandle('server-stats', () => {
   const memory = process.memoryUsage();
   const memoryMb = Math.round(memory.rss / 1024 / 1024);
   signaling?.updateNodeMetrics?.({ cpuPercent, memoryMb, memoryPressure: os.totalmem() > 0 ? memory.rss / os.totalmem() : 0 });
-  const stats = signaling?.getStats?.() || { uptimeSeconds: 0, participants: 0, rooms: 0, averagePing: null, events: { signals: 0 }, logs: [{ time: new Date().toLocaleTimeString('pt-BR'), level: 'info', message: 'Servidor desligado.' }], plugins: [], pluginErrors: [], members: [], bans: [], reports: [] };
+  const stats = signaling?.getStats?.() || { uptimeSeconds: 0, participants: 0, rooms: 0, averagePing: null, events: { signals: 0 }, logs: [{ time: new Date().toLocaleTimeString('pt-BR'), level: 'info', message: 'Servidor desligado.' }], plugins: [], pluginErrors: [], members: [], bans: [], chatPunishments: [], reports: [] };
   return { ...stats, storage: { ...(stats.storage || {}), ...categorizedStorage(), policy: hostSettings.storage }, publicAccess: publicAccessState, port: hostPort, online: Boolean(signaling), cpuPercent, memoryMb, heapMb: Math.round(memory.heapUsed / 1024 / 1024) };
 });
 secureHostHandle('server:moderate', (_event, { action, id, durationMinutes, reason } = {}) => {
   if (!signaling) return { ok: false, message: 'O servidor está desligado.' };
   if (action === 'kick') return signaling.kick(id);
   if (action === 'ban') return signaling.ban(id, { durationMinutes, reason });
+  if (action === 'punish') return signaling.punishChat(id, { durationMinutes, reason });
   return { ok: false, message: 'Ação inválida.' };
 });
 secureHostHandle('server:unban', (_event, clientId) => signaling ? signaling.unban(clientId) : { ok: false, message: 'O servidor está desligado.' });
+secureHostHandle('server:unpunish', (_event, clientId) => signaling ? signaling.unpunishChat(clientId) : { ok: false, message: 'O servidor está desligado.' });
 secureHostHandle('server:control', async (_event, action) => {
   try {
     if (action === 'start') return await startHostedSignaling();
@@ -470,6 +479,10 @@ secureHostHandle('server:save-settings', (_event, next = {}) => {
     hostSettings.storage.retentionDays = Math.max(0, Math.min(3650, Math.round(Number(next.storage.retentionDays) || 0)));
     hostSettings.storage.maxPerRoom = Math.max(50, Math.min(5000, Math.round(Number(next.storage.maxPerRoom) || 300)));
     signaling?.configureChatStorage?.(hostSettings.storage);
+  }
+  if (next.chatPolicy && typeof next.chatPolicy === 'object') {
+    hostSettings.chatPolicy.cooldownSeconds = Math.max(0, Math.min(21600, Math.round(Number(next.chatPolicy.cooldownSeconds) || 0)));
+    hostSettings.chatPolicy.pluginMessageMaxLength = Math.max(500, Math.min(10000, Math.round(Number(next.chatPolicy.pluginMessageMaxLength) || 2000)));
   }
   if (next.publicAccess && typeof next.publicAccess === 'object') {
     const nextAutomatic = next.publicAccess.automatic === true && next.publicAccess.confirmed === true;

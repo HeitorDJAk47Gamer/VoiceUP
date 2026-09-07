@@ -149,7 +149,12 @@ function startSignalingServer(port = 3000, options = {}) {
     perMessageDeflate: false
   });
   const startedAt = Date.now();
-  const events = { connections: 0, signals: 0, joins: 0, messages: 0, kicks: 0, bans: 0 };
+  const runtimeOption = (value) => typeof value === 'function' ? value() : value;
+  const chatPolicy = () => ({
+    cooldownSeconds: Math.round(clampNumber(runtimeOption(options.chatCooldownSeconds), 0, 21600, 0)),
+    pluginMessageMaxLength: Math.round(clampNumber(runtimeOption(options.pluginMessageMaxLength), 500, 10000, 2000))
+  });
+  const events = { connections: 0, signals: 0, joins: 0, messages: 0, kicks: 0, bans: 0, chatPunishments: 0 };
   const normalizeServerIcon = (value) => {
     const icon = String(value || '');
     return /^data:image\/(?:png|jpeg|webp);base64,/i.test(icon) && icon.length <= 60000 ? icon : '';
@@ -236,6 +241,8 @@ function startSignalingServer(port = 3000, options = {}) {
   let localNodeMetrics = { cpuPercent: 0, memoryMb: 0, updatedAt: Date.now() };
   let applyFederatedBans = () => {};
   let currentBanSnapshot = () => [];
+  let applyFederatedPunishments = () => {};
+  let currentPunishmentSnapshot = () => [];
   let configuredRooms = new Map();
   const setConfiguredRooms = (rooms = []) => {
     configuredRooms = new Map((Array.isArray(rooms) ? rooms : []).map((room) => {
@@ -504,15 +511,15 @@ function startSignalingServer(port = 3000, options = {}) {
     setConfiguredRooms(rooms);
     for (const socket of localClientSockets()) publishRoomLayout(socket);
   };
-  const sendFederationSnapshot = () => sendFederation('federation:snapshot', { hostId: clusterNodeId, members: localClientSockets().map(exportMember), roomLayouts: [...configuredRooms.values()], bans: currentBanSnapshot(), node: localNodeSnapshot(), telemetry: [...webrtcTelemetry.values()] });
+  const sendFederationSnapshot = () => sendFederation('federation:snapshot', { hostId: clusterNodeId, members: localClientSockets().map(exportMember), roomLayouts: [...configuredRooms.values()], bans: currentBanSnapshot(), chatPunishments: currentPunishmentSnapshot(), node: localNodeSnapshot(), telemetry: [...webrtcTelemetry.values()] });
   const bindFederationTransport = (transport, remoteHint = '') => {
     federationTransport = transport; federationRemoteHost = safeIdentity(remoteHint);
-    transport.on('federation:snapshot', ({ hostId, members, roomLayouts, bans, node, telemetry } = {}) => {
+    transport.on('federation:snapshot', ({ hostId, members, roomLayouts, bans, chatPunishments, node, telemetry } = {}) => {
       const remoteHost = safeIdentity(hostId); if (!remoteHost || remoteHost === clusterNodeId) return;
       clearRemoteHost(remoteHost); federationRemoteHost = remoteHost;
       (Array.isArray(members) ? members : []).forEach(upsertRemoteMember);
       applyFederatedLayouts(roomLayouts);
-      if (clusterRole === 'secondary') applyFederatedBans(bans);
+      if (clusterRole === 'secondary') { applyFederatedBans(bans); applyFederatedPunishments(chatPunishments); }
       remoteNodeMetrics = node && typeof node === 'object' ? { ...node, nodeId: safeIdentity(node.nodeId || remoteHost), receivedAt: Date.now() } : remoteNodeMetrics;
       remoteTelemetry.clear();
       (Array.isArray(telemetry) ? telemetry : []).forEach((packet) => { const normalized = normalizeRemoteTelemetryPacket(packet, remoteHost); if (normalized) remoteTelemetry.set(normalized.socketId, normalized); });
@@ -523,6 +530,11 @@ function startSignalingServer(port = 3000, options = {}) {
       if (safeIdentity(hostId) === clusterNodeId) return;
       applyFederatedBans(bans);
       if (clusterRole === 'primary') sendFederation('federation:bans', { hostId: clusterNodeId, bans: currentBanSnapshot() });
+    });
+    transport.on('federation:chat-punishments', ({ hostId, chatPunishments } = {}) => {
+      if (safeIdentity(hostId) === clusterNodeId) return;
+      applyFederatedPunishments(chatPunishments);
+      if (clusterRole === 'primary') sendFederation('federation:chat-punishments', { hostId: clusterNodeId, chatPunishments: currentPunishmentSnapshot() });
     });
     transport.on('federation:heartbeat', ({ hostId, node } = {}) => {
       const remoteHost = safeIdentity(hostId); if (!remoteHost || remoteHost === clusterNodeId || !node || typeof node !== 'object') return;
@@ -621,6 +633,59 @@ function startSignalingServer(port = 3000, options = {}) {
     banned.clear(); next.forEach((entry, clientId) => banned.set(clientId, entry)); persistBans();
   };
   pruneExpiredBans({ broadcast: false });
+  const punishmentsFile = options.punishmentsFile || '';
+  const chatPunishments = new Map();
+  const normalizePunishment = (entry = {}) => {
+    const clientId = safeIdentity(entry.clientId); if (!clientId) return null;
+    const expiresAt = entry.expiresAt || null; const expiry = expiresAt ? Date.parse(expiresAt) : NaN;
+    if (Number.isFinite(expiry) && expiry <= Date.now()) return null;
+    return { clientId, name: String(entry.name || 'Visitante').slice(0, 24), reason: String(entry.reason || '').slice(0, 160), punishedAt: entry.punishedAt || new Date().toISOString(), expiresAt };
+  };
+  try {
+    const saved = JSON.parse(fs.readFileSync(punishmentsFile, 'utf8'));
+    if (Array.isArray(saved)) saved.slice(0, 10000).forEach((entry) => { const normalized = normalizePunishment(entry); if (normalized) chatPunishments.set(normalized.clientId, normalized); });
+  } catch { /* first start or invalid optional file */ }
+  const persistChatPunishments = () => {
+    if (!punishmentsFile) return;
+    try { fs.mkdirSync(path.dirname(punishmentsFile), { recursive: true }); fs.writeFileSync(punishmentsFile, JSON.stringify([...chatPunishments.values()], null, 2), 'utf8'); } catch (error) { addLog('error', `Não foi possível salvar castigos: ${error.message}`); }
+  };
+  const pruneExpiredPunishments = ({ broadcast = true } = {}) => {
+    const now = Date.now(); let changed = false;
+    for (const [clientId, entry] of chatPunishments) {
+      const expiry = entry.expiresAt ? Date.parse(entry.expiresAt) : NaN;
+      if (Number.isFinite(expiry) && expiry <= now) { chatPunishments.delete(clientId); changed = true; addLog('punishment', `Castigo de ${entry.name || 'participante'} expirou`); }
+    }
+    if (changed) {
+      persistChatPunishments();
+      if (broadcast) sendFederation('federation:chat-punishments', { hostId: clusterNodeId, chatPunishments: [...chatPunishments.values()] });
+    }
+    return changed;
+  };
+  const punishmentMessage = (entry) => {
+    const expiry = entry?.expiresAt ? ` até ${new Date(entry.expiresAt).toLocaleString('pt-BR')}` : '';
+    return `Você está de castigo e não pode enviar mensagens${expiry}.${entry?.reason ? ` Motivo: ${entry.reason}` : ''}`;
+  };
+  const notifyPunishedClients = (entry) => {
+    if (!entry?.clientId) return;
+    localClientSockets().filter((socket) => !socket.data.isBot && socket.data.clientId === entry.clientId).forEach((socket) => socket.emit('app-error', punishmentMessage(entry)));
+  };
+  currentPunishmentSnapshot = () => { pruneExpiredPunishments({ broadcast: false }); return [...chatPunishments.values()]; };
+  applyFederatedPunishments = (values) => {
+    if (!Array.isArray(values)) return;
+    const next = new Map();
+    values.slice(0, 10000).forEach((entry) => { const normalized = normalizePunishment(entry); if (normalized) next.set(normalized.clientId, normalized); });
+    chatPunishments.clear(); next.forEach((entry, clientId) => chatPunishments.set(clientId, entry)); persistChatPunishments();
+    next.forEach(notifyPunishedClients);
+  };
+  pruneExpiredPunishments({ broadcast: false });
+  const canWriteChat = (socket) => {
+    if (socket.data.isBot) return true;
+    pruneExpiredPunishments();
+    const entry = chatPunishments.get(safeIdentity(socket.data.clientId));
+    if (!entry) return true;
+    socket.emit('app-error', punishmentMessage(entry));
+    return false;
+  };
   const publishNotice = (room, text) => {
     if (!room) return;
     const packet = { from: `server:${clusterNodeId}`, messageId: `server-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, createdAt: Date.now(), text, textChannel: 'geral', name: 'VoiceUP Server', color: '#ff8b72', reactions: {}, pinned: false };
@@ -634,6 +699,7 @@ function startSignalingServer(port = 3000, options = {}) {
     trustedPluginHashes: options.trustedPluginHashes || [],
     trustedPluginDirectories: options.trustedPluginDirectories || [],
     stateFile: options.pluginStateFile || '',
+    maxSystemMessageLength: () => chatPolicy().pluginMessageMaxLength,
     addLog,
     emitSystemMessage: ({ room, textChannel, text, name, color, avatar, pluginId }) => {
       if (!room || !text) return;
@@ -772,6 +838,7 @@ function startSignalingServer(port = 3000, options = {}) {
       const peers = voiceChannelName === LOBBY_CHANNEL ? [] : peersIn(voiceRoom).filter((peer) => peer.id !== socket.id && !staleSessionIds.has(peer.id));
       socket.emit('room-joined', { roomId: room, voiceChannel: voiceChannelName, peers, limits: publicRoomLayout(layout).limits, serverProfile: { ...serverProfile } });
       socket.emit('chat-history', { messages: historyFor(room) });
+      const activePunishment = chatPunishments.get(identity); if (!isBot && activePunishment) socket.emit('app-error', punishmentMessage(activePunishment));
       publishClusterRoute(socket);
       if (voiceChannelName !== LOBBY_CHANNEL) socket.to(voiceRoom).emit('peer-joined', { id: socket.id, name: safeName, color: safeColor, avatar: safeAvatar, clientId: identity, status: socket.data.status, platform: safeClientPlatform(socket.data.platform) });
       broadcastPresence(serverRoom);
@@ -832,6 +899,7 @@ function startSignalingServer(port = 3000, options = {}) {
     });
     socket.on('text-message', ({ text, textChannel, messageId, createdAt, mentions, reply } = {}) => {
       if (!socket.data.serverRoom || !consumeRate(socket, 'text', 30, 10000)) return;
+      if (!canWriteChat(socket)) return;
       const safeText = String(text || '').trim().slice(0, 500); if (!safeText) return;
       events.messages += 1;
       const layout = roomLayout(socket.data.room);
@@ -841,8 +909,9 @@ function startSignalingServer(port = 3000, options = {}) {
       if (textSettings.readOnly && !socket.data.isBot) return socket.emit('app-error', 'Este canal de texto é somente leitura.');
       socket.data.lastTextAt ||= new Map();
       const lastTextAt = Number(socket.data.lastTextAt.get(safeTextChannel) || 0);
-      const waitMs = Math.max(0, Number(textSettings.slowModeSeconds || 0) * 1000 - (Date.now() - lastTextAt));
-      if (!socket.data.isBot && waitMs > 0) return socket.emit('app-error', `Modo lento ativo. Aguarde ${Math.ceil(waitMs / 1000)}s.`);
+      const cooldownSeconds = Math.max(chatPolicy().cooldownSeconds, Number(textSettings.slowModeSeconds || 0));
+      const waitMs = Math.max(0, cooldownSeconds * 1000 - (Date.now() - lastTextAt));
+      if (!socket.data.isBot && waitMs > 0) return socket.emit('app-error', `Cooldown ativo. Aguarde ${Math.ceil(waitMs / 1000)}s.`);
       socket.data.lastTextAt.set(safeTextChannel, Date.now());
       const id = safeMessageId(messageId, socket.id); const sentAt = Number.isFinite(Number(createdAt)) ? Number(createdAt) : Date.now();
       const safeMentionIds = safeMentions(socket.data.serverRoom, mentions);
@@ -858,6 +927,7 @@ function startSignalingServer(port = 3000, options = {}) {
     });
     socket.on('edit-message', ({ messageId, text, textChannel, mentions } = {}) => {
       if (!socket.data.serverRoom || !consumeRate(socket, 'message-edit', 24, 10000)) return;
+      if (!canWriteChat(socket)) return;
       const id = String(messageId || ''); const stored = messageById(socket.data.room, id); const known = socket.data.chatMessages?.get(id); const safeText = String(text || '').trim().slice(0, 500);
       const ownsMessage = stored && (stored.authorIdentityFingerprint ? stored.authorIdentityFingerprint === socket.data.identityFingerprint : (stored.authorClientId && socket.data.clientId ? stored.authorClientId === socket.data.clientId : stored.from === socket.id));
       if ((!known && !ownsMessage) || !safeText || safeChannel(textChannel, 'geral') !== (stored?.textChannel || known?.textChannel)) return socket.emit('app-error', 'Não foi possível editar essa mensagem.');
@@ -973,8 +1043,33 @@ function startSignalingServer(port = 3000, options = {}) {
     return disconnectMember(id, 'banned', `${targetName} foi banido pelo Server Host.`, { message: userMessage, expiresAt, reason });
   };
   const unban = (clientId) => { const identity = safeIdentity(clientId); if (!identity || !banned.has(identity)) return { ok: false, message: 'Banimento não encontrado.' }; const name = banned.get(identity).name || 'Participante'; banned.delete(identity); persistBans(); sendFederation('federation:bans', { hostId: clusterNodeId, bans: [...banned.values()] }); addLog('ban', `${name} foi desbanido`); return { ok: true, message: `${name} pode entrar novamente.` }; };
+  const punishChat = (id, options = {}) => {
+    const targetId = String(id || ''); const socket = io.sockets.sockets.get(targetId); const remote = remoteMembers.get(targetId);
+    const identity = safeIdentity(socket?.data?.clientId || remote?.clientId);
+    if (!identity) return { ok: false, message: 'Este cliente é antigo e não pode receber castigo persistente. Peça para atualizar o Client.' };
+    const durationMinutes = Math.round(clampNumber(options.durationMinutes, 0, 525600, 60));
+    const reason = String(options.reason || '').trim().slice(0, 160);
+    const expiresAt = durationMinutes > 0 ? new Date(Date.now() + durationMinutes * 60000).toISOString() : null;
+    const targetName = socket?.data?.name || remote?.name || 'Visitante';
+    const entry = { clientId: identity, name: targetName, reason, punishedAt: new Date().toISOString(), expiresAt };
+    chatPunishments.set(identity, entry); persistChatPunishments(); events.chatPunishments += 1;
+    sendFederation('federation:chat-punishments', { hostId: clusterNodeId, chatPunishments: [...chatPunishments.values()] });
+    notifyPunishedClients(entry);
+    addLog('punishment', `${targetName} ficou sem enviar mensagens${expiresAt ? ` até ${new Date(expiresAt).toLocaleString('pt-BR')}` : ' permanentemente'}`);
+    return { ok: true, message: `${targetName} recebeu castigo no chat.` };
+  };
+  const unpunishChat = (clientId) => {
+    const identity = safeIdentity(clientId);
+    if (!identity || !chatPunishments.has(identity)) return { ok: false, message: 'Castigo não encontrado.' };
+    const name = chatPunishments.get(identity).name || 'Participante';
+    chatPunishments.delete(identity); persistChatPunishments();
+    sendFederation('federation:chat-punishments', { hostId: clusterNodeId, chatPunishments: [...chatPunishments.values()] });
+    addLog('punishment', `Castigo de ${name} foi removido`);
+    return { ok: true, message: `${name} pode enviar mensagens novamente.` };
+  };
   const getStats = () => {
     pruneExpiredBans();
+    pruneExpiredPunishments();
     const voiceRooms = new Set([...io.sockets.adapter.rooms.entries()].filter(([key, value]) => key.startsWith('voice:') && !key.endsWith(`:${LOBBY_CHANNEL}`) && value.size > 0).map(([key]) => key));
     for (const member of remoteMembers.values()) if (member.voiceChannel !== LOBBY_CHANNEL) voiceRooms.add(member.voiceRoom);
     const pings = localClientSockets().map((socket) => socket.data.ping).filter(Number.isFinite);
@@ -1000,7 +1095,7 @@ function startSignalingServer(port = 3000, options = {}) {
       { ...localNode, state: 'online', score: nodeLoadScore(localNode), local: true },
       ...(remoteNodeMetrics ? [{ ...remoteNodeMetrics, state: remoteHealthy ? 'online' : 'offline', score: nodeLoadScore(remoteNodeMetrics), local: false }] : [])
     ];
-    return { uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), participants: allMembers.length, localParticipants: localClientSockets().length, rooms: voiceRooms.size, maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, maxHumanVoiceChannelSize: MAX_HUMAN_VOICE_CHANNEL_SIZE, roomLayouts: [...configuredRooms.values()].map(publicRoomLayout), storage: { chat: chatStore.stats(), reports: reportStore.stats() }, reports: reportStore.list(20), cluster: { enabled: clusterEnabled, role: clusterRole, nodeId: clusterNodeId, state: federationState, remoteHost: federationRemoteHost, remoteParticipants: remoteMembers.size, failover: clusterFailover, smartDistribution: clusterSmartDistribution, publicUrl: clusterPublicUrl, capacity: clusterCapacity, weight: clusterWeight, nodes: clusterNodes, alternates: clusterAlternates() }, webrtc: { supportedClients: recentTelemetry.length, unsupportedClients: Math.max(0, allMembers.filter((member) => !member.isBot).length - recentTelemetry.length), connections, sampledAt: Date.now() }, bandwidth, averagePing: pings.length ? Math.round(pings.reduce((total, ping) => total + ping, 0) / pings.length) : null, events, logs, plugins: plugins.list(), pluginErrors: plugins.errors(), members: allMembers, bans: [...banned.values()] };
+    return { uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), participants: allMembers.length, localParticipants: localClientSockets().length, rooms: voiceRooms.size, maxVoiceChannelSize: MAX_VOICE_CHANNEL_SIZE, maxHumanVoiceChannelSize: MAX_HUMAN_VOICE_CHANNEL_SIZE, roomLayouts: [...configuredRooms.values()].map(publicRoomLayout), chatPolicy: chatPolicy(), storage: { chat: chatStore.stats(), reports: reportStore.stats() }, reports: reportStore.list(20), cluster: { enabled: clusterEnabled, role: clusterRole, nodeId: clusterNodeId, state: federationState, remoteHost: federationRemoteHost, remoteParticipants: remoteMembers.size, failover: clusterFailover, smartDistribution: clusterSmartDistribution, publicUrl: clusterPublicUrl, capacity: clusterCapacity, weight: clusterWeight, nodes: clusterNodes, alternates: clusterAlternates() }, webrtc: { supportedClients: recentTelemetry.length, unsupportedClients: Math.max(0, allMembers.filter((member) => !member.isBot).length - recentTelemetry.length), connections, sampledAt: Date.now() }, bandwidth, averagePing: pings.length ? Math.round(pings.reduce((total, ping) => total + ping, 0) / pings.length) : null, events, logs, plugins: plugins.list(), pluginErrors: plugins.errors(), members: allMembers, bans: [...banned.values()], chatPunishments: [...chatPunishments.values()] };
   };
   const cleanupMessages = (options = {}) => ({ ok: true, ...chatStore.cleanup(options), storage: chatStore.stats() });
   const configureChatStorage = (settings = {}) => ({ ok: true, ...chatStore.configure(settings), storage: chatStore.stats() });
@@ -1018,6 +1113,6 @@ function startSignalingServer(port = 3000, options = {}) {
   const closeFederation = () => { clearInterval(federationHeartbeatTimer); federationHeartbeatTimer = null; const transport = federationTransport; federationTransport = null; transport?.disconnect?.(); clearRemoteHost(''); remoteTelemetry.clear(); };
   if (clusterEnabled) federationHeartbeatTimer = setInterval(sendClusterHeartbeat, clusterHeartbeatMs);
   server.on('close', () => { closeFederation(); chatStore.close(); reportStore.close(); });
-  return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '0.0.0.0', () => { addLog('info', `Servidor iniciado na porta ${port}`); startSecondaryFederation(); resolve({ server, io, port, getStats, members, kick, ban, unban, updateRoomLayouts, updateNodeMetrics, updateServerProfile, redirectClientsForShutdown, closeFederation, cleanupMessages, configureChatStorage, listReports, clearReports, configurePlugin: plugins.configure, pluginAction: plugins.action }); }); });
+  return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '0.0.0.0', () => { addLog('info', `Servidor iniciado na porta ${port}`); startSecondaryFederation(); resolve({ server, io, port, getStats, members, kick, ban, unban, punishChat, unpunishChat, updateRoomLayouts, updateNodeMetrics, updateServerProfile, redirectClientsForShutdown, closeFederation, cleanupMessages, configureChatStorage, listReports, clearReports, configurePlugin: plugins.configure, pluginAction: plugins.action }); }); });
 }
 module.exports = { startSignalingServer, DEFAULT_ROOM_LAYOUT, normalizeRoomLayout, normalizeChannelSettings, hashRoomPassword, verifyRoomPassword };

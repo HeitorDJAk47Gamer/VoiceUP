@@ -35,7 +35,7 @@ const stop = (process) => new Promise((resolve) => {
   try {
     cloud = spawn(process.execPath, [path.join('deploy', 'shardcloud', 'index.js')], {
       cwd: workspace,
-      env: { ...process.env, PORT: String(port), VOICEUP_DATA_DIR: scratch, VOICEUP_ADMIN_TOKEN: adminToken, VOICEUP_CHAT_RETENTION_DAYS: '0' },
+      env: { ...process.env, PORT: String(port), VOICEUP_DATA_DIR: scratch, VOICEUP_ADMIN_TOKEN: adminToken, VOICEUP_CHAT_RETENTION_DAYS: '0', VOICEUP_CHAT_COOLDOWN_SECONDS: '2', VOICEUP_PLUGIN_MESSAGE_MAX_LENGTH: '1400' },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     await waitForCloud(cloud);
@@ -43,7 +43,7 @@ const stop = (process) => new Promise((resolve) => {
     const healthResponse = await fetch(`${url}/health`);
     const health = await healthResponse.json();
     assert.equal(healthResponse.headers.get('x-content-type-options'), 'nosniff');
-    for (const sensitive of ['storage', 'plugins', 'pluginErrors', 'pluginLogs', 'musicFiles', 'counters']) assert.equal(Object.hasOwn(health, sensitive), false, `/health do Cloud expôs ${sensitive}`);
+    for (const sensitive of ['storage', 'chatPolicy', 'plugins', 'pluginErrors', 'pluginLogs', 'musicFiles', 'counters']) assert.equal(Object.hasOwn(health, sensitive), false, `/health do Cloud expôs ${sensitive}`);
     const engineHandshake = `${url}/socket.io/?EIO=4&transport=polling&t=${Date.now()}`;
     const allowedOrigin = await fetch(engineHandshake, { headers: { Origin: 'http://localhost:3000' } });
     const blockedOrigin = await fetch(engineHandshake, { headers: { Origin: 'https://evil.example' } });
@@ -51,11 +51,22 @@ const stop = (process) => new Promise((resolve) => {
     assert.ok(blockedOrigin.status >= 400, 'O Cloud aceitou uma origem de navegador não autorizada.');
     assert.equal((await fetch(`${url}/admin/health`)).status, 401);
     assert.equal((await fetch(`${url}/admin/health`, { headers: { Authorization: 'Bearer incorreto' } })).status, 401);
+    assert.equal((await fetch(`${url}/api/admin/chat-policy`)).status, 401, 'A política do chat ficou pública.');
+    assert.equal((await fetch(`${url}/api/admin/chat-punishments`)).status, 401, 'A lista de castigos ficou pública.');
     const privateHealthResponse = await fetch(`${url}/admin/health`, { headers: { Authorization: `Bearer ${adminToken}` } });
     assert.equal(privateHealthResponse.status, 200);
     const privateHealth = await privateHealthResponse.json();
     assert.equal(privateHealth.storage.chat.retentionDays, 0, 'O valor 0 precisa desativar a limpeza por idade.');
+    assert.equal(privateHealth.storage.moderation.engine, 'sqlite');
+    assert.equal(privateHealth.chatPolicy.cooldownSeconds, 2);
+    assert.equal(privateHealth.chatPolicy.pluginMessageMaxLength, 1400);
     assert.ok(Array.isArray(privateHealth.plugins), 'O health privado precisa manter o diagnóstico de plugins para o operador.');
+    const adminHeaders = { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' };
+    const updatedPolicyResponse = await fetch(`${url}/api/admin/chat-policy`, { method: 'PUT', headers: adminHeaders, body: JSON.stringify({ cooldownSeconds: 3, pluginMessageMaxLength: 1800 }) });
+    assert.equal(updatedPolicyResponse.status, 200);
+    const updatedPolicy = await updatedPolicyResponse.json();
+    assert.equal(updatedPolicy.cooldownSeconds, 3);
+    assert.equal(updatedPolicy.pluginMessageMaxLength, 1800);
     first = io(url, { transports: ['websocket'], reconnection: false });
     await waitFor(first, 'connect');
     const firstJoin = waitFor(first, 'room-joined');
@@ -90,6 +101,23 @@ const stop = (process) => new Promise((resolve) => {
     if (membersWithOtherProfile.length !== 2 || !identities.has('same-profile') || !identities.has('separate-profile')) {
       throw new Error(`Contas distintas não coexistiram no Cloud: ${JSON.stringify(membersWithOtherProfile)}`);
     }
+    const punishmentNotice = waitFor(otherProfile, 'app-error');
+    const punishmentResponse = await fetch(`${url}/api/admin/chat-punishments`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ id: otherProfile.id, durationMinutes: 10, reason: 'smoke test' }) });
+    assert.equal(punishmentResponse.status, 201);
+    assert.match(await punishmentNotice, /castigo/i);
+    const punishmentBlock = waitFor(otherProfile, 'app-error');
+    otherProfile.emit('text-message', { text: 'não deve sair', textChannel: 'geral' });
+    assert.match(await punishmentBlock, /castigo/i);
+    const punishmentList = await (await fetch(`${url}/api/admin/chat-punishments`, { headers: adminHeaders })).json();
+    assert.equal(punishmentList.punishments.length, 1);
+    const removePunishment = await fetch(`${url}/api/admin/chat-punishments/separate-profile`, { method: 'DELETE', headers: adminHeaders });
+    assert.equal(removePunishment.status, 200);
+    const acceptedText = waitFor(replacement, 'text-message');
+    otherProfile.emit('text-message', { text: 'agora pode', textChannel: 'geral' });
+    assert.equal((await acceptedText).text, 'agora pode');
+    const cooldownBlock = waitFor(otherProfile, 'app-error');
+    otherProfile.emit('text-message', { text: 'rápido demais', textChannel: 'geral' });
+    assert.match(await cooldownBlock, /cooldown/i);
     reservedProfile = io(url, { transports: ['websocket'], reconnection: false });
     await waitFor(reservedProfile, 'connect');
     const reservedJoin = waitFor(reservedProfile, 'room-joined');
@@ -99,7 +127,7 @@ const stop = (process) => new Promise((resolve) => {
     reservedProfile.emit('request-room-presence');
     assert.equal((await reservedPresence).members[0]?.clientId, '', 'O Cloud aceitou um nome interno do JavaScript como identidade.');
 
-    console.log(JSON.stringify({ ok: true, cloud: true, publicHealth: true, privateHealth: true, originRestricted: true, retentionZero: true, singleSession: true, memberCount: members.length, separateProfiles: membersWithOtherProfile.length, reservedIdentityBlocked: true }));
+    console.log(JSON.stringify({ ok: true, cloud: true, publicHealth: true, privateHealth: true, originRestricted: true, retentionZero: true, chatPolicy: true, chatPunishment: true, cooldown: true, singleSession: true, memberCount: members.length, separateProfiles: membersWithOtherProfile.length, reservedIdentityBlocked: true }));
   } catch (error) {
     console.error(error.stack || error.message);
     process.exitCode = 1;

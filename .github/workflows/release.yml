@@ -42,6 +42,8 @@ jobs:
       CSC_IDENTITY_AUTO_DISCOVERY: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
@@ -60,6 +62,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:update-compat
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:legacy-updates
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:security
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:session-dedup
@@ -68,7 +72,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:hardware-acceleration
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:start-with-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:fullscreen-game-capture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/screen-audio-regression-test.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:live-audio
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:themes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:multi-live
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/test-platform-presence.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/room-controls-smoke-test.js
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tools/test-plugin-runtime.js
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -93,6 +111,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
@@ -104,6 +124,7 @@ jobs:
           node tools/validate-release-version.js
           node --test tools/test-release-integrity.js tools/test-release-history.js tools/test-release-publisher.js
           npm run test:update-compat
+          npm run test:legacy-updates
           npm run test:linux
           npm run test:hardware-acceleration
           npm run test:fullscreen-game-capture
@@ -168,6 +189,8 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
@@ -192,4 +215,6 @@ jobs:
           node tools/prepare-release-assets.js checksums release-assets
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tools/publish-release.js $version release-assets --publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/test-public-updates.js
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

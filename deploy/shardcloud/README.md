@@ -40,6 +40,10 @@ Opções:
 - VOICEUP_CHAT_RETENTION_DAYS=30: idade máxima das mensagens; use 0 para não
   apagar por idade;
 - VOICEUP_CHAT_MAX_PER_ROOM=300: máximo de mensagens por sala;
+- VOICEUP_CHAT_COOLDOWN_SECONDS=0: intervalo global entre mensagens de cada
+  pessoa, de 0 a 21600 segundos;
+- VOICEUP_PLUGIN_MESSAGE_MAX_LENGTH=2000: tamanho das respostas dos plugins,
+  entre 500 e 10000 caracteres; mensagens de usuários continuam limitadas a 500;
 - VOICEUP_MAX_HUMANS_PER_CALL=12: participantes humanos por call;
 - VOICEUP_MAX_MEMBERS_PER_CALL=15: total incluindo bots;
 - VOICEUP_MAX_IDENTITIES=50000: teto de identidades criptográficas persistidas
@@ -60,13 +64,23 @@ Público:
 
 Privado:
 
-- /admin/health e /api/admin/health: armazenamento, erros, logs e estado de
-  plugins.
+- /admin/health e /api/admin/health: armazenamento, membros, castigos, erros,
+  logs e estado de plugins;
+- GET/PUT /api/admin/chat-policy: consulta ou altera cooldown e limite de
+  mensagens dos plugins;
+- GET/POST /api/admin/chat-punishments: lista ou cria castigos de chat;
+- DELETE /api/admin/chat-punishments/CLIENT_ID: remove um castigo.
 
 Defina VOICEUP_ADMIN_TOKEN com um valor aleatório de pelo menos 24 caracteres.
 Sem token configurado, a rota privada responde como inexistente. Consulte-a com
 o cabeçalho Authorization: Bearer SEU_TOKEN. Nunca coloque o token na URL, em
 logs, prints ou issues.
+
+Os ajustes feitos pelo endpoint de política e os castigos ficam no mesmo
+`voiceup.db` do Cloud e sobrevivem a reinicializações. Para criar um castigo,
+envie JSON com `clientId` (ou o `id` da conexão visto no health privado),
+`durationMinutes` e `reason`. Duração 0 significa permanente. A pessoa permanece
+na call, mas não consegue enviar nem editar mensagens até o castigo terminar.
 
 ## Origens permitidas
 
@@ -110,13 +124,13 @@ O catálogo público está em /plugins. Downloads oficiais:
 - /downloads/plugins/musica
 - /downloads/plugins/xp-chat
 
-## Downloads 1.2.0 com integridade verificada
+## Downloads 1.2.1 com integridade verificada
 
 O catálogo `downloads/release-downloads.json` tem assinatura Ed25519 verificada
 com a chave pública incluída no código. Ele determina versão, nomes, destinos,
 tamanhos e SHA-256 dos downloads; não contém chaves privadas.
 
-- `/downloads/android`: APK 1.2.0, Android 6 ou superior, incluído no pacote Cloud.
+- `/downloads/android`: APK 1.2.1, Android 6 ou superior, incluído no pacote Cloud.
 - `/downloads/selfweb`: HTML leve incluído no pacote Cloud.
 - `/downloads/linux/client` e `/downloads/linux/server`: redirecionam para os
   AppImages x64 oficiais no GitHub. Os respectivos `.deb` estão na mesma Release.
@@ -135,10 +149,10 @@ Para montar uma publicação, primeiro assine localmente o catálogo dos artefat
 
 ```powershell
 node tools/stage-cloud-downloads.js release-assets
-powershell -ExecutionPolicy Bypass -File tools/package-cloud.ps1 -Version 1.2.0
+powershell -ExecutionPolicy Bypass -File tools/package-cloud.ps1 -Version 1.2.1
 ```
 
-O resultado `deploy/VoiceUP-Server-Cloud-1.2.0.zip` não inclui `.env`, bancos de
+O resultado `deploy/VoiceUP-Server-Cloud-1.2.1.zip` não inclui `.env`, bancos de
 usuários, logs ou `node_modules`. Publique os binários no GitHub antes de atualizar
 a hospedagem. Publicar o repositório privado ou gerar o ZIP, por si só, não prova
 que a instância ShardCloud foi reiniciada com a nova versão.

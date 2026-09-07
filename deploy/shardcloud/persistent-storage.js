@@ -45,6 +45,13 @@ function openDatabase(filePath) {
     );
     CREATE INDEX IF NOT EXISTS bug_reports_received
       ON bug_reports (received_at DESC);
+    CREATE TABLE IF NOT EXISTS chat_punishments (
+      client_id TEXT PRIMARY KEY,
+      expires_at INTEGER,
+      payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS chat_punishments_expiry
+      ON chat_punishments (expires_at);
   `);
   return { db, filePath: resolved };
 }
@@ -248,4 +255,61 @@ function createBugReportStore(options = {}) {
   };
 }
 
-module.exports = { createPersistentChatStore, createBugReportStore };
+function createChatModerationStore(options = {}) {
+  const { db, filePath } = openDatabase(options.filePath);
+  const clamp = (value, minimum, maximum, fallback) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.round(Math.min(maximum, Math.max(minimum, parsed))) : fallback;
+  };
+  const defaults = {
+    cooldownSeconds: clamp(options.cooldownSeconds, 0, 21600, 0),
+    pluginMessageMaxLength: clamp(options.pluginMessageMaxLength, 500, 10000, 2000)
+  };
+  let policy = { ...defaults };
+  try {
+    const saved = JSON.parse(metaValue(db, 'chat-policy-v1') || '{}');
+    policy = {
+      cooldownSeconds: clamp(saved.cooldownSeconds, 0, 21600, defaults.cooldownSeconds),
+      pluginMessageMaxLength: clamp(saved.pluginMessageMaxLength, 500, 10000, defaults.pluginMessageMaxLength)
+    };
+  } catch { /* usa as opções do ambiente */ }
+  const persistPolicy = () => setMeta(db, 'chat-policy-v1', JSON.stringify(policy));
+  persistPolicy();
+  const safeIdentity = (value) => {
+    const identity = String(value || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 80);
+    return ['__proto__', 'prototype', 'constructor'].includes(identity.toLowerCase()) ? '' : identity;
+  };
+  const normalize = (entry = {}) => {
+    const clientId = safeIdentity(entry.clientId); if (!clientId) return null;
+    const expiresAt = entry.expiresAt || null;
+    const expiry = expiresAt ? Date.parse(expiresAt) : NaN;
+    if (Number.isFinite(expiry) && expiry <= Date.now()) return null;
+    return { clientId, name: String(entry.name || 'Visitante').slice(0, 24), reason: String(entry.reason || '').slice(0, 160), punishedAt: entry.punishedAt || new Date().toISOString(), expiresAt };
+  };
+  const parse = (row) => { try { return normalize(JSON.parse(row?.payload || '')); } catch { return null; } };
+  const prune = () => Number(db.prepare('DELETE FROM chat_punishments WHERE expires_at IS NOT NULL AND expires_at <= ?').run(Date.now()).changes || 0);
+  const set = (input) => {
+    const entry = normalize(input); if (!entry) return null;
+    const expiresAt = entry.expiresAt ? Date.parse(entry.expiresAt) : null;
+    db.prepare('INSERT OR REPLACE INTO chat_punishments (client_id, expires_at, payload) VALUES (?, ?, ?)').run(entry.clientId, expiresAt, JSON.stringify(entry));
+    return entry;
+  };
+  const get = (clientId) => { prune(); return parse(db.prepare('SELECT payload FROM chat_punishments WHERE client_id = ?').get(safeIdentity(clientId))); };
+  const remove = (clientId) => Number(db.prepare('DELETE FROM chat_punishments WHERE client_id = ?').run(safeIdentity(clientId)).changes || 0) > 0;
+  const list = (limit = 1000) => { prune(); return db.prepare('SELECT payload FROM chat_punishments ORDER BY expires_at IS NULL DESC, expires_at ASC LIMIT ?').all(Math.max(1, Math.min(10000, Number(limit) || 1000))).map(parse).filter(Boolean); };
+  const configure = (next = {}) => {
+    policy = {
+      cooldownSeconds: clamp(next.cooldownSeconds, 0, 21600, policy.cooldownSeconds),
+      pluginMessageMaxLength: clamp(next.pluginMessageMaxLength, 500, 10000, policy.pluginMessageMaxLength)
+    };
+    persistPolicy();
+    return { ...policy };
+  };
+  const stats = () => { prune(); return { engine: 'sqlite', filePath, punishments: Number(db.prepare('SELECT COUNT(*) AS count FROM chat_punishments').get()?.count || 0), policy: { ...policy }, memoryCache: 'none' }; };
+  return {
+    policy: () => ({ ...policy }), configure, set, get, remove, list, prune, stats,
+    close: () => { try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); db.close(); } catch {} }
+  };
+}
+
+module.exports = { createPersistentChatStore, createBugReportStore, createChatModerationStore };

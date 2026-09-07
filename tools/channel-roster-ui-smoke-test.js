@@ -42,7 +42,7 @@ app.whenReady().then(async () => {
     const testNames = ['Zoe', 'Álvaro', 'Ana', 'Heitor', 'Bruno', 'Beatriz', 'Carlos', 'Davi', 'Eduardo', '<img src=x onerror=alert(1)>'];
     serverMembers.clear();
     testNames.forEach((name, index) => serverMembers.set(index === 3 ? hostedSocket.id : 'roster-' + index, {
-      id: index === 3 ? hostedSocket.id : 'roster-' + index, name, color: AVATAR_COLORS[index % AVATAR_COLORS.length], status: 'online',
+      id: index === 3 ? hostedSocket.id : 'roster-' + index, name, color: AVATAR_COLORS[index % AVATAR_COLORS.length], status: 'online', platform: ['windows', 'linux', 'android', 'selfweb'][index % 4],
       voiceChannel: index < 8 ? 'Geral' : 'Jogando', voiceupAudioState: { micMuted: index % 2 === 0, outputMuted: index % 3 === 0 }
     }));
     rememberCurrentMember();
@@ -76,6 +76,27 @@ app.whenReady().then(async () => {
   assert.equal(result.limit, '8/12');
   assert.match(result.timer, /^1:15:4[9]$|^1:15:5\d$/);
   assert.equal(result.emptyTimer, false);
+  const platformBadge = await evaluate(`(() => {
+    const row = document.querySelector('#members-clone [data-member-id="roster-0"]');
+    const wrapper = row.querySelector('.member-presence-avatar');
+    const avatar = wrapper.querySelector('.avatar').getBoundingClientRect();
+    const badge = wrapper.querySelector('.platform-presence').getBoundingClientRect();
+    const overlapWidth = Math.max(0, Math.min(avatar.right, badge.right) - Math.max(avatar.left, badge.left));
+    const overlapHeight = Math.max(0, Math.min(avatar.bottom, badge.bottom) - Math.max(avatar.top, badge.top));
+    return {
+      platform: wrapper.querySelector('.platform-presence').dataset.platform,
+      avatarWidth: avatar.width,
+      badgeWidth: badge.width,
+      padding: parseFloat(getComputedStyle(wrapper.querySelector('.platform-presence')).paddingLeft),
+      overlapRatio: (overlapWidth * overlapHeight) / (avatar.width * avatar.height),
+      protrudesRight: badge.right > avatar.right,
+      rowOverflow: row.scrollWidth > row.clientWidth + 2
+    };
+  })()`);
+  assert.equal(platformBadge.platform, 'windows');
+  assert.equal(platformBadge.padding, 1, 'Every compact platform badge must use only 1 px around the icon.');
+  assert.ok(platformBadge.badgeWidth <= 14.1 && platformBadge.badgeWidth < platformBadge.avatarWidth / 2, `Platform badge must remain smaller than half the avatar: ${JSON.stringify(platformBadge)}`);
+  assert.ok(platformBadge.overlapRatio < 0.16 && platformBadge.protrudesRight && !platformBadge.rowOverflow, `Platform badge must preserve the photo and row layout: ${JSON.stringify(platformBadge)}`);
   const stable = await evaluate(`(() => {
     const row = document.querySelector('#room-channels .channel-member');
     row.focus();
@@ -150,7 +171,7 @@ app.whenReady().then(async () => {
   mark('checking themes and responsive layout');
   await evaluate(`applyTheme('forest');`);
   await pause(120);
-  fs.writeFileSync(path.join(__dirname, 'channel-roster-beta13.png'), (await window.webContents.capturePage()).toPNG());
+  fs.writeFileSync(path.join(__dirname, 'platform-badges-beta5.png'), (await window.webContents.capturePage()).toPNG());
   for (const [width, height] of [[1920, 1080], [960, 720], [820, 640]]) {
     window.setContentSize(width, height);
     await pause(200);

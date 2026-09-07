@@ -67,3 +67,14 @@ test('every edition packages the same icons without external icon downloads', ()
   assert.match(mobile, /platform: CLIENT_PLATFORM/);
   assert.match(mobile, /Capacitor.getPlatform\(\) === 'android'/);
 });
+test('platform badges stay proportional to each avatar context', () => {
+  const css = fs.readFileSync(path.join(root, 'public/platform-presence.css'), 'utf8');
+  assert.match(css, /#members-clone \.member-presence-avatar > \.platform-presence \{[^}]*width: 14px;[^}]*height: 14px;/s);
+  assert.match(css, /\.channel-member-avatar > \.platform-presence \{[^}]*width: 12px;[^}]*height: 12px;/s);
+  assert.match(css, /#members-clone \.member-presence-avatar > \.platform-presence \{[^}]*padding: 1px;/s);
+  assert.match(css, /#presence-status-button[^}]*border: 1px solid/s);
+  assert.match(css, /#presence-status-button > \.platform-presence \{ width: 13px; height: 13px; \}/);
+  assert.match(css, /\.member-avatar > \.platform-presence \{[^}]*width: 15px;[^}]*height: 15px;/s);
+  assert.match(css, /\.member-avatar > \.platform-presence \{[^}]*padding: 1px;/s);
+  assert.match(css, /\.call-member-visual > \.platform-presence \{[^}]*right: -2px;[^}]*bottom: -2px;[^}]*width: clamp\(16px, 28%, 24px\);[^}]*padding: 1px;/s);
+});

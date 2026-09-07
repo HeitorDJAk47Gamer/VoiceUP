@@ -1,4 +1,4 @@
-param([switch]$Release)
+﻿param([switch]$Release)
 $ErrorActionPreference = 'Stop'
 
 $mobileDirectory = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -133,6 +133,10 @@ INSTALAÇÃO
 3. A atualização pode ser instalada sobre as betas móveis anteriores sem apagar o perfil.
 
 DESTAQUES
+- ícone e tela de abertura com a identidade visual do VoiceUP;
+- controles compactos por ícone para microfone, áudio, câmera, tela e ajustes;
+- ferramentas por ícone para responder, reagir, fixar, editar e apagar mensagens;
+- botão de saída do servidor maior e destacado em vermelho;
 - ícones Windows, Linux, Android e SelfWeb com as cores do status;
 - identidade protegida para os ServerHosts recentes;
 - participantes organizados por canal, duração da call e indicadores de câmera/live;
@@ -141,7 +145,7 @@ DESTAQUES
 - prioridade de fluidez configurável para compartilhamento de tela.
 
 OBSERVAÇÃO
-Este é um pacote de teste assinado com a chave de desenvolvimento do VoiceUP.
+Este é um pacote de teste assinado com a chave de desenvolvimento deste ambiente.
 Microfone, câmera, áudio e compartilhamento de tela precisam das permissões do Android.
 
 SHA-256

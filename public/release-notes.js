@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const installedVersion = String(window.voiceupVersion || '1.2.0');
+  const installedVersion = String(window.voiceupVersion || '1.2.1');
   const version = installedVersion;
   const seenKey = 'voiceup-release-notes-seen-v1';
   const locale = () => ['pt-BR', 'en-US', 'es-ES', 'fr-FR'].includes(document.documentElement.lang) ? document.documentElement.lang : 'pt-BR';

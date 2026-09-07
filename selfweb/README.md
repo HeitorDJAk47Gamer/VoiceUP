@@ -1,4 +1,4 @@
-# VoiceUP SelfWeb — 1.2.0
+# VoiceUP SelfWeb — 1.2.1
 
 Aplicativo web portátil do VoiceUP. Não precisa instalar o Client, Node.js ou
 Electron: abra **VoiceUP-SelfWeb.html** no Chrome ou Edge atualizado.
@@ -42,7 +42,7 @@ o servidor pode substituir a sessão anterior de propósito, sem duplicar você.
 
 ## Limites e privacidade
 
-- Esta é uma beta web, não um instalador. Nada muda no Desktop, APK ou servidor.
+- Esta é uma edição web portátil, não um instalador. Nada muda no Desktop, APK ou servidor ao abrir o arquivo.
 - O arquivo não se conecta a uma sala nem ativa dispositivos ao abrir. As
   conexões começam por uma ação do usuário; não há atualizador do Desktop.
 - Perfil, identidade e preferências ficam no armazenamento do navegador com
@@ -84,7 +84,7 @@ O preview é opcional e atende apenas em `127.0.0.1`. Ele não hospeda salas,
 não encaminha tráfego e não abre portas do roteador. O usuário final precisa
 somente do HTML. `dist/manifest.json` registra versão, tamanho, hashes e fontes.
 
-## Verificação da beta
+## Verificação da edição
 
 Há testes automatizados de empacotamento, CSP e isolamento/indisponibilidade do
 armazenamento. `npm run test:runtime` usa Chromium com sandbox, sem preload de
@@ -95,5 +95,5 @@ abrir. Consulte `runtime-test-results.json` para os resultados do pacote.
 
 Isso não substitui testar no seu Chrome/Edge com câmera, microfone e captura
 reais. Testes entre computadores em redes diferentes, navegadores móveis e
-performance de jogos não foram realizados nesta beta. A versão pública Cloud
+performance de jogos não foram realizados nesta edição. A versão pública Cloud
 não é alterada nem usada pelos testes.

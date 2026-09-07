@@ -59,7 +59,7 @@
     .content>header .eyebrow,.room-label,.participant-heading,.room-channels h3{color:var(--focus)!important}
     .call-status,.stage p,.room-channel:not(.active){color:var(--muted)!important}
     .room-channel.active{color:var(--focus)!important}
-    body.theme-snow .video-tile-label,body.theme-lilac .video-tile-label,body.theme-sage .video-tile-label,body.theme-peach .video-tile-label,body.theme-mist .video-tile-label{color:#f7fbff!important;background:rgba(10,18,30,.8)!important}
+    body.theme-snow .video-tile-label,body.theme-lilac .video-tile-label,body.theme-sage .video-tile-label,body.theme-peach .video-tile-label,body.theme-mist .video-tile-label,body.theme-lagoon .video-tile-label,body.theme-sunset .video-tile-label,body.theme-dawn .video-tile-label,body.theme-glacier .video-tile-label,body.theme-lavender .video-tile-label,body.theme-mint .video-tile-label,body.theme-solar .video-tile-label{color:#f7fbff!important;background:rgba(10,18,30,.8)!important}
     @media (max-width:700px){#video-theater-toolbar{left:12px;right:12px;justify-content:stretch}#video-theater-toolbar button{flex:1;min-width:0;font-size:11px}body.video-theater #local-video{right:12px!important;bottom:68px!important;max-width:38vw!important;max-height:22vh!important}}
   </style>`);
 

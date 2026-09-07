@@ -49,13 +49,17 @@ assert.equal(require(path.join(workspace, 'package.json')).devDependencies.elect
 
 const packagedWelcome = asar.extractFile(clientArchive, 'public/index.html').toString('utf8');
 const packagedWelcomeCss = asar.extractFile(clientArchive, 'public/beta.css').toString('utf8');
+const packagedPlatformCss = asar.extractFile(clientArchive, 'public/platform-presence.css').toString('utf8');
 const packagedWelcomeApp = asar.extractFile(clientArchive, 'public/app.js').toString('utf8');
 const packagedClientMain = asar.extractFile(clientArchive, 'electron-main.js').toString('utf8');
+const packagedWindowsStartup = asar.extractFile(clientArchive, 'windows-startup.js').toString('utf8');
 const packagedClientPreload = asar.extractFile(clientArchive, 'client-preload.js').toString('utf8');
 const packagedServerMain = asar.extractFile(serverArchive, 'server-host-main.js').toString('utf8');
 const packagedHostPreload = asar.extractFile(serverArchive, 'host-preload.js').toString('utf8');
 const packagedHostHtml = asar.extractFile(serverArchive, 'host/index.html').toString('utf8');
 const packagedBetaUi = asar.extractFile(clientArchive, 'public/beta-ui.js').toString('utf8');
+const packagedI18n = asar.extractFile(clientArchive, 'public/i18n.js').toString('utf8');
+const packagedProcessAudioWorklet = asar.extractFile(clientArchive, 'public/process-audio-worklet.js').toString('utf8');
 const packagedMediaStability = asar.extractFile(clientArchive, 'public/media-stability.js').toString('utf8');
 const packagedRnnoiseEngine = asar.extractFile(clientArchive, 'public/rnnoise-engine.js').toString('utf8');
 const packagedRnnoiseWorklet = asar.extractFile(clientArchive, path.join('public', 'vendor', 'rnnoise', 'rnnoise-worklet.js')).toString('utf8');
@@ -74,6 +78,10 @@ assert.ok(packagedWelcomeApp.lastIndexOf('refreshWelcomeProfile();') > packagedW
 assert.match(packagedBetaUi, /voiceup-saved-server-actions-layout/, 'O pacote Client precisa manter os botões Novo e Salvar atual compactos.');
 assert.match(packagedWelcomeApp, /externalMediaAutoLoad = storedProfile\.externalMediaAutoLoad === true/, 'Mídia externa precisa iniciar desativada.');
 assert.match(packagedWelcomeApp, /id="hardware-acceleration-toggle"/, 'O Client empacotado precisa oferecer aceleração de hardware configurável.');
+assert.match(packagedWelcomeApp, /id="start-with-windows-toggle"/, 'O Client empacotado precisa oferecer inicialização junto com o Windows.');
+assert.match(packagedClientMain, /startWithWindows:\s*false/, 'A inicialização junto com o Windows precisa vir desativada por padrão.');
+assert.match(packagedWindowsStartup, /setLoginItemSettings/, 'O pacote precisa incluir a integração nativa de inicialização do Windows.');
+assert.match(packagedWindowsStartup, /!packaged/, 'A execução de desenvolvimento não pode registrar o Electron na inicialização do Windows.');
 assert.match(packagedWelcomeApp, /id="fullscreen-game-capture-toggle"/, 'O Client empacotado precisa oferecer compatibilidade com jogos em tela cheia.');
 assert.doesNotMatch(packagedWelcomeApp, /cursor\s*:\s*['"]never['"]/, 'O Client empacotado não pode remover o cursor da live.');
 assert.ok(packagedClientMain.indexOf('app.disableHardwareAcceleration()') < packagedClientMain.indexOf('app.whenReady()'), 'O Client empacotado precisa aplicar a preferência antes de iniciar o Electron.');
@@ -96,9 +104,27 @@ assert.ok(packagedWelcome.indexOf('src="app.js"') < packagedWelcome.indexOf('src
 assert.ok(packagedWelcome.indexOf('src="rnnoise-engine.js"') < packagedWelcome.indexOf('src="beta-ui.js"'), 'O RNNoise precisa estar pronto antes da camada de áudio da beta.');
 assert.match(packagedWelcomeApp, /noiseSuppression: noiseEnabled && !rnnoise/, 'O Client não pode aplicar duas supressões de ruído ao mesmo tempo.');
 assert.match(packagedBetaUi, /Microfone · RNNoise \(ML local\)/, 'O fluxo de chamada precisa publicar o microfone processado pelo RNNoise.');
+assert.match(packagedProcessAudioWorklet, /registerProcessor\('voiceup-process-pcm'/, 'O mixer local da live precisa incluir o processador PCM CSP-safe.');
 assert.match(packagedBetaUi, /filtro padrão/, 'Uma falha do RNNoise precisa manter o microfone com fallback seguro.');
 assert.match(packagedBetaUi, /data-media-tile-fullscreen/, 'Cada live ou câmera precisa oferecer sua própria tela cheia.');
 assert.match(packagedBetaUi, /data-grid-size/, 'A chamada precisa organizar participantes em uma grade responsiva.');
+assert.match(packagedBetaUi, /voiceup-square-grid/, 'A chamada precisa manter cartões quadrados ao ajustar a quantidade de participantes.');
+assert.match(packagedBetaUi, /call-participant-tray-toggle/, 'Lives precisam oferecer a faixa recolhível de participantes abaixo da mídia.');
+assert.match(packagedPlatformCss, /#members-clone \.member-presence-avatar > \.platform-presence \{[^}]*width: 14px;[^}]*height: 14px;/s, 'O selo da lista lateral precisa permanecer proporcional ao avatar.');
+assert.match(packagedPlatformCss, /#presence-status-button > \.platform-presence \{ width: 13px; height: 13px; \}/, 'O ícone de plataforma do perfil precisa caber no botão de status.');
+assert.match(packagedPlatformCss, /\.member-avatar > \.platform-presence \{[^}]*width: 15px;[^}]*height: 15px;/s, 'O selo do ServerHost precisa permanecer proporcional ao avatar.');
+assert.match(packagedPlatformCss, /\.call-member-visual > \.platform-presence \{[^}]*right: -2px;[^}]*bottom: -2px;[^}]*padding: 1px;/s, 'O selo da call precisa permanecer no canto do avatar e usar somente 1 px de respiro.');
+assert.match(packagedBetaUi, /\.call-member-visual\{width:clamp\(52px,30%,150px\)/, 'A âncora do selo da call precisa acompanhar o tamanho real do avatar.');
+const gradientThemeIds = ['nebula', 'arctic', 'eclipse', 'matrix', 'noir', 'inferno', 'abyss', 'galaxy', 'copper', 'toxic', 'borealis', 'sapphire', 'plum', 'storm', 'dawn', 'glacier', 'lavender', 'mint', 'solar'];
+for (const themeId of gradientThemeIds) {
+  assert.match(packagedWelcomeApp, new RegExp(`\\['${themeId}',`), `O tema gradiente ${themeId} precisa existir no seletor interno.`);
+  assert.match(packagedBetaUi, new RegExp(`id: '${themeId}'`), `O tema gradiente ${themeId} precisa ter uma amostra visível.`);
+  assert.match(packagedI18n, new RegExp(`${themeId}:\\[`), `O tema gradiente ${themeId} precisa ter tradução.`);
+}
+assert.match(packagedBetaUi, /themeCards = \(items\) => items\.map\(\(\{ id, name, detail, light, colors, gradient \}\)/, 'As amostras precisam desenhar os gradientes reais.');
+assert.match(packagedBetaUi, /data-theme-category="solid"/, 'As cores sólidas precisam ficar em uma subcategoria própria.');
+assert.match(packagedBetaUi, /data-theme-category="gradient"/, 'Os gradientes precisam ficar em uma subcategoria própria.');
+assert.match(packagedBetaUi, /theme-dawn.*theme-glacier.*theme-lavender.*theme-mint.*theme-solar/, 'Os cinco gradientes claros precisam usar superfícies legíveis.');
 assert.match(packagedMediaStability, /video-theater-single/, 'A tela cheia individual precisa ocultar somente as outras mídias durante o foco.');
 assert.match(packagedMediaStability, /selectTheaterTile\(null\)/, 'Ao sair da tela cheia, a grade precisa ser restaurada sem perder transmissões.');
 assert.match(packagedRnnoiseEngine, /PROCESSOR_NAME = '@sapphi-red\/web-noise-suppressor\/rnnoise'/, 'O mecanismo precisa usar o processador RNNoise esperado.');
@@ -119,12 +145,12 @@ assert.match(asar.extractFile(serverArchive, 'signaling-server.js').toString('ut
 assert.match(asar.extractFile(serverArchive, 'signaling-server.js').toString('utf8'), /media-state-update/, 'O host precisa compartilhar os indicadores de live e câmera.');
 
 for (const archive of [clientArchive, serverArchive]) {
-  for (const file of ['update-helper.js', 'public/release-trust.js', 'public/release-integrity.js', 'public/release-history.js', 'public/platform-presence.js']) {
+  for (const file of ['update-helper.js', 'public/release-trust.js', 'public/release-integrity.js', 'public/release-history.js', 'public/platform-presence.js', 'public/platform-presence.css']) {
     assert.ok(asar.extractFile(archive, file.split('/').join(path.sep)).equals(fs.readFileSync(path.join(workspace, file))), `Atualização/status devem corresponder à fonte validada: ${file}`);
   }
   const packagedQs = JSON.parse(asar.extractFile(archive, path.join('node_modules', 'qs', 'package.json')));
   assert.equal(packagedQs.version, '6.16.0', 'O pacote precisa incluir a correção de segurança de qs.');
-  for (const file of ['public/index.html', 'public/app.js', 'public/beta-ui.js', 'public/media-stability.js', 'public/rnnoise-engine.js', 'public/vendor/rnnoise/rnnoise-worklet.js', 'public/vendor/rnnoise/rnnoise.wasm', 'public/vendor/rnnoise/rnnoise_simd.wasm', 'public/channel-roster.js', 'public/channel-roster.css', 'public/channel-media-status.js', 'signaling-server.js']) {
+  for (const file of ['public/index.html', 'public/app.js', 'public/beta-ui.js', 'public/i18n.js', 'public/process-audio-worklet.js', 'public/media-stability.js', 'public/rnnoise-engine.js', 'public/vendor/rnnoise/rnnoise-worklet.js', 'public/vendor/rnnoise/rnnoise.wasm', 'public/vendor/rnnoise/rnnoise_simd.wasm', 'public/channel-roster.js', 'public/channel-roster.css', 'public/channel-media-status.js', 'signaling-server.js']) {
     assert.ok(asar.extractFile(archive, file.split('/').join(path.sep)).equals(fs.readFileSync(path.join(workspace, file))), `O pacote precisa conter o arquivo atual: ${file}`);
   }
 }

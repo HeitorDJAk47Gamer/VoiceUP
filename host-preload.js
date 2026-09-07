@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('voiceupServer', {
   downloadUpdate: () => ipcRenderer.invoke('update:download'),
   moderate: (action, id, options = {}) => ipcRenderer.invoke('server:moderate', { action, id, ...options }),
   unban: (clientId) => ipcRenderer.invoke('server:unban', clientId),
+  unpunish: (clientId) => ipcRenderer.invoke('server:unpunish', clientId),
   control: (action) => ipcRenderer.invoke('server:control', action),
   openPath: (target) => ipcRenderer.invoke('server:open-path', target),
   settings: () => ipcRenderer.invoke('server:settings'),

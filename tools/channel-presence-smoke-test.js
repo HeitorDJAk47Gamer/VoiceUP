@@ -104,16 +104,7 @@ async function exercise(url, label) {
   const outsiderPresence = await presence(outsider);
   assert.deepEqual(outsiderPresence.voiceActivity, [], 'Timers cannot leak across rooms.');
   assert.equal(outsiderPresence.members[0].platform, '', 'Legacy clients remain compatible without a guessed OS.');
-  if (label === 'cloud') {
-    const download = await fetch(`${url}/downloads/selfweb`);
-    assert.equal(download.status, 200);
-    assert.match(download.headers.get('content-disposition'), /attachment;.*VoiceUP-SelfWeb.html/);
-    const crypto = require('node:crypto');
-    const downloaded = Buffer.from(await download.arrayBuffer());
-    const bundled = fs.readFileSync(path.join(workspace,'selfweb/dist/VoiceUP-SelfWeb.html'));
-    assert.equal(crypto.createHash('sha256').update(downloaded).digest('hex'),crypto.createHash('sha256').update(bundled).digest('hex'));
-  }
-  console.log(`PASS ${label}: 4 clients, channels, timer, mute, simultaneous live/camera presence, platform/status propagation, legacy fallback, reconnect and SelfWeb download.`);
+  console.log(`PASS ${label}: 4 clients, channels, timer, mute, simultaneous live/camera presence, platform/status propagation, legacy fallback and reconnect.`);
   for (const socket of sockets) socket.disconnect();
 }
 async function stopCloud() {

@@ -26,9 +26,13 @@ Confira em 390×844, 320×568 e 844×390:
 6. O último canal de uma lista grande continua acessível em retrato e paisagem.
 7. A sala sem `geral` seleciona seu primeiro canal de texto válido.
 8. Chat permite responder, reagir, fixar, editar e apagar mensagens próprias.
+   Essas cinco ferramentas aparecem como ícones, com nome acessível e sem texto
+   ocupando a linha da mensagem.
 9. Ajustes mostra volumes, processamento de áudio, câmera, vibração, privacidade
    de mídias externas, fluidez da live, versão e ping.
 10. A barra inferior mantém as cinco abas acessíveis em 320×568 e 844×390.
+11. A call mostra controles circulares somente com ícones, sem rolagem horizontal.
+12. O cartão do perfil exibe o botão vermelho “Sair”, maior que o antigo atalho.
 
 O servidor e os dados são locais e temporários. O fixture substitui o microfone
 por uma faixa silenciosa gerada, sem pedir permissões ou captar áudio real.

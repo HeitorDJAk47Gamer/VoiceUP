@@ -1,6 +1,7 @@
 {
   "name": "voiceup-server-cloud",
-  "version": "1.2.0",
+  "version": "1.2.1",
+  "releaseCatalogVersion": "1.2.1",
   "private": true,
   "description": "Servidor de sinalização VoiceUP para hospedagem Cloud",
   "main": "index.js",

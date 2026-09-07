@@ -87,6 +87,16 @@ assert.equal(isNewer('1.1.3-beta.9', '1.1.3-beta.8'), true);
 assert.equal(isNewer('1.1.3-beta.8', '1.1.3-beta.9'), false);
 assert.equal(isNewer('1.1.3', '1.1.3-beta.9'), true);
 assert.equal(isNewer('1.1.3-beta.1', '1.1.3'), false);
+assert.equal(isNewer('1.2.1-beta.1', '1.2.0'), true);
+assert.equal(isNewer('1.2.1-beta.2', '1.2.1-beta.1'), true);
+assert.equal(isNewer('1.2.1', '1.2.1-beta.1'), true);
+for (const installed of ['1.0.25', '1.1.2', '1.2.0', '1.2.1-beta.6']) {
+  assert.equal(isNewer('1.2.1', installed), true, `1.2.1 precisa ser oferecida para ${installed}`);
+}
+assert.equal(updateAssetName('VoiceUP Setup ', '1.2.1', windowsOptions), 'VoiceUP.Setup.1.2.1.exe');
+assert.equal(updateAssetName('VoiceUPServer Setup ', '1.2.1', windowsOptions), 'VoiceUPServer.Setup.1.2.1.exe');
+assert.equal(updateAssetName('VoiceUP Setup ', '1.2.1-beta.1', windowsOptions), 'VoiceUP.Setup.1.2.1-beta.1.exe');
+assert.equal(updateAssetName('VoiceUPServer Setup ', '1.2.1-beta.1', windowsOptions), 'VoiceUPServer.Setup.1.2.1-beta.1.exe');
 
 const workspace = path.resolve(__dirname, '..');
 const clientMain = fs.readFileSync(path.join(workspace, 'electron-main.js'), 'utf8');
