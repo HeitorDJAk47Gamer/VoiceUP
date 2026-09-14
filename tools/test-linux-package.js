@@ -21,7 +21,13 @@ const packages = [
     main: 'electron-main.js',
     expectedName: 'voiceup',
     expectedProductName: undefined,
-    requiredFiles: ['electron-main.js', path.join('public', 'index.html')],
+    requiredFiles: [
+      'electron-main.js',
+      path.join('public', 'index.html'),
+      path.join('public', 'server-management.js'),
+      path.join('public', 'chat-rich-content.js'),
+      path.join('public', 'forum-channels.css')
+    ],
     output: clientOutput,
     productName: 'VoiceUP'
   },
@@ -32,7 +38,14 @@ const packages = [
     main: 'server-host-main.js',
     expectedName: 'voiceup-server',
     expectedProductName: 'VoiceUPServer',
-    requiredFiles: ['server-host-main.js', path.join('host', 'index.html')],
+    requiredFiles: [
+      'server-host-main.js',
+      'server-access-control.js',
+      'server-backup.js',
+      path.join('host', 'index.html'),
+      path.join('public', 'chat-rich-content.js'),
+      path.join('public', 'forum-channels.css')
+    ],
     output: serverOutput,
     productName: 'VoiceUPServer'
   }

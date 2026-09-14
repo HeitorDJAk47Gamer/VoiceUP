@@ -10,7 +10,7 @@ const main = fs.readFileSync(path.join(workspace, 'electron-main.js'), 'utf8');
 assert.match(main, /backgroundThrottling:\s*false/, 'O Client precisa continuar ativo quando o jogo cobre ou minimiza a janela do VoiceUP.');
 assert.match(renderer, /function screenMotionPriority\(\)[\s\S]*selectedFrameRate\(\)\s*>=\s*30/, 'Lives de 30/60 FPS precisam priorizar movimento.');
 assert.match(renderer, /function videoContentHint[^\n]*\?\s*'detail'\s*:\s*'motion'/, 'A captura precisa alternar corretamente entre movimento e detalhe.');
-assert.match(renderer, /'maintain-framerate'/, 'O WebRTC precisa preservar a taxa de quadros das lives em movimento.');
+assert.match(renderer, /function videoDegradationPreference[^\n]*'balanced'/, 'A live deve equilibrar nitidez e FPS sob pressão.');
 assert.match(renderer, /screenBase\s*=\s*\{[^}]*720:\s*3800000[^}]*1080:\s*7500000/, 'A live de jogo precisa ter teto de bitrate próprio.');
 assert.match(renderer, /track\.applyConstraints\(quality\(\)\)/, 'A fonte capturada precisa receber a resolução e o FPS selecionados após abrir.');
 assert.doesNotMatch(renderer, /const track = screenStream\.getVideoTracks\(\)\[0\];\s*track\.contentHint\s*=\s*'detail'/, 'A live não pode forçar detalhe e derrubar o FPS de jogos.');
@@ -28,15 +28,15 @@ const functionSource = (name) => {
   throw new Error(`Função ${name} incompleta.`);
 };
 const fields = { 'quality-select': { value: '720' }, 'fps-select': { value: '30' } };
-const policy = { preserveScreenSourceQuality: false, $: (id) => fields[id] };
+const policy = { preserveScreenSourceQuality: false, liveSenderStates: new Map(), $: (id) => fields[id] };
 vm.createContext(policy);
 vm.runInContext([
   'selectedFrameRate', 'screenMotionPriority', 'videoContentHint',
-  'videoDegradationPreference', 'videoBitrate', 'configureVideoSenderParameters'
+  'videoDegradationPreference', 'videoBitrate', 'screenSenderLimits', 'configureVideoSenderParameters'
 ].map(functionSource).join('\n'), policy);
 
 assert.equal(policy.videoContentHint('screen'), 'motion');
-assert.equal(policy.videoDegradationPreference('screen'), 'maintain-framerate');
+assert.equal(policy.videoDegradationPreference('screen'), 'balanced');
 assert.equal(policy.videoBitrate('screen'), 3800000);
 fields['fps-select'].value = '60';
 assert.equal(policy.videoBitrate('screen'), 6080000);
@@ -46,8 +46,14 @@ assert.equal(policy.videoDegradationPreference('screen'), 'maintain-resolution')
 fields['fps-select'].value = '60';
 policy.preserveScreenSourceQuality = true;
 const sourceParameters = policy.configureVideoSenderParameters({ encodings: [{ maxBitrate: 1, maxFramerate: 1 }] }, 'screen');
-assert.equal(sourceParameters.encodings[0].maxBitrate, undefined);
-assert.equal(sourceParameters.encodings[0].maxFramerate, undefined);
-assert.equal(sourceParameters.degradationPreference, 'maintain-framerate');
+assert.equal(sourceParameters.encodings[0].maxBitrate, 12000000);
+assert.equal(sourceParameters.encodings[0].maxFramerate, 60);
+assert.equal(sourceParameters.degradationPreference, 'balanced');
+const native = { track: { getSettings: () => ({ height: 2160, frameRate: 144 }) } };
+const bounded = policy.configureVideoSenderParameters({ encodings: [{}] }, 'screen', true, native);
+assert.equal(bounded.encodings[0].maxBitrate, 32000000);
+assert.equal(bounded.encodings[0].maxFramerate, 60);
+policy.liveSenderStates.set(native, { policy: { fps: 30 } });
+assert.equal(policy.configureVideoSenderParameters({ encodings: [{}] }, 'screen', true, native).encodings[0].maxFramerate, 30);
 
 process.stdout.write('Política de desempenho de live validada.\n');

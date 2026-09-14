@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, shell, dialog } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -7,6 +7,15 @@ const { fileURLToPath } = require('node:url');
 const { startSignalingServer, normalizeRoomLayout, hashRoomPassword } = require('./signaling-server');
 const { registerUpdateHandlers } = require('./update-helper');
 const { localNetworkUrls, openPublicPort } = require('./network-access');
+const { createServerBackup, inspectServerBackup, restoreServerBackup, suggestedBackupName } = require('./server-backup');
+const {
+  PERMISSION_DEFINITIONS,
+  normalizeAccessControl,
+  upsertRole,
+  deleteRole,
+  assignRoles,
+  createSecurityAuditStore
+} = require('./server-access-control');
 
 // O ServerHost é um aplicativo diferente do Client.  Definir nome e identidade
 // antes de ler userData impede que ambos compartilhem a mesma pasta de perfil,
@@ -52,8 +61,11 @@ let pluginFolder = '';
 let portablePluginFolder = '';
 let musicFolder = '';
 let pluginStateFile = '';
+let securityAuditStore = null;
 let publicPortMapping = null;
 let publicAccessGeneration = 0;
+let backupOperationInProgress = false;
+const selectedBackups = new Map();
 let publicAccessState = { status: 'idle', mapped: false, message: 'Acesso automático ainda não verificado.' };
 let hardwareAccelerationAtStartup = true;
 const HOST_ENTRY = path.join(__dirname, 'host', 'index.html');
@@ -61,7 +73,7 @@ const MUSIC_BOT_ENTRY = path.join(__dirname, 'host', 'music-bot.html');
 const APP_ICON = path.join(__dirname, 'assets', process.platform === 'win32' ? 'voiceup-icon.ico' : 'voiceup-logo-2d.png');
 const musicBotToken = crypto.randomBytes(32).toString('hex');
 const defaultHostCloseBehavior = () => process.platform === 'linux' ? 'ask' : 'tray';
-let hostSettings = { closeBehavior: defaultHostCloseBehavior(), theme: 'ocean', serverIcon: '', hardwareAcceleration: true, rooms: [], storage: { retentionDays: 30, maxPerRoom: 300 }, chatPolicy: { cooldownSeconds: 0, pluginMessageMaxLength: 2000 }, publicAccess: { automatic: false, consentVersion: 0 }, cluster: { enabled: false, role: 'primary', primaryUrl: '', publicUrl: '', secret: '', nodeId: '', capacity: 100, weight: 1, failover: true, smartDistribution: true, heartbeatMs: 3000 } };
+let hostSettings = { closeBehavior: defaultHostCloseBehavior(), theme: 'ocean', serverIcon: '', hardwareAcceleration: true, rooms: [], accessControl: normalizeAccessControl(), storage: { retentionDays: 30, maxPerRoom: 300 }, chatPolicy: { cooldownSeconds: 0, pluginMessageMaxLength: 2000, attachmentsEnabled: false, attachmentMaxMB: 5 }, publicAccess: { automatic: false, consentVersion: 0 }, cluster: { enabled: false, role: 'primary', primaryUrl: '', publicUrl: '', secret: '', nodeId: '', capacity: 100, weight: 1, failover: true, smartDistribution: true, heartbeatMs: 3000 } };
 
 function normalizeServerIcon(value) {
   const icon = String(value || '');
@@ -69,6 +81,19 @@ function normalizeServerIcon(value) {
 }
 
 const settingsPath = () => path.join(app.getPath('userData'), 'server-settings.json');
+const backupMetadataPath = () => path.join(app.getPath('userData'), 'backup-metadata.json');
+const backupDirectory = () => path.join(app.getPath('userData'), 'Backups');
+const readBackupMetadata = () => {
+  try {
+    const value = JSON.parse(fs.readFileSync(backupMetadataPath(), 'utf8'));
+    return value && typeof value === 'object' ? value : {};
+  } catch { return {}; }
+};
+const writeBackupMetadata = (value = {}) => {
+  try {
+    fs.writeFileSync(backupMetadataPath(), JSON.stringify({ ...readBackupMetadata(), ...value }, null, 2), { encoding: 'utf8', mode: 0o600 });
+  } catch { /* o backup continua válido mesmo sem o resumo visual */ }
+};
 try {
   const startupSettings = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
   hardwareAccelerationAtStartup = startupSettings.hardwareAcceleration !== false;
@@ -111,7 +136,7 @@ function migrateLegacyServerProfile() {
     path.join(app.getPath('appData'), 'voiceup'),
     path.join(app.getPath('appData'), 'VoiceUP')
   ];
-  const serverFiles = ['server-settings.json', 'bans.json', 'chat-punishments.json', 'chat-history.json', 'bug-reports.json', 'plugin-settings.json'];
+  const serverFiles = ['server-settings.json', 'bans.json', 'chat-punishments.json', 'chat-history.json', 'bug-reports.json', 'plugin-settings.json', 'security-audit.json'];
   for (const legacy of legacyFolders) {
     if (!fs.existsSync(legacy) || path.resolve(legacy).toLowerCase() === path.resolve(target).toLowerCase()) continue;
     const hasServerData = serverFiles.some((name) => fs.existsSync(path.join(legacy, name)))
@@ -137,12 +162,15 @@ function loadSettings() {
   try { hostSettings = { ...hostSettings, ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) }; } catch { /* first run */ }
   hostSettings.closeBehavior = ['tray', 'ask', 'quit'].includes(hostSettings.closeBehavior) ? hostSettings.closeBehavior : defaultHostCloseBehavior();
   hostSettings.rooms = (Array.isArray(hostSettings.rooms) ? hostSettings.rooms : []).map((room) => normalizeRoomLayout(room)).filter((room) => room.id);
+  hostSettings.accessControl = normalizeAccessControl(hostSettings.accessControl);
   hostSettings.storage = { retentionDays: 30, maxPerRoom: 300, ...(hostSettings.storage || {}) };
   hostSettings.storage.retentionDays = Math.max(0, Math.min(3650, Math.round(Number(hostSettings.storage.retentionDays) || 0)));
   hostSettings.storage.maxPerRoom = Math.max(50, Math.min(5000, Math.round(Number(hostSettings.storage.maxPerRoom) || 300)));
-  hostSettings.chatPolicy = { cooldownSeconds: 0, pluginMessageMaxLength: 2000, ...(hostSettings.chatPolicy || {}) };
+  hostSettings.chatPolicy = { cooldownSeconds: 0, pluginMessageMaxLength: 2000, attachmentsEnabled: false, attachmentMaxMB: 5, ...(hostSettings.chatPolicy || {}) };
   hostSettings.chatPolicy.cooldownSeconds = Math.max(0, Math.min(21600, Math.round(Number(hostSettings.chatPolicy.cooldownSeconds) || 0)));
   hostSettings.chatPolicy.pluginMessageMaxLength = Math.max(500, Math.min(10000, Math.round(Number(hostSettings.chatPolicy.pluginMessageMaxLength) || 2000)));
+  hostSettings.chatPolicy.attachmentsEnabled = hostSettings.chatPolicy.attachmentsEnabled === true;
+  hostSettings.chatPolicy.attachmentMaxMB = Math.max(1, Math.min(256, Math.round(Number(hostSettings.chatPolicy.attachmentMaxMB) || 5)));
   hostSettings.publicAccess = { automatic: false, consentVersion: 0, ...(hostSettings.publicAccess || {}) };
   hostSettings.publicAccess.consentVersion = Number(hostSettings.publicAccess.consentVersion) >= 1 ? 1 : 0;
   hostSettings.publicAccess.automatic = hostSettings.publicAccess.consentVersion >= 1 && hostSettings.publicAccess.automatic === true;
@@ -177,6 +205,7 @@ function categorizedStorage() {
     reports: fileSize(path.join(userData, 'bug-reports.json')),
     bans: fileSize(path.join(userData, 'bans.json')),
     punishments: fileSize(path.join(userData, 'chat-punishments.json')),
+    security: fileSize(path.join(userData, 'security-audit.json')) + fileSize(path.join(userData, 'client-identities.json')),
     settings: fileSize(settingsPath()) + fileSize(pluginStateFile),
     plugins: directorySize(pluginFolder),
     music: directorySize(musicFolder)
@@ -186,6 +215,21 @@ function categorizedStorage() {
   return { totalBytes: total, categories: { ...categories, other: Math.max(0, total - known) } };
 }
 const sha256File = (target) => { try { return crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex'); } catch { return ''; } };
+const publicBackupSummary = (value = {}) => ({
+  createdAt: value.createdAt || '',
+  sourceVersion: value.sourceVersion || '',
+  totalBytes: Number(value.totalBytes) || 0,
+  archiveBytes: Number(value.archiveBytes) || 0,
+  fileCount: Number(value.fileCount) || 0,
+  coreFileCount: Number(value.coreFileCount) || 0,
+  pluginFileCount: Number(value.pluginFileCount) || 0,
+  musicFileCount: Number(value.musicFileCount) || 0,
+  includes: { core: true, plugins: value.includes?.plugins === true, music: value.includes?.music === true }
+});
+const pruneBackupSelections = () => {
+  const now = Date.now();
+  for (const [token, entry] of selectedBackups) if (Number(entry.expiresAt || 0) <= now) selectedBackups.delete(token);
+};
 const officialPluginHashes = () => ['dados.js', 'musica.js', 'xp-chat.js'].map((file) => sha256File(path.join(__dirname, 'plugins', file))).filter(Boolean);
 function addresses() { return localNetworkUrls(hostPort); }
 function serializablePublicAccess(value = {}) {
@@ -307,12 +351,33 @@ async function startHostedSignaling() {
     chatMaxPerRoom: hostSettings.storage.maxPerRoom,
     chatCooldownSeconds: () => hostSettings.chatPolicy.cooldownSeconds,
     pluginMessageMaxLength: () => hostSettings.chatPolicy.pluginMessageMaxLength,
+    attachmentsEnabled: () => hostSettings.chatPolicy.attachmentsEnabled === true,
+    attachmentMaxMB: () => hostSettings.chatPolicy.attachmentMaxMB || 5,
+    onChatPolicyChange: (next = {}) => {
+      hostSettings.chatPolicy = {
+        ...hostSettings.chatPolicy,
+        cooldownSeconds: Math.max(0, Math.min(21600, Math.round(Number(next.cooldownSeconds) || 0))),
+        pluginMessageMaxLength: Math.max(500, Math.min(10000, Math.round(Number(next.pluginMessageMaxLength) || 2000)))
+      };
+      saveSettings();
+      return { ...hostSettings.chatPolicy };
+    },
     version: app.getVersion(),
     serverIcon: hostSettings.serverIcon,
     roomLayouts: hostSettings.rooms,
     cluster: hostSettings.cluster,
     botToken: musicBotToken,
     identityFile: path.join(app.getPath('userData'), 'client-identities.json'),
+    auditStore: securityAuditStore,
+    accessControl: hostSettings.accessControl,
+    onAccessControlChange: (next) => {
+      hostSettings.accessControl = normalizeAccessControl(next);
+      saveSettings();
+    },
+    onRoomLayoutsChange: (next) => {
+      hostSettings.rooms = (Array.isArray(next) ? next : []).map((room) => normalizeRoomLayout(room)).filter((room) => room.id);
+      saveSettings();
+    },
     onPluginEvent: (event) => { if (event?.event === 'music-bot') sendMusicBotCommand(event.payload).catch(() => {}); }
   });
   void refreshPublicMapping();
@@ -340,6 +405,7 @@ async function openWindow() {
   portablePluginFolder = process.platform === 'linux' ? pluginFolder : path.join(path.dirname(process.execPath), 'plugins');
   musicFolder = path.join(app.getPath('userData'), 'music');
   pluginStateFile = path.join(app.getPath('userData'), 'plugin-settings.json');
+  securityAuditStore = createSecurityAuditStore({ filePath: path.join(app.getPath('userData'), 'security-audit.json') });
   fs.mkdirSync(pluginFolder, { recursive: true }); fs.mkdirSync(musicFolder, { recursive: true });
   const bundledPluginFolder = path.join(__dirname, 'plugins');
   if (fs.existsSync(bundledPluginFolder)) for (const file of fs.readdirSync(bundledPluginFolder).filter((name) => name.endsWith('.js'))) {
@@ -381,18 +447,30 @@ secureHostHandle('server-stats', () => {
   const memory = process.memoryUsage();
   const memoryMb = Math.round(memory.rss / 1024 / 1024);
   signaling?.updateNodeMetrics?.({ cpuPercent, memoryMb, memoryPressure: os.totalmem() > 0 ? memory.rss / os.totalmem() : 0 });
-  const stats = signaling?.getStats?.() || { uptimeSeconds: 0, participants: 0, rooms: 0, averagePing: null, events: { signals: 0 }, logs: [{ time: new Date().toLocaleTimeString('pt-BR'), level: 'info', message: 'Servidor desligado.' }], plugins: [], pluginErrors: [], members: [], bans: [], chatPunishments: [], reports: [] };
+  const stats = signaling?.getStats?.() || { uptimeSeconds: 0, participants: 0, rooms: 0, averagePing: null, events: { signals: 0 }, logs: [{ time: new Date().toLocaleTimeString('pt-BR'), level: 'info', message: 'Servidor desligado.' }], plugins: [], pluginErrors: [], members: [], bans: [], chatPunishments: [], reports: [], accessControl: hostSettings.accessControl, permissionDefinitions: PERMISSION_DEFINITIONS, securityAudit: securityAuditStore?.list(100) || [] };
   return { ...stats, storage: { ...(stats.storage || {}), ...categorizedStorage(), policy: hostSettings.storage }, publicAccess: publicAccessState, port: hostPort, online: Boolean(signaling), cpuPercent, memoryMb, heapMb: Math.round(memory.heapUsed / 1024 / 1024) };
 });
 secureHostHandle('server:moderate', (_event, { action, id, durationMinutes, reason } = {}) => {
   if (!signaling) return { ok: false, message: 'O servidor está desligado.' };
-  if (action === 'kick') return signaling.kick(id);
-  if (action === 'ban') return signaling.ban(id, { durationMinutes, reason });
-  if (action === 'punish') return signaling.punishChat(id, { durationMinutes, reason });
-  return { ok: false, message: 'Ação inválida.' };
+  const target = signaling.members().find((member) => member.id === String(id || '')) || {};
+  const handler = action === 'kick' ? () => signaling.kick(id)
+    : action === 'ban' ? () => signaling.ban(id, { durationMinutes, reason })
+      : action === 'punish' ? () => signaling.punishChat(id, { durationMinutes, reason }) : null;
+  if (!handler) return { ok: false, message: 'Ação inválida.' };
+  const result = handler();
+  securityAuditStore?.record(`moderation.${action}`, { kind: 'serverhost', name: 'ServerHost' }, { clientId: target.clientId || '', name: target.name || '', socketId: String(id || '') }, { durationMinutes: Number(durationMinutes) || 0, reason: String(reason || '').slice(0, 160) }, result.ok ? 'allowed' : 'failed');
+  return result;
 });
-secureHostHandle('server:unban', (_event, clientId) => signaling ? signaling.unban(clientId) : { ok: false, message: 'O servidor está desligado.' });
-secureHostHandle('server:unpunish', (_event, clientId) => signaling ? signaling.unpunishChat(clientId) : { ok: false, message: 'O servidor está desligado.' });
+secureHostHandle('server:unban', (_event, clientId) => {
+  const result = signaling ? signaling.unban(clientId) : { ok: false, message: 'O servidor está desligado.' };
+  securityAuditStore?.record('moderation.unban', { kind: 'serverhost', name: 'ServerHost' }, { clientId: String(clientId || '') }, {}, result.ok ? 'allowed' : 'failed');
+  return result;
+});
+secureHostHandle('server:unpunish', (_event, clientId) => {
+  const result = signaling ? signaling.unpunishChat(clientId) : { ok: false, message: 'O servidor está desligado.' };
+  securityAuditStore?.record('moderation.unpunish', { kind: 'serverhost', name: 'ServerHost' }, { clientId: String(clientId || '') }, {}, result.ok ? 'allowed' : 'failed');
+  return result;
+});
 secureHostHandle('server:control', async (_event, action) => {
   try {
     if (action === 'start') return await startHostedSignaling();
@@ -404,6 +482,125 @@ secureHostHandle('server:control', async (_event, action) => {
 });
 secureHostHandle('server:settings', () => publicHostSettings());
 secureHostHandle('server:rooms', () => publicRooms());
+secureHostHandle('server:backup-status', () => ({ ok: true, ...readBackupMetadata(), backupDirectory: backupDirectory(), busy: backupOperationInProgress }));
+secureHostHandle('server:create-backup', async (_event, options = {}) => {
+  if (backupOperationInProgress) return { ok: false, message: 'Já existe uma operação de backup em andamento.' };
+  const includePlugins = options.includePlugins !== false;
+  const includeMusic = options.includeMusic === true;
+  fs.mkdirSync(backupDirectory(), { recursive: true });
+  const selection = await dialog.showSaveDialog(mainWindow, {
+    title: 'Salvar backup do VoiceUP ServerHost',
+    defaultPath: path.join(app.getPath('documents'), suggestedBackupName()),
+    buttonLabel: 'Criar backup',
+    filters: [{ name: 'Backup do VoiceUP ServerHost', extensions: ['voiceup-backup'] }],
+    properties: ['createDirectory', 'showOverwriteConfirmation']
+  });
+  if (selection.canceled || !selection.filePath) return { ok: false, canceled: true, message: 'Backup cancelado.' };
+  const destination = selection.filePath.toLowerCase().endsWith('.voiceup-backup') ? selection.filePath : `${selection.filePath}.voiceup-backup`;
+  const managedFolders = [pluginFolder, musicFolder].map((folder) => path.resolve(folder));
+  const destinationPath = path.resolve(destination);
+  const insideManagedFolder = managedFolders.some((folder) => {
+    const relative = path.relative(folder, destinationPath);
+    return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+  });
+  if (insideManagedFolder) return { ok: false, message: 'Salve o arquivo fora das pastas de plugins e músicas do servidor.' };
+  backupOperationInProgress = true;
+  try {
+    saveSettings();
+    signaling?.flushPersistence?.();
+    const result = createServerBackup({ sourceDirectory: app.getPath('userData'), destinationFile: destinationPath, appVersion: app.getVersion(), includePlugins, includeMusic });
+    const summary = publicBackupSummary(result);
+    writeBackupMetadata({ lastBackupAt: result.createdAt, lastBackupFile: path.basename(destinationPath), lastBackupBytes: result.archiveBytes });
+    securityAuditStore?.record('backup.created', { kind: 'serverhost', name: 'ServerHost' }, { fileName: path.basename(destinationPath) }, { files: result.fileCount, bytes: result.totalBytes, plugins: includePlugins, music: includeMusic });
+    return { ok: true, message: 'Backup completo criado e verificado.', fileName: path.basename(destinationPath), ...summary };
+  } catch (error) {
+    return { ok: false, message: error?.message || 'Não foi possível criar o backup.' };
+  } finally { backupOperationInProgress = false; }
+});
+secureHostHandle('server:choose-backup', async () => {
+  if (backupOperationInProgress) return { ok: false, message: 'Aguarde a operação de backup atual terminar.' };
+  const selection = await dialog.showOpenDialog(mainWindow, {
+    title: 'Escolher backup do VoiceUP ServerHost',
+    buttonLabel: 'Verificar backup',
+    filters: [{ name: 'Backup do VoiceUP ServerHost', extensions: ['voiceup-backup'] }],
+    properties: ['openFile', 'dontAddToRecent']
+  });
+  if (selection.canceled || !selection.filePaths?.[0]) return { ok: false, canceled: true, message: 'Restauração cancelada.' };
+  try {
+    const inspected = inspectServerBackup(selection.filePaths[0]);
+    pruneBackupSelections();
+    const token = crypto.randomUUID();
+    selectedBackups.set(token, { filePath: inspected.filePath, archiveSha256: inspected.archiveSha256, expiresAt: Date.now() + 15 * 60 * 1000 });
+    return { ok: true, token, fileName: path.basename(inspected.filePath), ...publicBackupSummary(inspected) };
+  } catch (error) { return { ok: false, message: error?.message || 'Não foi possível verificar o backup.' }; }
+});
+secureHostHandle('server:restore-backup', async (_event, token) => {
+  if (backupOperationInProgress) return { ok: false, message: 'Já existe uma operação de backup em andamento.' };
+  pruneBackupSelections();
+  const selected = selectedBackups.get(String(token || ''));
+  if (!selected) return { ok: false, message: 'A seleção expirou. Escolha novamente o arquivo de backup.' };
+  let inspected;
+  try {
+    inspected = inspectServerBackup(selected.filePath);
+    if (inspected.archiveSha256 !== selected.archiveSha256) throw new Error('O arquivo mudou depois da verificação. Escolha-o novamente.');
+  } catch (error) { selectedBackups.delete(String(token || '')); return { ok: false, message: error?.message || 'O backup não pôde ser verificado novamente.' }; }
+  backupOperationInProgress = true;
+  const serverWasOnline = Boolean(signaling);
+  let rollbackPath = '';
+  try {
+    saveSettings();
+    signaling?.flushPersistence?.();
+    await stopHostedSignaling();
+    if (musicBotWindow && !musicBotWindow.isDestroyed()) musicBotWindow.destroy();
+    fs.mkdirSync(backupDirectory(), { recursive: true });
+    rollbackPath = path.join(backupDirectory(), suggestedBackupName(new Date()).replace('VoiceUP-Server-', 'Antes-da-restauracao-'));
+    const rollback = createServerBackup({ sourceDirectory: app.getPath('userData'), destinationFile: rollbackPath, appVersion: app.getVersion(), includePlugins: true, includeMusic: true });
+    const restored = restoreServerBackup({ sourceFile: selected.filePath, destinationDirectory: app.getPath('userData') });
+    securityAuditStore = createSecurityAuditStore({ filePath: path.join(app.getPath('userData'), 'security-audit.json') });
+    securityAuditStore.record('backup.restored', { kind: 'serverhost', name: 'ServerHost' }, { fileName: path.basename(selected.filePath) }, { files: restored.restoredFiles, sourceVersion: restored.sourceVersion, rollbackFile: path.basename(rollbackPath) });
+    writeBackupMetadata({ lastRestoreAt: new Date().toISOString(), lastRestoreFile: path.basename(selected.filePath), lastRollbackFile: path.basename(rollbackPath), lastRollbackBytes: rollback.archiveBytes });
+    selectedBackups.delete(String(token || ''));
+    setTimeout(() => { app.relaunch(); isQuitting = true; app.quit(); }, 700);
+    return { ok: true, restarting: true, approvalsReset: restored.approvalsReset, message: restored.approvalsReset ? 'Backup restaurado. O ServerHost será reiniciado; plugins externos precisarão ser aprovados novamente.' : 'Backup restaurado. O ServerHost será reiniciado com os dados recuperados.' };
+  } catch (error) {
+    if (serverWasOnline && !signaling) { try { await startHostedSignaling(); } catch { /* a cópia automática continua disponível */ } }
+    return { ok: false, message: `${error?.message || 'Não foi possível restaurar o backup.'}${rollbackPath ? ` A cópia de segurança atual ficou em ${path.basename(rollbackPath)}.` : ''}` };
+  } finally { backupOperationInProgress = false; }
+});
+secureHostHandle('server:open-backup-folder', async () => {
+  fs.mkdirSync(backupDirectory(), { recursive: true });
+  const error = await shell.openPath(backupDirectory());
+  return error ? { ok: false, message: error } : { ok: true };
+});
+secureHostHandle('server:save-role', (_event, role = {}) => {
+  const result = upsertRole(hostSettings.accessControl, role);
+  if (!result.ok) return result;
+  hostSettings.accessControl = result.accessControl;
+  saveSettings();
+  signaling?.updateAccessControl?.(hostSettings.accessControl);
+  securityAuditStore?.record('role.saved', { kind: 'serverhost', name: 'ServerHost' }, { roleId: result.role.id, name: result.role.name }, { permissions: result.role.permissions });
+  return { ...result, accessControl: hostSettings.accessControl, permissionDefinitions: PERMISSION_DEFINITIONS };
+});
+secureHostHandle('server:delete-role', (_event, roleId) => {
+  const result = deleteRole(hostSettings.accessControl, roleId);
+  if (!result.ok) return result;
+  hostSettings.accessControl = result.accessControl;
+  saveSettings();
+  signaling?.updateAccessControl?.(hostSettings.accessControl);
+  securityAuditStore?.record('role.deleted', { kind: 'serverhost', name: 'ServerHost' }, { roleId: String(roleId || '') });
+  return { ...result, accessControl: hostSettings.accessControl, permissionDefinitions: PERMISSION_DEFINITIONS };
+});
+secureHostHandle('server:assign-roles', (_event, { clientId, roleIds, name } = {}) => {
+  const connected = signaling?.members?.().find((member) => member.clientId === clientId);
+  const result = assignRoles(hostSettings.accessControl, clientId, roleIds, name || connected?.name || '');
+  if (!result.ok) return result;
+  hostSettings.accessControl = result.accessControl;
+  saveSettings();
+  signaling?.updateAccessControl?.(hostSettings.accessControl);
+  securityAuditStore?.record('member.roles.changed', { kind: 'serverhost', name: 'ServerHost' }, { clientId, name: name || connected?.name || '' }, { roleIds: Array.isArray(roleIds) ? roleIds : [] });
+  return { ...result, accessControl: hostSettings.accessControl, permissionDefinitions: PERMISSION_DEFINITIONS };
+});
+secureHostHandle('server:clear-security-audit', () => ({ ok: true, removed: securityAuditStore?.clear() || 0 }));
 secureHostHandle('server:import-discord-template', async (_event, { source, roomId, roomName } = {}) => {
   try {
     const raw = String(source || '').trim(); if (!raw) return { ok: false, message: 'Cole um código, link ou JSON de modelo do Discord.' };
@@ -453,6 +650,7 @@ secureHostHandle('server:save-room', (_event, next = {}) => {
   if (index >= 0) hostSettings.rooms[index] = room; else hostSettings.rooms.push(room);
   saveSettings();
   signaling?.updateRoomLayouts?.(hostSettings.rooms);
+  securityAuditStore?.record(index >= 0 ? 'room.updated' : 'room.created', { kind: 'serverhost', name: 'ServerHost' }, { roomId: room.id, name: room.name }, { voiceChannels: room.voiceChannels.length, textChannels: room.textChannels.length });
   return { ok: true, message: index >= 0 ? 'Sala atualizada.' : 'Sala criada.', rooms: publicRooms() };
 });
 secureHostHandle('server:delete-room', (_event, roomId) => {
@@ -462,6 +660,7 @@ secureHostHandle('server:delete-room', (_event, roomId) => {
   if (hostSettings.rooms.length === before) return { ok: false, message: 'Sala não encontrada.' };
   saveSettings();
   signaling?.updateRoomLayouts?.(hostSettings.rooms);
+  securityAuditStore?.record('room.deleted', { kind: 'serverhost', name: 'ServerHost' }, { roomId: id });
   return { ok: true, message: 'Sala removida. O código continua aceitando os canais padrão por compatibilidade.', rooms: publicRooms() };
 });
 secureHostHandle('server:save-settings', (_event, next = {}) => {
@@ -481,6 +680,8 @@ secureHostHandle('server:save-settings', (_event, next = {}) => {
     signaling?.configureChatStorage?.(hostSettings.storage);
   }
   if (next.chatPolicy && typeof next.chatPolicy === 'object') {
+    hostSettings.chatPolicy.attachmentsEnabled = next.chatPolicy.attachmentsEnabled === true;
+    hostSettings.chatPolicy.attachmentMaxMB = Math.max(1, Math.min(256, Math.round(Number(next.chatPolicy.attachmentMaxMB) || 5)));
     hostSettings.chatPolicy.cooldownSeconds = Math.max(0, Math.min(21600, Math.round(Number(next.chatPolicy.cooldownSeconds) || 0)));
     hostSettings.chatPolicy.pluginMessageMaxLength = Math.max(500, Math.min(10000, Math.round(Number(next.chatPolicy.pluginMessageMaxLength) || 2000)));
   }

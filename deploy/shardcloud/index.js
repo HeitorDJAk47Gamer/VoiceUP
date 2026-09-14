@@ -33,6 +33,19 @@ const safeMessageId = (value, socketId) => {
   const raw = String(value || Date.now().toString(36)).replace(/[^a-z0-9_-]/gi, '').slice(0, 72);
   return raw.startsWith(`msg-${owner}-`) ? raw : `msg-${owner}-${raw}`;
 };
+const TEXT_FILE_MAX_CHARACTERS = 30000;
+const TEXT_FILE_MAX_BYTES = 64 * 1024;
+const safeTextFileName = (value) => {
+  const withoutPath = String(value || 'mensagem.txt').split(/[\\/]/).pop() || 'mensagem.txt';
+  const cleaned = withoutPath.replace(/[\u0000-\u001f<>:"|?*]/g, '-').replace(/\s+/g, ' ').trim().slice(0, 80) || 'mensagem';
+  return /\.txt$/i.test(cleaned) ? cleaned : `${cleaned.replace(/\.+$/g, '') || 'mensagem'}.txt`;
+};
+const safeTextFile = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const content = String(value.content ?? '').replaceAll('\u0000', ''); const size = Buffer.byteLength(content, 'utf8');
+  if (!content.trim() || content.length > TEXT_FILE_MAX_CHARACTERS || size > TEXT_FILE_MAX_BYTES) return null;
+  return { name: safeTextFileName(value.name), content, size, type: 'text/plain' };
+};
 const voiceKey = (room, channel) => `voice:${room}:${channel}`;
 const serverKey = (room) => `server:${room}`;
 const app = express();
@@ -450,10 +463,13 @@ io.on('connection', (socket) => {
     if (channel !== LOBBY_CHANNEL) socket.to(next).emit('peer-joined', { id: socket.id, name: socket.data.name, color: socket.data.color, avatar: socket.data.avatar, clientId: socket.data.clientId || '', status: safePresenceStatus(socket.data.status), platform: safeClientPlatform(socket.data.platform) });
     broadcastPresence(socket.data.serverRoom);
   });
-  socket.on('text-message', ({ text, textChannel, messageId, createdAt, mentions, reply } = {}) => {
+  socket.on('text-message', ({ text, textFile, textChannel, messageId, createdAt, mentions, reply } = {}) => {
     if (!socket.data.serverRoom || !consumeRate(socket, 'text', 30, 10000)) return;
     if (!canWriteChat(socket)) return;
-    const safeText = String(text || '').trim().slice(0, 500); if (!safeText) return;
+    const requestedTextFile = textFile !== undefined && textFile !== null; const normalizedTextFile = safeTextFile(textFile);
+    if (requestedTextFile && !normalizedTextFile) return socket.emit('app-error', 'Arquivo de texto inválido ou maior que 64 KB.');
+    const fallbackText = normalizedTextFile ? `Arquivo de texto: ${normalizedTextFile.name}` : '';
+    const safeText = String(text || fallbackText).trim().slice(0, 500) || fallbackText; if (!safeText) return;
     const safeTextChannel = safeChannel(textChannel, 'geral'); const id = safeMessageId(messageId, socket.id); const sentAt = Number.isFinite(Number(createdAt)) ? Number(createdAt) : Date.now();
     socket.data.lastTextAt ||= new Map();
     const lastTextAt = Number(socket.data.lastTextAt.get(safeTextChannel) || 0);
@@ -466,7 +482,7 @@ io.on('connection', (socket) => {
     socket.data.chatMessages ||= new Map(); socket.data.chatMessages.set(id, { textChannel: safeTextChannel, mentions: safeMentionIds, mentionClientIds });
     if (socket.data.chatMessages.size > 250) socket.data.chatMessages.delete(socket.data.chatMessages.keys().next().value);
     counters.messages += 1;
-    const packet = { from: socket.id, authorClientId: socket.data.clientId || '', authorIdentityFingerprint: socket.data.identityFingerprint || '', messageId: id, createdAt: sentAt, text: safeText, textChannel: safeTextChannel, name: socket.data.name || 'Visitante', color: socket.data.color || colors[0], avatar: socket.data.avatar || '', mentions: safeMentionIds, mentionClientIds, reply: replyPacket, reactions: {}, pinned: false };
+    const packet = { from: socket.id, authorClientId: socket.data.clientId || '', authorIdentityFingerprint: socket.data.identityFingerprint || '', messageId: id, createdAt: sentAt, text: safeText, ...(normalizedTextFile ? { textFile: normalizedTextFile } : {}), textChannel: safeTextChannel, name: socket.data.name || 'Visitante', color: socket.data.color || colors[0], avatar: socket.data.avatar || '', mentions: safeMentionIds, mentionClientIds, reply: replyPacket, reactions: {}, pinned: false };
     rememberMessage(socket.data.room, packet); io.to(socket.data.serverRoom).emit('text-message', packet);
     plugins.onTextMessage({ text: safeText, room: socket.data.room, textChannel: safeTextChannel, voiceChannel: socket.data.voiceChannel, user: { id: socket.id, clientId: socket.data.clientId || '', name: socket.data.name || 'Visitante', color: socket.data.color || colors[0] }, serverIsCloud: true });
   });

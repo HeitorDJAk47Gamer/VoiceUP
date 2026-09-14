@@ -2,11 +2,14 @@
   const $ = (id) => document.getElementById(id);
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (letter) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[letter]));
   const history = [];
-  const pageNames = { overview: 'Visão geral', people: 'Pessoas', rooms: 'Salas e canais', extensions: 'Plugins', activity: 'Atividade', settings: 'Configurações' };
+  const pageNames = { overview: 'Visão geral', people: 'Pessoas', access: 'Cargos e acesso', rooms: 'Salas e canais', extensions: 'Plugins', activity: 'Atividade', settings: 'Configurações' };
   let latestStats = {};
   let latestInfo = {};
   let noticeTimer;
   let pendingUpdate = null;
+  let releaseNotesVersion = '1.2.2-beta.1';
+  let updateProgressCanMinimize = true;
+  let updateProgressValue = 0;
   let automaticUpdatePrompted = '';
   let pluginSnapshotKey = '';
   let dialogResolve = null;
@@ -18,6 +21,9 @@
   let voiceChannelDraft = [];
   let textChannelDraft = [];
   let categoryDraft = [];
+  let accessSnapshotKey = '';
+  let accessControl = { roles: [], assignments: [] };
+  let permissionDefinitions = [];
   const updateHardwareAccelerationUi = (settings = {}) => {
     const toggle = $('host-hardware-acceleration');
     const restart = $('host-hardware-restart');
@@ -87,6 +93,25 @@
     $('notice').className = `notice ${type}`;
     noticeTimer = setTimeout(() => $('notice').classList.add('hidden'), 4200);
   };
+  const setBackupStatus = (title, detail, tone = '') => {
+    const box = $('backup-status');
+    if (!box) return;
+    box.className = `backup-status${tone ? ` ${tone}` : ''}`;
+    box.querySelector('span').textContent = tone === 'error' ? '!' : tone === 'success' ? '✓' : '◷';
+    box.querySelector('b').textContent = String(title || 'Backup do servidor');
+    box.querySelector('small').textContent = String(detail || 'O arquivo contém dados privados do servidor. Guarde-o em um local seguro.');
+  };
+  const renderBackupMetadata = (status = {}) => {
+    if (status.lastRestoreAt) {
+      const when = new Date(status.lastRestoreAt).toLocaleString('pt-BR');
+      setBackupStatus('Servidor restaurado de um backup', `${status.lastRestoreFile || 'Arquivo verificado'} · ${when}. Cópia anterior: ${status.lastRollbackFile || 'salva automaticamente'}.`, 'success');
+      return;
+    }
+    if (status.lastBackupAt) {
+      const when = new Date(status.lastBackupAt).toLocaleString('pt-BR');
+      setBackupStatus('Último backup criado', `${status.lastBackupFile || 'Arquivo verificado'} · ${when} · ${formatBytes(status.lastBackupBytes)}.`, 'success');
+    }
+  };
   const closeDialog = (value = 'cancel') => {
     const modal = $('app-dialog'); if (!modal || modal.classList.contains('hidden')) return;
     modal.classList.add('hidden'); const resolve = dialogResolve; dialogResolve = null; resolve?.(value);
@@ -104,14 +129,19 @@
     $('app-dialog-actions').querySelectorAll('[data-dialog-value]').forEach((button) => { button.onclick = () => { const value = button.dataset.dialogValue; if (!returnFields || value === 'cancel') return closeDialog(value); const values = {}; fieldBox.querySelectorAll('[data-dialog-field]').forEach((input) => { values[input.dataset.dialogField] = input.value; }); closeDialog({ value, fields: values }); }; });
     modal.classList.remove('hidden'); requestAnimationFrame(() => $('app-dialog-actions').querySelector('[data-dialog-value]')?.focus());
   });
-  const showServerReleaseNotes = (version) => showDialog({
-    title: `Novidades da versão ${version}`,
-    message: window.voiceupReleaseHistory.locales['pt-BR'].subtitle,
-    detail: window.voiceupReleaseHistory.locales['pt-BR'].notes.map(note => `• ${note}`).join('\n\n'),
-    icon: '✦',
-    wide: true,
-    actions: [{ value: 'ok', label: 'Entendi', style: 'primary' }]
-  });
+  const showServerReleaseNotes = (version) => {
+    const releaseHistory = window.voiceupBetaReleaseHistory?.version === version
+      ? window.voiceupBetaReleaseHistory
+      : window.voiceupReleaseHistory;
+    return showDialog({
+      title: `Novidades da versão ${version}`,
+      message: releaseHistory.locales['pt-BR'].subtitle,
+      detail: releaseHistory.locales['pt-BR'].notes.map(note => `• ${note}`).join('\n\n'),
+      icon: '✦',
+      wide: true,
+      actions: [{ value: 'ok', label: 'Entendi', style: 'primary' }]
+    });
+  };
   const refreshServerUpdateControls = () => {
     const button = $('check-update');
     if (pendingUpdate) {
@@ -126,15 +156,39 @@
     if (!pendingUpdate) return;
     const button = $('check-update');
     button.disabled = true;
-    $('update-status').textContent = 'Baixando o pacote…';
+    $('update-status').textContent = 'Baixando e verificando o pacote…';
     const result = await window.voiceupServer.downloadUpdate();
-    $('update-status').textContent = result.ok ? 'Pacote aberto.' : result.message;
+    $('update-status').textContent = result.ok ? (result.silent ? 'Instalação silenciosa iniciada. O ServerHost será reiniciado.' : 'Pacote verificado aberto.') : result.message;
     button.disabled = !result.ok;
   };
   const confirmPendingServerUpdate = async () => {
     if (!pendingUpdate) return;
-    const accepted = await showDialog({ title: 'Atualização disponível', message: `Baixar o VoiceUP Server ${pendingUpdate.version}?`, detail: 'O pacote adequado ao seu sistema será aberto quando o download terminar.', icon: '↓', actions: [{ value: 'confirm', label: 'Baixar', style: 'primary' }, { value: 'cancel', label: 'Agora não', style: 'secondary' }] });
+    const accepted = await showDialog({ title: 'Atualização disponível', message: `Baixar o VoiceUP Server ${pendingUpdate.version}?`, detail: 'A assinatura será conferida e, no Windows, a instalação ocorrerá silenciosamente sem apagar suas salas, cargos, plugins ou configurações.', icon: '↓', actions: [{ value: 'confirm', label: 'Atualizar', style: 'primary' }, { value: 'cancel', label: 'Agora não', style: 'secondary' }] });
     if (accepted === 'confirm') await downloadPendingServerUpdate();
+  };
+  const minimizeUpdateProgress = () => {
+    if (!updateProgressCanMinimize) return;
+    $('update-progress')?.classList.add('hidden');
+    $('update-progress-chip')?.classList.remove('hidden');
+  };
+  const showUpdateProgress = (progress = {}) => {
+    const phase = String(progress.phase || 'checking');
+    const titles = { checking: 'Preparando a atualização', downloading: 'Baixando a nova versão', verifying: 'Verificando o pacote', installing: 'Instalando a atualização', error: 'Não foi possível atualizar' };
+    const rawPercent = Number(progress.percent);
+    const determinate = progress.percent !== null && progress.percent !== undefined && Number.isFinite(rawPercent);
+    updateProgressValue = determinate ? Math.max(0, Math.min(100, rawPercent)) : updateProgressValue;
+    updateProgressCanMinimize = progress.minimizable !== false;
+    $('update-progress-title').textContent = titles[phase] || 'Atualizando VoiceUP';
+    $('update-retry')?.classList.toggle('hidden', phase !== 'error');
+    $('update-progress-message').textContent = progress.message || 'Aguarde um instante…';
+    $('update-progress-bar').style.width = determinate ? `${updateProgressValue}%` : '34%';
+    $('update-progress-bar').classList.toggle('indeterminate', !determinate);
+    $('update-progress-detail').textContent = phase === 'installing' ? 'O ServerHost será fechado apenas quando o instalador silencioso estiver pronto.' : phase === 'error' ? 'Você pode minimizar esta janela e tentar novamente pelas Configurações.' : 'Você pode minimizar esta janela e continuar usando o painel.';
+    $('update-progress-minimize').classList.toggle('hidden', !updateProgressCanMinimize);
+    $('update-progress-chip-value').textContent = determinate ? `${Math.round(updateProgressValue)}%` : '…';
+    $('update-progress-chip').classList.toggle('error', phase === 'error');
+    $('update-progress').classList.remove('hidden');
+    $('update-progress-chip').classList.add('hidden');
   };
   const promptAutomaticServerUpdate = (result) => {
     const waitUntilInterfaceIsFree = () => {
@@ -233,7 +287,9 @@
     $('member-list').innerHTML = members.length ? members.map((member) => {
       const avatar = member.avatar ? `<img src="${escapeHtml(member.avatar)}" alt="">` : escapeHtml(initials(member.name));
       const channel = member.voiceChannel === '__lobby__' || !member.voiceChannel ? 'fora da call' : member.voiceChannel;
-      return `<div class="member"><span class="member-avatar" style="--member-color:${escapeHtml(member.color || '#56e2cf')}">${avatar}${globalThis.voiceupPlatform.badge(member.platform, member.status)}</span><span class="member-info"><b>${escapeHtml(member.name || 'Visitante')}${member.isBot ? ' · Bot' : ''}</b><small>Sala ${escapeHtml(member.room || '—')} · ${escapeHtml(channel)} · ${formatTime(member.connectedSeconds)}${member.remote ? ' · outro host' : ''}</small></span>${pingBars(member.ping)}${member.isBot ? '' : `<span class="member-actions"><button class="button secondary" data-moderate="kick" data-member="${escapeHtml(member.id)}">Expulsar</button><button class="button warning" data-moderate="punish" data-member="${escapeHtml(member.id)}">Castigar</button><button class="button danger" data-moderate="ban" data-member="${escapeHtml(member.id)}">Banir</button></span>`}</div>`;
+      const roles = (Array.isArray(member.roles) ? member.roles : []).filter((role) => role.id !== 'member');
+      const roleMarkup = roles.map((role) => `<i class="inline-role" style="--role-color:${escapeHtml(role.color)}">${escapeHtml(role.name)}</i>`).join('');
+      return `<div class="member"><span class="member-avatar" style="--member-color:${escapeHtml(member.color || '#56e2cf')}">${avatar}${globalThis.voiceupPlatform.badge(member.platform, member.status)}</span><span class="member-info"><b>${escapeHtml(member.name || 'Visitante')}${member.isBot ? ' · Bot' : ''}${roleMarkup}</b><small>Sala ${escapeHtml(member.room || '—')} · ${escapeHtml(channel)} · ${formatTime(member.connectedSeconds)}${member.remote ? ' · outro host' : ''}${member.identityVerified === false && !member.isBot ? ' · identidade antiga' : ''}</small></span>${pingBars(member.ping)}${member.isBot ? '' : `<span class="member-actions"><button class="button secondary" data-moderate="kick" data-member="${escapeHtml(member.id)}">Expulsar</button><button class="button warning" data-moderate="punish" data-member="${escapeHtml(member.id)}">Castigar</button><button class="button danger" data-moderate="ban" data-member="${escapeHtml(member.id)}">Banir</button></span>`}</div>`;
     }).join('') : '<div class="empty">Nenhum participante conectado.</div>';
     const bans = Array.isArray(stats.bans) ? stats.bans : [];
     $('ban-list').innerHTML = bans.length ? bans.map((ban) => {
@@ -281,9 +337,103 @@
     });
   }
 
+  const roleBadge = (role) => `<span class="role-badge" style="--role-color:${escapeHtml(role?.color || '#56e2cf')}"><i></i>${escapeHtml(role?.name || 'Membro')}</span>`;
+  const renderPermissionEditor = (selected = []) => {
+    const active = new Set(Array.isArray(selected) ? selected : []);
+    $('permission-editor').innerHTML = permissionDefinitions.map((permission) => `<label><input type="checkbox" value="${escapeHtml(permission.id)}"${active.has(permission.id) ? ' checked' : ''}><span><b>${escapeHtml(permission.label)}</b><small>${escapeHtml(permission.description)}</small></span></label>`).join('') || '<div class="empty">Permissões indisponíveis nesta versão.</div>';
+  };
+  const clearRoleForm = () => {
+    $('role-previous-id').value = '';
+    $('role-name').value = '';
+    $('role-color').value = '#56e2cf';
+    $('role-color-value').textContent = '#56e2cf';
+    $('role-position').value = '10';
+    $('role-editor-title').textContent = 'Criar cargo';
+    $('delete-role').classList.add('hidden');
+    renderPermissionEditor([]);
+  };
+  const fillRoleForm = (role) => {
+    if (!role) return;
+    $('role-previous-id').value = role.id || '';
+    $('role-name').value = role.name || '';
+    $('role-color').value = role.color || '#56e2cf';
+    $('role-color-value').textContent = role.color || '#56e2cf';
+    $('role-position').value = Number(role.position || 0);
+    $('role-editor-title').textContent = `Editar ${role.name || 'cargo'}`;
+    $('delete-role').classList.toggle('hidden', Boolean(role.protected));
+    renderPermissionEditor(role.permissions || []);
+  };
+  const accessActionLabel = (action) => ({
+    'session.joined': 'Entrou no servidor', 'session.left': 'Saiu do servidor', 'server.settings.changed': 'Alterou configurações do servidor',
+    'server.settings.change': 'Tentou alterar configurações do servidor', 'channel.created': 'Criou canal', 'channel.updated': 'Configurou canal',
+    'member.moved': 'Moveu participante', 'member.roles.changed': 'Alterou cargos', 'role.saved': 'Salvou cargo',
+    'role.deleted': 'Removeu cargo', 'moderation.kick': 'Expulsou participante', 'moderation.ban': 'Baniu participante',
+    'moderation.punish': 'Aplicou castigo', 'moderation.unban': 'Removeu ban', 'moderation.unpunish': 'Removeu castigo',
+    'room.created': 'Criou sala', 'room.updated': 'Alterou sala', 'room.deleted': 'Removeu sala', 'message.pin': 'Fixou mensagem'
+  }[action] || String(action || 'Ação do servidor'));
+  const renderAccessControl = (stats = {}) => {
+    const nextAccess = stats.accessControl || { roles: [], assignments: [] };
+    const nextPermissions = Array.isArray(stats.permissionDefinitions) ? stats.permissionDefinitions : [];
+    const memberSnapshot = (stats.members || []).map((member) => ({ id: member.id, clientId: member.clientId, name: member.name, identityVerified: member.identityVerified, roleIds: member.roleIds }));
+    const audits = Array.isArray(stats.securityAudit) ? stats.securityAudit : [];
+    const key = JSON.stringify({ access: nextAccess, permissions: nextPermissions, members: memberSnapshot, auditIds: audits.map((entry) => entry.id) });
+    if (key === accessSnapshotKey) return;
+    accessSnapshotKey = key;
+    accessControl = nextAccess;
+    permissionDefinitions = nextPermissions;
+    const roles = Array.isArray(accessControl.roles) ? accessControl.roles : [];
+    $('access-role-count').textContent = `${roles.length} cargo${roles.length === 1 ? '' : 's'}`;
+    $('role-list').innerHTML = roles.length ? roles.map((role) => `<button class="role-card" type="button" data-edit-role="${escapeHtml(role.id)}"><span>${roleBadge(role)}${role.protected ? '<em>Padrão</em>' : ''}</span><small>${role.permissions?.length ? `${role.permissions.length} permissões` : 'Sem permissões administrativas'} · posição ${Number(role.position || 0)}</small></button>`).join('') : '<div class="empty">Nenhum cargo cadastrado.</div>';
+    document.querySelectorAll('[data-edit-role]').forEach((button) => { button.onclick = () => fillRoleForm(roles.find((role) => role.id === button.dataset.editRole)); });
+    if (!$('role-previous-id').value) renderPermissionEditor([]);
+
+    const assignedByClient = new Map((accessControl.assignments || []).map((entry) => [String(entry.clientId), entry]));
+    const known = new Map();
+    for (const assignment of accessControl.assignments || []) known.set(String(assignment.clientId), { clientId: assignment.clientId, name: assignment.lastName || 'Perfil salvo', identityVerified: true, connected: false, roleIds: assignment.roleIds || [] });
+    for (const member of stats.members || []) {
+      if (member.isBot) continue;
+      const keyId = member.clientId ? String(member.clientId) : `socket:${member.id}`;
+      known.set(keyId, { ...member, connected: true, roleIds: assignedByClient.get(String(member.clientId))?.roleIds || member.roleIds || [] });
+    }
+    const people = [...known.values()].sort((left, right) => Number(right.connected) - Number(left.connected) || String(left.name).localeCompare(String(right.name), 'pt-BR'));
+    const assignableRoles = roles.filter((role) => role.id !== 'member');
+    $('role-member-list').innerHTML = people.length ? people.map((member) => {
+      const persistent = Boolean(member.clientId) && member.identityVerified !== false && !member.remote && !String(member.clientId).startsWith('socket:');
+      const selected = new Set(member.roleIds || []);
+      const badges = (member.roleIds || []).map((id) => roles.find((role) => role.id === id)).filter(Boolean).map(roleBadge).join('') || roleBadge(roles.find((role) => role.id === 'member'));
+      const unavailableReason = member.remote ? ' · gerenciado pelo outro host' : (persistent ? '' : ' · sem identidade protegida');
+      return `<article class="role-member" data-role-client="${escapeHtml(persistent ? member.clientId : '')}"><header><span><b>${escapeHtml(member.name || 'Visitante')}</b><small>${member.connected ? '● conectado agora' : 'perfil salvo'}${unavailableReason}</small></span><span class="role-member-badges">${badges}</span></header><div class="role-choice-list">${assignableRoles.map((role) => `<label><input type="checkbox" value="${escapeHtml(role.id)}"${selected.has(role.id) ? ' checked' : ''}${persistent ? '' : ' disabled'}>${roleBadge(role)}</label>`).join('') || '<small>Crie um cargo editável primeiro.</small>'}</div><small class="role-assignment-autosave" aria-live="polite"></small></article>`;
+    }).join('') : '<div class="empty">Nenhuma identidade conhecida. Atribuições aparecerão quando alguém entrar.</div>';
+    document.querySelectorAll('.role-member[data-role-client]').forEach((card) => {
+      const clientId = card.dataset.roleClient;
+      if (!clientId) return;
+      const inputs = [...card.querySelectorAll('.role-choice-list input[type="checkbox"]')];
+      inputs.forEach((input) => {
+        input.onchange = async () => {
+          const roleIds = inputs.filter((choice) => choice.checked).map((choice) => choice.value);
+          const status = card.querySelector('.role-assignment-autosave');
+          inputs.forEach((choice) => { choice.disabled = true; });
+          card.setAttribute('aria-busy', 'true');
+          if (status) status.innerHTML = '<span aria-hidden="true">↻</span>Salvando cargos…';
+          const name = card.querySelector('header b')?.textContent || '';
+          const result = await window.voiceupServer.assignRoles(clientId, roleIds, name);
+          card.removeAttribute('aria-busy');
+          if (!result.ok) showNotice(result.message || 'Não foi possível alterar os cargos.', 'error');
+          accessSnapshotKey = '';
+          await refresh();
+        };
+      });
+    });
+    $('security-audit-list').innerHTML = audits.length ? audits.map((entry) => {
+      const target = entry.target?.name || entry.target?.channel || entry.target?.roomId || entry.target?.clientId || '';
+      const detail = Object.entries(entry.details || {}).filter(([, value]) => value !== '' && value !== 0).map(([name, value]) => `${name}: ${Array.isArray(value) ? value.join(', ') : value}`).join(' · ');
+      return `<article class="security-audit-entry ${escapeHtml(entry.outcome || 'allowed')}"><i></i><span><b>${escapeHtml(accessActionLabel(entry.action))}${target ? ` · ${escapeHtml(target)}` : ''}</b><small>${escapeHtml(entry.actor?.name || 'ServerHost')} · ${escapeHtml(new Date(entry.at || Date.now()).toLocaleString('pt-BR'))}${detail ? ` · ${escapeHtml(detail)}` : ''}</small></span><em>${entry.outcome === 'denied' ? 'Negada' : entry.outcome === 'failed' ? 'Falhou' : 'Permitida'}</em></article>`;
+    }).join('') : '<div class="empty">Nenhuma ação de segurança registrada.</div>';
+  };
+
   const defaultChannel = (name, type, position) => type === 'voice'
-    ? { id: `${name}-${position}`, name, type, position, category: '', userLimit: 0, bitrateKbps: 64, region: 'auto', locked: false }
-    : { id: `${name}-${position}`, name, type, position, category: '', topic: '', slowModeSeconds: 0, readOnly: false };
+    ? { id: `${name}-${position}`, name, type, kind: 'voice', position, category: '', visibleRoleIds: [], userLimit: 0, bitrateKbps: 64, region: 'auto', locked: false }
+    : { id: `${name}-${position}`, name, type, kind: 'text', position, category: '', visibleRoleIds: [], topic: '', slowModeSeconds: 0, readOnly: false, forumTags: [], forumSort: 'recent' };
   const channelDraft = (values, names, type) => (Array.isArray(values) && values.length ? values : names.map((name, index) => defaultChannel(name, type, index))).map((channel, index) => ({ ...defaultChannel(channel.name || `${type === 'voice' ? 'Voz' : 'texto'} ${index + 1}`, type, index), ...channel, type, position: index }));
   const syncLegacyChannelFields = () => {
     $('room-voice-channels').value = voiceChannelDraft.map((channel) => channel.name).join('\n');
@@ -292,8 +442,8 @@
   const channelCard = (channel, index, type, total) => {
     const voice = type === 'voice';
     const detail = voice
-      ? `<label><span>Limite</span><input data-channel-field="userLimit" type="number" min="0" max="99" value="${Number(channel.userLimit || 0)}"><small>0 usa o limite global</small></label><label><span>Bitrate</span><select data-channel-field="bitrateKbps">${[32,48,64,96,128,192,256,384,510].map((value) => `<option value="${value}"${Number(channel.bitrateKbps) === value ? ' selected' : ''}>${value} Kbps</option>`).join('')}</select></label><label><span>Região</span><select data-channel-field="region"><option value="auto">Automática</option><option value="brazil"${channel.region === 'brazil' ? ' selected' : ''}>Brasil</option><option value="us-east"${channel.region === 'us-east' ? ' selected' : ''}>EUA Leste</option><option value="eu-central"${channel.region === 'eu-central' ? ' selected' : ''}>Europa Central</option></select></label><label class="channel-check"><input data-channel-field="locked" type="checkbox"${channel.locked ? ' checked' : ''}><span>Canal fechado</span></label>`
-      : `<label class="channel-topic"><span>Tópico</span><input data-channel-field="topic" maxlength="240" value="${escapeHtml(channel.topic || '')}" placeholder="Descrição do canal"></label><label><span>Cooldown (s)</span><input data-channel-field="slowModeSeconds" type="number" min="0" max="21600" step="1" value="${Number(channel.slowModeSeconds || 0)}"><small>0 desativa neste canal</small></label><label class="channel-check"><input data-channel-field="readOnly" type="checkbox"${channel.readOnly ? ' checked' : ''}><span>Somente leitura</span></label>`;
+      ? `<label><span>Formato</span><select data-channel-field="kind"><option value="voice"${channel.kind !== 'stage' && channel.kind !== 'dynamic' ? ' selected' : ''}>Canal de voz</option><option value="stage"${channel.kind === 'stage' ? ' selected' : ''}>Canal de Palco</option><option value="dynamic"${channel.kind === 'dynamic' ? ' selected' : ''}>Canal dinâmico</option></select><small>${channel.kind === 'dynamic' ? 'Cria uma call com o nome da pessoa e apaga após a última saída.' : channel.kind === 'stage' ? 'Canal de apresentação em voz.' : 'Call padrão.'}</small></label><label><span>Limite</span><input data-channel-field="userLimit" type="number" min="0" max="99" value="${Number(channel.userLimit || 0)}"><small>0 usa o limite global</small></label><label><span>Bitrate</span><select data-channel-field="bitrateKbps">${[32,48,64,96,128,192,256,384,510].map((value) => `<option value="${value}"${Number(channel.bitrateKbps) === value ? ' selected' : ''}>${value} Kbps</option>`).join('')}</select></label><label><span>Região</span><select data-channel-field="region"><option value="auto">Automática</option><option value="brazil"${channel.region === 'brazil' ? ' selected' : ''}>Brasil</option><option value="us-east"${channel.region === 'us-east' ? ' selected' : ''}>EUA Leste</option><option value="eu-central"${channel.region === 'eu-central' ? ' selected' : ''}>Europa Central</option></select></label><label class="channel-check"><input data-channel-field="locked" type="checkbox"${channel.locked ? ' checked' : ''}><span>Canal fechado</span></label>`
+      : `<label><span>Formato</span><select data-channel-field="kind"><option value="text"${channel.kind !== 'forum' ? ' selected' : ''}>Canal de texto</option><option value="forum"${channel.kind === 'forum' ? ' selected' : ''}>Fórum</option></select><small>${channel.kind === 'forum' ? 'Conversa organizada por tópicos.' : 'Chat contínuo.'}</small></label><label class="channel-topic"><span>Tópico</span><input data-channel-field="topic" maxlength="240" value="${escapeHtml(channel.topic || '')}" placeholder="Descrição do canal"></label><label><span>Cooldown (s)</span><input data-channel-field="slowModeSeconds" type="number" min="0" max="21600" step="1" value="${Number(channel.slowModeSeconds || 0)}"><small>0 desativa neste canal</small></label><label class="channel-check"><input data-channel-field="readOnly" type="checkbox"${channel.readOnly ? ' checked' : ''}><span>Somente leitura</span></label><label class="channel-topic"><span>Tags do fórum</span><input data-channel-field="forumTags" maxlength="240" value="${escapeHtml(Array.isArray(channel.forumTags) ? channel.forumTags.join(', ') : channel.forumTags || '')}" placeholder="ajuda, beta, jogo"></label><label><span>Ordem dos tópicos</span><select data-channel-field="forumSort"><option value="recent"${channel.forumSort !== 'newest' ? ' selected' : ''}>Atividade recente</option><option value="newest"${channel.forumSort === 'newest' ? ' selected' : ''}>Mais novos</option></select></label>`;
     return `<article class="channel-editor-card" data-channel-index="${index}" data-channel-type="${type}"><header><span class="channel-kind">${voice ? '◖' : '#'}</span><input class="channel-name-input" data-channel-field="name" maxlength="24" value="${escapeHtml(channel.name)}" aria-label="Nome do canal"><span class="channel-order"><button type="button" data-channel-action="up"${index === 0 ? ' disabled' : ''} title="Mover para cima">↑</button><button type="button" data-channel-action="down"${index === total - 1 ? ' disabled' : ''} title="Mover para baixo">↓</button><button type="button" data-channel-action="delete" title="Remover">×</button></span></header><div class="channel-fields"><label><span>Categoria</span><input data-channel-field="category" maxlength="36" value="${escapeHtml(channel.category || '')}" placeholder="Opcional"></label>${detail}</div></article>`;
   };
   const renderChannelEditors = () => {
@@ -498,7 +648,7 @@
     const storage = stats.storage || {};
     const storageCategories = storage.categories || {};
     $('storage-total').textContent = formatBytes(storage.totalBytes || 0);
-    const storageLabels = { chats: 'Chats', reports: 'Relatórios', bans: 'Banimentos', punishments: 'Castigos', settings: 'Configurações', plugins: 'Plugins', music: 'Músicas', other: 'Outros' };
+    const storageLabels = { chats: 'Chats', reports: 'Relatórios', bans: 'Banimentos', punishments: 'Castigos', security: 'Segurança', settings: 'Configurações', plugins: 'Plugins', music: 'Músicas', other: 'Outros' };
     $('storage-categories').innerHTML = Object.entries(storageLabels).map(([key, label]) => `<div class="storage-category"><span>${escapeHtml(label)}</span><strong>${escapeHtml(formatBytes(storageCategories[key] || 0))}</strong></div>`).join('');
     const reports = Array.isArray(stats.reports) ? stats.reports : [];
     $('bug-report-list').innerHTML = reports.length ? reports.map((report) => `<article class="bug-report"><b>${escapeHtml(report.name || 'Cliente')} · ${escapeHtml(report.category || 'erro')}</b><time>${escapeHtml(new Date(Number(report.receivedAt) || Date.now()).toLocaleString('pt-BR'))}</time><p>${escapeHtml(report.description || '')}</p><small>${escapeHtml(report.version || 'versão não informada')} · ${escapeHtml(report.id || '')}</small></article>`).join('') : '<div class="empty">Nenhum relatório recebido.</div>';
@@ -533,6 +683,7 @@
     const logs = Array.isArray(stats.logs) ? stats.logs : [];
     $('logs').innerHTML = logs.length ? logs.map((log) => `<div class="log"><time>${escapeHtml(log.time || '')}</time><b>${escapeHtml(String(log.level || 'info').toUpperCase())}</b><span>${escapeHtml(log.message || '')}</span></div>`).join('') : '<div class="empty">Nenhum evento ainda.</div>';
     renderMembers(stats);
+    renderAccessControl(stats);
     renderPlugins(stats);
     renderWebrtcDiagnostics(stats);
     history.push({ ...stats, signals, inboundKbps: Number(stats.bandwidth?.inboundKbps || 0), outboundKbps: Number(stats.bandwidth?.outboundKbps || 0) });
@@ -558,7 +709,7 @@
       $('plugin-folder').textContent = info.pluginFolder || 'Indisponível';
       $('music-folder').textContent = info.musicFolder || 'Indisponível';
       const serverVersion = info.version || '1.1.2';
-      const releaseNotesVersion = serverVersion;
+      releaseNotesVersion = serverVersion;
       $('app-version').textContent = serverVersion;
       const settings = await window.voiceupServer.settings();
       $('host-close-behavior').value = settings.closeBehavior || 'ask';
@@ -570,11 +721,15 @@
       $('chat-max-per-room').value = Number(settings.storage?.maxPerRoom ?? 300);
       $('chat-cooldown-seconds').value = Number(settings.chatPolicy?.cooldownSeconds ?? 0);
       $('plugin-message-max-length').value = Number(settings.chatPolicy?.pluginMessageMaxLength ?? 2000);
+      $('attachments-enabled').checked = settings.chatPolicy?.attachmentsEnabled === true;
+      $('attachment-max-mb').value = Number(settings.chatPolicy?.attachmentMaxMB || 5);
       $('public-access-automatic').checked = settings.publicAccess?.automatic === true;
       publicAccessAcknowledged = $('public-access-automatic').checked && Number(settings.publicAccess?.consentVersion || 0) >= 1;
       setTheme($('host-theme').value);
       renderRooms(await window.voiceupServer.rooms());
       clearRoomForm();
+      clearRoleForm();
+      if (window.voiceupServer.backupStatus) renderBackupMetadata(await window.voiceupServer.backupStatus());
       const cluster = await window.voiceupServer.clusterSettings();
       $('cluster-mode').value = cluster.enabled ? cluster.role : 'off';
       $('cluster-primary-url').value = cluster.primaryUrl || '';
@@ -639,6 +794,7 @@
       const input = event.target.closest('[data-channel-field]'); if (!input) return;
       const key = input.dataset.channelField;
       channel[key] = input.type === 'checkbox' ? input.checked : input.type === 'number' || ['userLimit', 'slowModeSeconds', 'bitrateKbps'].includes(key) ? Number(input.value) : input.value;
+      if (key === 'kind') { renderChannelEditors(); return; }
       syncLegacyChannelFields();
     };
     ['voice-channel-editor', 'text-channel-editor'].forEach((id) => { $(id).addEventListener('input', handleChannelEditor); $(id).addEventListener('change', handleChannelEditor); $(id).addEventListener('click', handleChannelEditor); });
@@ -668,6 +824,29 @@
       try { await navigator.clipboard.writeText(payload); showNotice('JSON compatível copiado.'); } catch { showNotice('Não foi possível copiar o JSON.', 'error'); }
     };
     $('clear-room-form').onclick = clearRoomForm;
+    $('clear-role-form').onclick = clearRoleForm;
+    $('role-color').oninput = () => { $('role-color-value').textContent = $('role-color').value; };
+    $('save-role').onclick = async () => {
+      const name = $('role-name').value.trim();
+      if (!name) return showNotice('Informe o nome do cargo.', 'error');
+      const permissions = [...$('permission-editor').querySelectorAll('input:checked')].map((input) => input.value);
+      $('save-role').disabled = true;
+      const result = await window.voiceupServer.saveRole({ previousId: $('role-previous-id').value, name, color: $('role-color').value, position: Number($('role-position').value), permissions });
+      $('save-role').disabled = false; showNotice(result.message, result.ok ? 'success' : 'error');
+      if (result.ok) { clearRoleForm(); accessSnapshotKey = ''; await refresh(); }
+    };
+    $('delete-role').onclick = async () => {
+      const roleId = $('role-previous-id').value; if (!roleId) return;
+      const accepted = await showDialog({ title: 'Excluir cargo?', message: `Remover o cargo ${$('role-name').value || roleId}?`, detail: 'As pessoas atribuídas voltarão ao cargo Membro quando não tiverem outro cargo.', tone: 'danger', icon: '×', actions: [{ value: 'confirm', label: 'Excluir cargo', style: 'danger' }, { value: 'cancel', label: 'Cancelar', style: 'secondary' }] });
+      if (accepted !== 'confirm') return;
+      const result = await window.voiceupServer.deleteRole(roleId); showNotice(result.message, result.ok ? 'success' : 'error');
+      if (result.ok) { clearRoleForm(); accessSnapshotKey = ''; await refresh(); }
+    };
+    $('clear-security-audit').onclick = async () => {
+      const accepted = await showDialog({ title: 'Limpar registro de segurança?', message: 'As entradas atuais da auditoria serão removidas do disco.', detail: 'Cargos, permissões, salas e configurações não serão alterados.', tone: 'danger', icon: '×', actions: [{ value: 'confirm', label: 'Limpar registro', style: 'danger' }, { value: 'cancel', label: 'Cancelar', style: 'secondary' }] });
+      if (accepted !== 'confirm') return;
+      const result = await window.voiceupServer.clearSecurityAudit(); showNotice(`${result.removed || 0} registro(s) removido(s).`); accessSnapshotKey = ''; await refresh();
+    };
     $('save-room').onclick = async () => {
       const room = {
         previousId: $('room-previous-id').value,
@@ -703,7 +882,7 @@
       refresh();
     };
     const saveHostSettings = async (notify = false) => {
-      const settings = await window.voiceupServer.saveSettings({ closeBehavior: $('host-close-behavior').value, theme: $('host-theme').value, serverIcon: hostServerIcon, hardwareAcceleration: $('host-hardware-acceleration').checked, publicAccess: { automatic: $('public-access-automatic').checked, confirmed: publicAccessAcknowledged }, storage: { retentionDays: Number($('chat-retention-days').value), maxPerRoom: Number($('chat-max-per-room').value) }, chatPolicy: { cooldownSeconds: Number($('chat-cooldown-seconds').value), pluginMessageMaxLength: Number($('plugin-message-max-length').value) } });
+      const settings = await window.voiceupServer.saveSettings({ closeBehavior: $('host-close-behavior').value, theme: $('host-theme').value, serverIcon: hostServerIcon, hardwareAcceleration: $('host-hardware-acceleration').checked, publicAccess: { automatic: $('public-access-automatic').checked, confirmed: publicAccessAcknowledged }, storage: { retentionDays: Number($('chat-retention-days').value), maxPerRoom: Number($('chat-max-per-room').value) }, chatPolicy: { cooldownSeconds: Number($('chat-cooldown-seconds').value), pluginMessageMaxLength: Number($('plugin-message-max-length').value), attachmentsEnabled: $('attachments-enabled').checked, attachmentMaxMB: Number($('attachment-max-mb').value) } });
       $('host-close-behavior').value = settings.closeBehavior || 'ask';
       setTheme(settings.theme);
       updateHardwareAccelerationUi(settings);
@@ -719,6 +898,8 @@
     $('chat-max-per-room').onchange = scheduleHostSettingsSave;
     $('chat-cooldown-seconds').onchange = scheduleHostSettingsSave;
     $('plugin-message-max-length').onchange = scheduleHostSettingsSave;
+    $('attachments-enabled').onchange = scheduleHostSettingsSave;
+    $('attachment-max-mb').onchange = scheduleHostSettingsSave;
     $('public-access-automatic').onchange = async () => {
       if (!$('public-access-automatic').checked) {
         publicAccessAcknowledged = false;
@@ -756,6 +937,58 @@
     $('host-hardware-restart-button').onclick = async () => {
       const accepted = await showDialog({ title: 'Reiniciar o ServerHost?', message: 'A aceleração de hardware será alterada na próxima abertura.', detail: 'As pessoas conectadas serão desconectadas, mas as configurações, salas e plugins já estão salvos.', icon: '↻', actions: [{ value: 'confirm', label: 'Reiniciar agora', style: 'primary' }, { value: 'cancel', label: 'Reiniciar depois', style: 'secondary' }] });
       if (accepted === 'confirm') await window.voiceupServer.restartApplication();
+    };
+    $('create-server-backup').onclick = async () => {
+      const button = $('create-server-backup');
+      button.disabled = true;
+      setBackupStatus('Criando backup verificado…', 'As gravações pendentes estão sendo concluídas antes de montar o arquivo.');
+      try {
+        const result = await window.voiceupServer.createBackup({ includePlugins: $('backup-include-plugins').checked, includeMusic: $('backup-include-music').checked });
+        if (result.canceled) { setBackupStatus('Backup cancelado', 'Nenhum arquivo ou dado do servidor foi alterado.'); return; }
+        if (!result.ok) { setBackupStatus('Não foi possível criar o backup', result.message, 'error'); showNotice(result.message, 'error'); return; }
+        const content = `${result.fileCount} arquivos · ${formatBytes(result.totalBytes)} de dados · ${formatBytes(result.archiveBytes)} compactados`;
+        setBackupStatus(result.fileName || 'Backup criado', content, 'success');
+        showNotice('Backup completo criado e verificado.');
+      } catch (error) {
+        setBackupStatus('Falha ao criar o backup', error?.message || 'Erro inesperado.', 'error');
+        showNotice(error?.message || 'Não foi possível criar o backup.', 'error');
+      } finally { button.disabled = false; }
+    };
+    $('restore-server-backup').onclick = async () => {
+      const button = $('restore-server-backup');
+      button.disabled = true;
+      try {
+        const selected = await window.voiceupServer.chooseBackup();
+        if (selected.canceled) return;
+        if (!selected.ok) { setBackupStatus('Backup recusado', selected.message, 'error'); showNotice(selected.message, 'error'); return; }
+        const details = [
+          `Criado em ${new Date(selected.createdAt).toLocaleString('pt-BR')} pelo VoiceUP ${selected.sourceVersion}.`,
+          `${selected.fileCount} arquivos e ${formatBytes(selected.totalBytes)} de dados verificados.`,
+          selected.includes?.plugins ? `${selected.pluginFileCount} arquivo(s) de plugin serão restaurados.` : 'Os plugins instalados neste PC serão preservados.',
+          selected.includes?.music ? `${selected.musicFileCount} arquivo(s) de música serão restaurados.` : 'As músicas existentes neste PC serão preservadas.',
+          'Antes de substituir qualquer dado, o estado atual será salvo automaticamente na pasta Backups.'
+        ].join('\n\n');
+        const accepted = await showDialog({
+          title: 'Restaurar este servidor?',
+          message: selected.fileName,
+          detail: details,
+          tone: 'danger', icon: '↺', wide: true,
+          actions: [{ value: 'confirm', label: 'Restaurar e reiniciar', style: 'danger' }, { value: 'cancel', label: 'Cancelar', style: 'secondary' }]
+        });
+        if (accepted !== 'confirm') return;
+        setBackupStatus('Restaurando o servidor…', 'Participantes serão desconectados e o ServerHost reiniciará automaticamente.', 'warning');
+        const result = await window.voiceupServer.restoreBackup(selected.token);
+        if (!result.ok) { setBackupStatus('A restauração falhou com segurança', result.message, 'error'); showNotice(result.message, 'error'); return; }
+        setBackupStatus('Backup restaurado', result.message, 'success');
+        showNotice(result.message);
+      } catch (error) {
+        setBackupStatus('Falha ao restaurar', error?.message || 'Erro inesperado.', 'error');
+        showNotice(error?.message || 'Não foi possível restaurar o backup.', 'error');
+      } finally { button.disabled = false; }
+    };
+    $('open-backup-folder').onclick = async () => {
+      const result = await window.voiceupServer.openBackupFolder();
+      if (!result.ok) showNotice(result.message, 'error');
     };
     $('cleanup-expired-messages').onclick = async () => {
       const result = await window.voiceupServer.cleanupMessages({ olderThanDays: Number($('chat-retention-days').value) });
@@ -806,8 +1039,25 @@
     $('check-update').onclick = async () => { if (pendingUpdate) await confirmPendingServerUpdate(); else await checkServerUpdates(); };
     $('server-release-notes').onclick = () => void showServerReleaseNotes(releaseNotesVersion);
     $('metric-select').onchange = drawChart;
+    window.voiceupServer.onUpdateProgress?.(showUpdateProgress);
+    $('update-retry').onclick = async () => {
+      $('update-retry').disabled = true;
+      try { await window.voiceupServer.downloadUpdate(); }
+      catch { showUpdateProgress({ phase: 'error', message: 'Falha ao iniciar a atualização. Tente novamente.' }); }
+      finally { $('update-retry').disabled = false; }
+    };
+    window.voiceupServer.updateRecovery?.().then((result) => {
+      if (result?.pending) { showUpdateProgress({ phase: 'error', message: result.message }); minimizeUpdateProgress(); }
+    }).catch(() => {});
+    $('update-progress-minimize').onclick = minimizeUpdateProgress;
+    $('update-progress-chip').onclick = () => { $('update-progress-chip').classList.add('hidden'); $('update-progress').classList.remove('hidden'); };
+    $('update-progress').addEventListener('click', (event) => { if (event.target === $('update-progress')) minimizeUpdateProgress(); });
     $('app-dialog').addEventListener('click', (event) => { if (event.target === $('app-dialog')) closeDialog('cancel'); });
-    document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !$('app-dialog').classList.contains('hidden')) closeDialog('cancel'); });
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      if (!$('app-dialog').classList.contains('hidden')) closeDialog('cancel');
+      else if (!$('update-progress').classList.contains('hidden')) minimizeUpdateProgress();
+    });
     window.voiceupServer.onCloseRequest?.(async () => {
       const choice = await showDialog({
         title: 'Fechar o VoiceUP Server?',

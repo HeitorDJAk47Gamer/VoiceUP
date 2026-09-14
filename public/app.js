@@ -91,7 +91,7 @@ let hardwareAccelerationAtStartup = true;
 let fullscreenGameCaptureCompatibilityEnabled = true;
 let fullscreenGameCaptureCompatibilityAtStartup = false;
 let fullscreenGameCaptureCompatibilitySupported = false;
-let presenceStatus = ['online', 'idle', 'dnd'].includes(storedProfile.presenceStatus) ? storedProfile.presenceStatus : 'online';
+let presenceStatus = ['online', 'idle', 'activity', 'dnd'].includes(storedProfile.presenceStatus) ? storedProfile.presenceStatus : 'online';
 let effectivePresenceStatus = presenceStatus;
 let presenceAutoIdle = false;
 let lastPresenceActivityAt = Date.now();
@@ -100,20 +100,21 @@ const hostedPeers = new Map();
 const serverMembers = new Map();
 const voiceChannelActivityClock = globalThis.voiceupChannelRoster.createActivityClock();
 const channelMessages = new Map(ROOM_CHANNELS.text.map((channel) => [channel, []]));
+let activeForumThreadId = '';
 function applyHostedRoomLayout(layout = {}, { reset = false } = {}) {
-  const clean = (values, fallback) => {
+  const clean = (values, fallback, allowExplicitEmpty = false) => {
     const source = Array.isArray(values) ? values : fallback;
     const items = [...new Set(source.map((value) => String(value || '').trim().slice(0, 24)).filter(Boolean))].slice(0, 24);
-    return items.length ? items : [...fallback];
+    return items.length || (allowExplicitEmpty && Array.isArray(values)) ? items : [...fallback];
   };
-  const voice = clean(reset ? DEFAULT_ROOM_CHANNELS.voice : layout.voiceChannels, DEFAULT_ROOM_CHANNELS.voice);
-  const text = clean(reset ? DEFAULT_ROOM_CHANNELS.text : layout.textChannels, DEFAULT_ROOM_CHANNELS.text);
+  const voice = clean(reset ? DEFAULT_ROOM_CHANNELS.voice : layout.voiceChannels, DEFAULT_ROOM_CHANNELS.voice, !reset);
+  const text = clean(reset ? DEFAULT_ROOM_CHANNELS.text : layout.textChannels, DEFAULT_ROOM_CHANNELS.text, !reset);
   const previousVoice = activeVoiceChannel;
   activeHostedRoomName = reset ? '' : String(layout.name || '').trim().slice(0, 48);
   ROOM_CHANNELS.voice.splice(0, ROOM_CHANNELS.voice.length, ...voice);
   ROOM_CHANNELS.text.splice(0, ROOM_CHANNELS.text.length, ...text);
-  ROOM_CHANNEL_LAYOUT.voice = reset ? [] : (Array.isArray(layout.voiceChannelSettings) ? layout.voiceChannelSettings : []).map((channel) => ({ name: String(channel.name || ''), category: String(channel.category || ''), userLimit: Number(channel.userLimit || 0), humans: Number(channel.humans || 0), total: Number(channel.total || 0) }));
-  ROOM_CHANNEL_LAYOUT.text = reset ? [] : (Array.isArray(layout.textChannelSettings) ? layout.textChannelSettings : []).map((channel) => ({ name: String(channel.name || ''), category: String(channel.category || '') }));
+  ROOM_CHANNEL_LAYOUT.voice = reset ? [] : (Array.isArray(layout.voiceChannelSettings) ? layout.voiceChannelSettings : []).map((channel, position) => ({ id: String(channel.id || ''), name: String(channel.name || ''), type: 'voice', kind: ['stage', 'dynamic'].includes(String(channel.kind)) ? String(channel.kind) : 'voice', ephemeral: channel.ephemeral === true, dynamicParentId: String(channel.dynamicParentId || ''), position: Number(channel.position ?? position), category: String(channel.category || ''), visibleRoleIds: Array.isArray(channel.visibleRoleIds) ? channel.visibleRoleIds.map(String) : [], userLimit: Number(channel.userLimit || 0), bitrateKbps: Number(channel.bitrateKbps || 64), region: String(channel.region || 'auto'), locked: channel.locked === true, humans: Number(channel.humans || 0), total: Number(channel.total || 0) }));
+  ROOM_CHANNEL_LAYOUT.text = reset ? [] : (Array.isArray(layout.textChannelSettings) ? layout.textChannelSettings : []).map((channel, position) => ({ id: String(channel.id || ''), name: String(channel.name || ''), type: 'text', kind: channel.kind === 'forum' ? 'forum' : 'text', position: Number(channel.position ?? position), category: String(channel.category || ''), visibleRoleIds: Array.isArray(channel.visibleRoleIds) ? channel.visibleRoleIds.map(String) : [], topic: String(channel.topic || ''), slowModeSeconds: Number(channel.slowModeSeconds || 0), readOnly: channel.readOnly === true, forumTags: Array.isArray(channel.forumTags) ? channel.forumTags.map(String).slice(0, 16) : [], forumSort: channel.forumSort === 'newest' ? 'newest' : 'recent' }));
   ROOM_CHANNEL_LAYOUT.categories = reset ? [] : (Array.isArray(layout.categories) ? layout.categories.map(String) : []);
   ROOM_CHANNEL_LAYOUT.limits = reset ? { humansPerCall: 12, membersPerCall: 15 } : { humansPerCall: Number(layout.limits?.humansPerCall || 12), membersPerCall: Number(layout.limits?.membersPerCall || 15) };
   ROOM_CHANNEL_LAYOUT.private = !reset && Boolean(layout.private);
@@ -121,12 +122,13 @@ function applyHostedRoomLayout(layout = {}, { reset = false } = {}) {
   for (const channel of [...channelMessages.keys()]) if (!text.includes(channel)) channelMessages.delete(channel);
   for (const channel of [...unreadChannels]) if (!text.includes(channel)) unreadChannels.delete(channel);
   for (const channel of [...mentionChannels]) if (!text.includes(channel)) mentionChannels.delete(channel);
-  if (!text.includes(activeTextChannel)) activeTextChannel = text[0];
+  if (!text.includes(activeTextChannel)) activeTextChannel = text[0] || '';
   if (activeVoiceChannel && !voice.includes(activeVoiceChannel)) activeVoiceChannel = '';
   if (previousVoice && !activeVoiceChannel && hostedSocket?.connected && !reset) hostedSocket.emit('switch-voice-channel', { voiceChannel: HOSTED_LOBBY_CHANNEL });
   if ($('room-channels')) renderRoomChannels();
   if (currentMode === 'hosted' && document.querySelector('.content header h2')) document.querySelector('.content header h2').textContent = activeHostedRoomName || (globalThis.voiceupI18n?.t('call.groupTitle') || 'Sala P2P em grupo');
   if (!$('app')?.classList.contains('hidden')) renderChannelMessages();
+  window.dispatchEvent(new CustomEvent('voiceup-room-layout', { detail: { layout, reset } }));
   saveProfile();
 }
 const unreadChannels = new Set();
@@ -241,21 +243,29 @@ function playNotification(kind) {
     notificationContext ||= new AudioContext();
     notificationContext.resume().catch(() => {});
     const patterns = {
-      // This is the chime played when a WebRTC call finishes connecting.
+      // Server presence and voice calls intentionally use different cues.
+      'server-connect': [[392, 0], [523, .075], [784, .15]],
+      'server-disconnect': [[494, 0], [392, .09], [294, .18]],
+      'call-join': [[523, 0], [659, .085], [784, .17]],
+      'call-leave': [[523, 0], [415, .09], [330, .18]],
+      // Legacy aliases are retained for extensions written for older betas.
       connect: [[523, 0], [784, .1]],
       disconnect: [[440, 0], [330, .11]],
       // Broadcasters hear these when someone starts or stops watching their live.
       'live-viewer-in': [[659, 0], [988, .08], [1319, .16]],
       'live-viewer-out': [[784, 0], [587, .09], [392, .18]],
+      // Viewers hear a separate cue when opening or closing a live.
+      'live-watch-in': [[587, 0], [880, .07], [1175, .14]],
+      'live-watch-out': [[880, 0], [659, .08], [440, .16]],
       message: [[660, 0]],
       mention: [[880, 0], [1175, .085], [988, .17]]
     };
     for (const [frequency, offset] of patterns[kind] || []) {
       const oscillator = notificationContext.createOscillator();
       const gain = notificationContext.createGain();
-      oscillator.type = ['mention', 'live-viewer-in'].includes(kind) ? 'triangle' : 'sine';
+      oscillator.type = ['mention', 'live-viewer-in', 'live-watch-in', 'server-connect'].includes(kind) ? 'triangle' : 'sine';
       oscillator.frequency.value = frequency;
-      const peak = ['mention', 'live-viewer-in'].includes(kind) ? .072 : .055;
+      const peak = ['mention', 'live-viewer-in', 'live-watch-in'].includes(kind) ? .072 : .055;
       gain.gain.setValueAtTime(.0001, notificationContext.currentTime + offset);
       gain.gain.exponentialRampToValueAtTime(peak, notificationContext.currentTime + offset + .012);
       gain.gain.exponentialRampToValueAtTime(.0001, notificationContext.currentTime + offset + .095);
@@ -365,7 +375,6 @@ function renderFormattedText(value) {
   const tokens = [];
   const protect = (html) => `\uE000${tokens.push(html) - 1}\uE001`;
   let html = escapeHtml(String(value || ''));
-  html = html.replace(/```([\s\S]*?)```/g, (_match, code) => protect(`<pre class="message-code-block"><code>${code}</code></pre>`));
   html = html.replace(/`([^`\n]+)`/g, (_match, code) => protect(`<code class="message-inline-code">${code}</code>`));
   html = html.replace(/\*\*\*([^*\n][\s\S]*?)\*\*\*/g, '<strong><em>$1</em></strong>');
   html = html.replace(/___([^_\n][\s\S]*?)___/g, '<u><em>$1</em></u>');
@@ -376,8 +385,8 @@ function renderFormattedText(value) {
   html = html.replace(/(^|[^_])_([^_\n][^_\n]*?)_(?!_)/g, '$1<em>$2</em>');
   return html.replace(/\uE000(\d+)\uE001/g, (_match, index) => tokens[Number(index)] || '');
 }
-function renderMessageContent(value, maxLength = 500) {
-  const text = String(value || '').slice(0, Math.min(10000, Math.max(500, Number(maxLength) || 500))); const matcher = /https?:\/\/[^\s<>]+/gi; let cursor = 0; let html = ''; let match;
+function renderMessageTextWithLinks(value) {
+  const text = String(value || ''); const matcher = /https?:\/\/[^\s<>]+/gi; let cursor = 0; let html = ''; let match;
   while ((match = matcher.exec(text))) {
     html += renderFormattedText(text.slice(cursor, match.index)); const parsed = messageUrlParts(match[0]);
     if (!parsed) { html += escapeHtml(match[0]); cursor = matcher.lastIndex; continue; }
@@ -393,20 +402,68 @@ function renderMessageContent(value, maxLength = 500) {
   }
   return html + renderFormattedText(text.slice(cursor));
 }
+function renderMessageContent(value, maxLength = 500) {
+  const text = String(value || '').slice(0, Math.min(10000, Math.max(500, Number(maxLength) || 500)));
+  const rich = globalThis.voiceupChatRichContent;
+  if (!rich?.parseFencedCode || !rich?.renderCodeBlock) return renderMessageTextWithLinks(text);
+  return rich.parseFencedCode(text).map((segment) => segment.type === 'code' ? rich.renderCodeBlock(segment) : renderMessageTextWithLinks(segment.value)).join('');
+}
+function normalizeMessageTextFile(value) { return globalThis.voiceupChatRichContent?.normalizeTextFile?.(value) || null; }
+function prepareOutgoingMessage(value) {
+  try { return globalThis.voiceupChatRichContent?.createOutgoingMessage?.(value) || { text: String(value || '').trim().slice(0, 500), textFile: null }; }
+  catch (error) { toast(error?.message || 'O texto é grande demais para ser enviado como arquivo.'); return null; }
+}
 function updateMessageText(element, value) { const node = element?.querySelector?.('.message-text') || element; if (!node) return; const text = String(value || '').slice(0, 500); node.dataset.rawText = text; node.innerHTML = renderMessageContent(text); void hydrateMessageEmbeds(node); }
 function addMessage(text, author, mine = false, color = mine ? myColor : peer?.color, details = {}) {
   const m = document.createElement('article');
   const id = String(details.id || ''); const createdAt = Number(details.createdAt) || Date.now(); const editedAt = Number(details.editedAt) || 0;
   const date = messageDate(createdAt); const photo = details.avatar || (mine ? myAvatar : peer?.avatar || '');
-  m.className = `message${mine ? ' mine' : ''}${details.mentioned ? ' mentioned-me' : ''}`; if (id) m.dataset.messageId = id;
+  const textFile = normalizeMessageTextFile(details.textFile);
+  m.className = `message${mine ? ' mine' : ''}${details.mentioned ? ' mentioned-me' : ''}${textFile ? ' has-text-file' : ''}`; if (id) m.dataset.messageId = id;
   const textLimit = details.pluginId ? 10000 : 500;
-  m.innerHTML = `${messageAvatar(author, color, photo)}<div class="message-body"><div class="message-meta"><span class="author" style="color:${safeColor(color)}">${escapeHtml(author)}</span><time datetime="${new Date(createdAt).toISOString()}" title="${escapeHtml(date.full)}">${escapeHtml(date.short)}</time><span class="message-edited${editedAt ? '' : ' hidden'}">editada</span>${details.mentioned ? '<span class="message-mention-label" title="Você foi mencionado nesta mensagem">@ menção</span>' : ''}</div><div class="message-text">${renderMessageContent(text, textLimit)}</div></div>${mine && id ? `<button type="button" class="message-edit" title="Editar mensagem" aria-label="Editar mensagem"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16-.8 4.8L8 20l11-11-4-4zM13.5 6.5l4 4"/></svg></button>` : ''}`;
+  const textFileMarkup = textFile ? globalThis.voiceupChatRichContent.renderTextFileAttachment(textFile) : '';
+  m.innerHTML = `${messageAvatar(author, color, photo)}<div class="message-body"><div class="message-meta"><span class="author" style="color:${safeColor(color)}">${escapeHtml(author)}</span><time datetime="${new Date(createdAt).toISOString()}" title="${escapeHtml(date.full)}">${escapeHtml(date.short)}</time><span class="message-edited${editedAt ? '' : ' hidden'}">editada</span>${details.mentioned ? '<span class="message-mention-label" title="Você foi mencionado nesta mensagem">@ menção</span>' : ''}</div><div class="message-text${textFile ? ' message-text-file-note' : ''}">${renderMessageContent(text, textLimit)}</div>${textFileMarkup}</div>${mine && id && !textFile ? `<button type="button" class="message-edit" title="Editar mensagem" aria-label="Editar mensagem"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16-.8 4.8L8 20l11-11-4-4zM13.5 6.5l4 4"/></svg></button>` : ''}`;
   m.querySelector('.message-text').dataset.rawText = String(text || '').slice(0, textLimit);
   m.querySelector('.message-edit')?.addEventListener('click', () => startMessageEdit(m));
   $('messages').append(m); void hydrateMessageEmbeds(m); $('messages').scrollTop = $('messages').scrollHeight;
 }
+async function copyChatText(value, successMessage) {
+  const text = String(value || '');
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const helper = document.createElement('textarea'); helper.value = text; helper.setAttribute('readonly', ''); helper.style.position = 'fixed'; helper.style.opacity = '0';
+    document.body.append(helper); helper.select(); document.execCommand('copy'); helper.remove();
+  }
+  toast(successMessage);
+}
+document.addEventListener('click', (event) => {
+  const codeButton = event.target.closest?.('[data-copy-code]');
+  if (codeButton) {
+    event.preventDefault(); event.stopPropagation();
+    const value = codeButton.closest('.message-code-block')?.querySelector('pre code')?.textContent || '';
+    void copyChatText(value, 'Código copiado.'); return;
+  }
+  const card = event.target.closest?.('.message-text-file'); if (!card) return;
+  const toggle = event.target.closest?.('[data-text-file-toggle]');
+  if (toggle) {
+    event.preventDefault(); event.stopPropagation();
+    const expanded = !card.classList.contains('expanded'); card.classList.toggle('expanded', expanded);
+    toggle.setAttribute('aria-expanded', String(expanded)); toggle.setAttribute('aria-label', expanded ? 'Recolher arquivo' : 'Expandir arquivo'); toggle.title = expanded ? 'Recolher arquivo' : 'Expandir arquivo';
+    return;
+  }
+  const content = card.querySelector('.text-file-content')?.textContent || '';
+  if (event.target.closest?.('[data-text-file-copy]')) {
+    event.preventDefault(); event.stopPropagation(); void copyChatText(content, 'Texto copiado.'); return;
+  }
+  if (event.target.closest?.('[data-text-file-download]')) {
+    event.preventDefault(); event.stopPropagation();
+    const fileName = globalThis.voiceupChatRichContent?.safeTextFileName?.(card.dataset.textFileName) || 'mensagem.txt';
+    const url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = fileName; anchor.hidden = true; document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+});
 function saveProfile() { localStorage.setItem('voiceup-profile-v1', JSON.stringify({ name: $('name-input')?.value.trim() || myName, avatar: myAvatar, color: myColor, clientId, hostUrl: $('host-url')?.value.trim() || DEFAULT_HOST_URL, roomId: $('host-room')?.value.trim() || '', voiceChannel: activeVoiceChannel, textChannel: activeTextChannel, quality: $('quality-select')?.value || '720', frameRate: $('fps-select')?.value || '30', notifications: notificationsEnabled, theme, noiseMode, micThresholdDb, micMonitorEnabled, audioInputId, audioOutputId, cameraInputId, screenSource: selectedScreenSource, shareSystemAudio, preserveScreenSourceQuality, carryMediaOnChannelChange, externalMediaAutoLoad, language, clientCloseBehavior, presenceStatus, lastMode: currentMode })); }
-function normalizedPresenceStatus(value) { return ['online', 'idle', 'dnd'].includes(String(value || '').toLowerCase()) ? String(value).toLowerCase() : 'online'; }
+function normalizedPresenceStatus(value) { return ['online', 'idle', 'activity', 'dnd'].includes(String(value || '').toLowerCase()) ? String(value).toLowerCase() : 'online'; }
 function syncPresenceStatus() {
   effectivePresenceStatus = presenceAutoIdle && presenceStatus === 'online' ? 'idle' : presenceStatus;
   if (hostedSocket?.id) rememberHostedMember({ id: hostedSocket.id, name: myName, color: myColor, avatar: myAvatar, voiceChannel: activeVoiceChannel, status: effectivePresenceStatus, platform: globalThis.voiceupPlatform.local() });
@@ -516,9 +573,73 @@ function rememberHostedMember(member, voiceChannel = activeVoiceChannel) {
   });
 }
 function rememberCurrentMember() { if (!hostedSocket?.id) return; rememberHostedMember({ id: hostedSocket.id, name: myName, color: myColor, avatar: myAvatar, clientId, status: effectivePresenceStatus, platform: globalThis.voiceupPlatform.local(), voiceChannel: activeVoiceChannel }); }
-function renderChannelMessages() { const messages = channelMessages.get(activeTextChannel) || []; const channelName = globalThis.voiceupI18n?.channel(activeTextChannel, 'text') || activeTextChannel; const emptyText = globalThis.voiceupI18n?.t('chat.empty', { channel: channelName }) || `Nenhuma mensagem em #${channelName} ainda.`; $('messages').innerHTML = messages.length ? '' : `<div class="system-message">${escapeHtml(emptyText)}</div>`; messages.forEach((message) => addMessage(message.text, message.name, message.mine, message.color, message)); }
+function activeTextChannelSettings() { return ROOM_CHANNEL_LAYOUT.text.find((channel) => channel.name === activeTextChannel) || {}; }
+function forumThreadGroups(messages = []) {
+  const threads = new Map();
+  for (const message of messages) {
+    const id = String(message.forumThreadId || `legacy-${message.id || message.createdAt}`);
+    const thread = threads.get(id) || { id, title: String(message.forumTitle || message.text || 'Tópico sem título').trim().slice(0, 100), messages: [], createdAt: Number(message.createdAt) || Date.now(), updatedAt: Number(message.createdAt) || Date.now() };
+    thread.messages.push(message); thread.updatedAt = Math.max(thread.updatedAt, Number(message.createdAt) || 0);
+    if (message.forumTitle) thread.title = String(message.forumTitle).slice(0, 100);
+    threads.set(id, thread);
+  }
+  return [...threads.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+function renderForumBoard(settings) {
+  const threads = forumThreadGroups(channelMessages.get(activeTextChannel) || []);
+  const tags = (settings.forumTags || []).map((tag) => `<span>${escapeHtml(tag)}</span>`).join('');
+  const cards = threads.length ? threads.map((thread) => `<button type="button" class="forum-thread-card" data-forum-thread="${escapeHtml(thread.id)}"><b>${escapeHtml(thread.title)}</b><small>${thread.messages.length} ${thread.messages.length === 1 ? 'mensagem' : 'mensagens'} · ${new Date(thread.updatedAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</small><p>${escapeHtml(String(thread.messages.at(-1)?.text || '').slice(0, 180))}</p></button>`).join('') : '<div class="system-message">Nenhum tópico ainda. Abra o primeiro para organizar a conversa.</div>';
+  $('messages').innerHTML = `<section class="forum-board"><header><div><small>FÓRUM</small><h3>${escapeHtml(activeTextChannel)}</h3><p>${escapeHtml(settings.topic || 'Organize conversas em tópicos.')}</p></div>${tags ? `<div class="forum-tags">${tags}</div>` : ''}</header><div class="forum-thread-list">${cards}</div><form class="forum-topic-composer" id="forum-topic-composer" aria-label="Criar tópico no fórum"><b>Novo tópico</b><input id="forum-topic-title" maxlength="100" placeholder="Título do tópico" aria-label="Título do tópico" required/><textarea id="forum-topic-text" maxlength="30000" placeholder="Escreva a primeira mensagem" aria-label="Primeira mensagem do tópico" required></textarea><button class="forum-publish" type="submit">Publicar tópico</button></form></section>`;
+  $('messages').querySelectorAll('[data-forum-thread]').forEach((button) => button.addEventListener('click', () => { activeForumThreadId = button.dataset.forumThread || ''; renderChannelMessages(); }));
+  $('forum-topic-composer')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const title = $('forum-topic-title')?.value.trim(); const text = $('forum-topic-text')?.value;
+    if (!title || !text) return;
+    const threadId = `thread-${messageId()}`;
+    if (sendChatMessage({ raw: text, forumThreadId: threadId, forumTitle: title })) activeForumThreadId = threadId;
+  });
+}
+function renderChannelMessages() {
+  const settings = activeTextChannelSettings(); const isForum = settings.kind === 'forum';
+  const form = $('message-form'); form?.classList.toggle('hidden', isForum && !activeForumThreadId);
+  if (isForum && !activeForumThreadId) return renderForumBoard(settings);
+  const allMessages = channelMessages.get(activeTextChannel) || [];
+  const messages = isForum ? allMessages.filter((message) => String(message.forumThreadId || `legacy-${message.id || message.createdAt}`) === activeForumThreadId) : allMessages;
+  const channelName = globalThis.voiceupI18n?.channel(activeTextChannel, 'text') || activeTextChannel;
+  const emptyText = globalThis.voiceupI18n?.t('chat.empty', { channel: channelName }) || `Nenhuma mensagem em #${channelName} ainda.`;
+  const back = isForum ? `<button type="button" class="forum-back" id="forum-back">← Todos os tópicos</button>` : '';
+  const container = $('messages');
+  const viewKey = JSON.stringify([activeTextChannel, isForum ? activeForumThreadId : '', externalMediaAutoLoad, document.documentElement.lang]);
+  const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+  const previousScroll = container.scrollTop;
+  if (container.dataset.messageView !== viewKey || !messages.length || container.querySelector('.forum-board')) {
+    container.innerHTML = `${back}${messages.length ? '' : `<div class="system-message">${escapeHtml(emptyText)}</div>`}`;
+    container.dataset.messageView = viewKey;
+  }
+  if (messages.length) container.querySelectorAll(':scope > .system-message').forEach(node => node.remove());
+  if ($('forum-back')) $('forum-back').onclick = () => { activeForumThreadId = ''; renderChannelMessages(); };
+  const existing = new Map([...container.querySelectorAll(':scope > article.message')].map(node => [node.dataset.renderKey, node]));
+  const wanted = new Set();
+  messages.forEach((message, index) => {
+    const key = String(message.id || `legacy-${index}-${message.createdAt}`);
+    const signature = JSON.stringify(message);
+    wanted.add(key);
+    const old = existing.get(key);
+    if (old?.dataset.renderSignature === signature) return;
+    old?.remove();
+    addMessage(message.text, message.name, message.mine, message.color, message);
+    const node = container.lastElementChild;
+    node.dataset.renderKey = key;
+    node.dataset.renderSignature = signature;
+    const next = messages.slice(index + 1).map((item, offset) => existing.get(String(item.id || `legacy-${index + offset + 1}-${item.createdAt}`))).find(item => item?.isConnected);
+    if (next) container.insertBefore(node, next);
+  });
+  for (const [key, node] of existing) if (!wanted.has(key)) node.remove();
+  container.scrollTop = atBottom ? container.scrollHeight : previousScroll;
+}
 function selectTextChannel(channel) {
   if (!ROOM_CHANNELS.text.includes(channel)) return;
+  if (activeTextChannel !== channel) activeForumThreadId = '';
   activeTextChannel = channel;
   unreadChannels.delete(channel);
   mentionChannels.delete(channel);
@@ -527,17 +648,17 @@ function selectTextChannel(channel) {
   refreshChatUnreadIndicator();
   saveProfile();
 }
-function receiveHostedText({ from, authorClientId, text, textChannel, name, color, avatar: photo, messageId: id, createdAt, editedAt, mentions, mentionClientIds, pluginId }) {
+function receiveHostedText({ from, authorClientId, text, textChannel, name, color, avatar: photo, messageId: id, createdAt, editedAt, mentions, mentionClientIds, pluginId, textFile, forumThreadId, forumTitle }) {
   const channel = ROOM_CHANNELS.text.includes(textChannel) ? textChannel : 'geral';
   const mine = from === hostedSocket?.id || Boolean(authorClientId && authorClientId === clientId);
   const mentionIds = Array.isArray(mentions) ? mentions.map(String) : [];
   const stableMentionIds = Array.isArray(mentionClientIds) ? mentionClientIds.map(String) : [];
   const mentioned = !mine && isMentionedForCurrentUser(mentionIds, stableMentionIds);
-  const message = { id: String(id || ''), text: String(text || '').slice(0, pluginId ? 10000 : 500), name, color, avatar: photo || serverMembers.get(from)?.avatar || '', createdAt: Number(createdAt) || Date.now(), editedAt: Number(editedAt) || 0, mentions: mentionIds, mentionClientIds: stableMentionIds, mentioned, mine, authorClientId: authorClientId || '', pluginId: pluginId || '' };
+  const message = { id: String(id || ''), text: String(text || '').slice(0, pluginId ? 10000 : 500), textFile: normalizeMessageTextFile(textFile), name, color, avatar: photo || serverMembers.get(from)?.avatar || '', createdAt: Number(createdAt) || Date.now(), editedAt: Number(editedAt) || 0, mentions: mentionIds, mentionClientIds: stableMentionIds, mentioned, mine, authorClientId: authorClientId || '', pluginId: pluginId || '', forumThreadId: String(forumThreadId || ''), forumTitle: String(forumTitle || '').slice(0, 100) };
   if (!channelMessages.has(channel)) channelMessages.set(channel, []);
   channelMessages.get(channel).push(message);
   registerIncomingChannelActivity(channel, mentioned);
-  if (channel === activeTextChannel) addMessage(message.text, message.name, message.mine, message.color, message);
+  if (channel === activeTextChannel) renderChannelMessages();
   if (!mine) playNotification(mentioned ? 'mention' : 'message');
   renderRoomChannels();
 }
@@ -610,13 +731,17 @@ function renderRoomChannels() {
     const humanCount = people.filter((member) => !member.isBot).length;
     const limit = Math.max(1, Number(settings.userLimit || settings.humans || ROOM_CHANNEL_LAYOUT.limits.humansPerCall || 12));
     const duration = people.length ? `<time class="channel-call-duration" data-call-duration="${escapeHtml(channel)}"></time>` : '';
-    const roster = people.length ? `<ul class="voice-channel-members" aria-label="Membros de ${escapeHtml(visibleName)}">${people.map(renderVoiceChannelMember).join('')}</ul>` : '';
-    return `${heading}<section class="voice-channel-group"><button type="button" class="room-channel voice-channel${channel === activeVoiceChannel ? ' active' : ''}" data-voice-channel="${escapeHtml(channel)}" title="${humanCount} de ${limit} pessoas"><span class="channel-label">${voiceChannelIcon}<span>${escapeHtml(visibleName)}</span></span><span class="voice-channel-info">${duration}<em class="channel-call-limit">${humanCount}/${limit}</em></span></button>${roster}</section>`;
+    const roleGroups = globalThis.voiceupChannelRoster.groupMembersByRole(people, globalThis.voiceupCurrentServerAccess?.availableRoles || []);
+    const roster = people.length ? `<ul class="voice-channel-members" aria-label="Membros de ${escapeHtml(visibleName)}">${roleGroups.map((group) => `${group.role ? `<li class="voice-channel-role-heading" style="--role-color:${escapeHtml(group.role.color || '#8792a8')}"><i></i>${escapeHtml(group.role.name)}<small>${group.members.length}</small></li>` : ''}${group.members.map(renderVoiceChannelMember).join('')}`).join('')}</ul>` : '';
+    const typeLabel = settings.ephemeral ? 'Temporária' : settings.kind === 'stage' ? 'Palco' : settings.kind === 'dynamic' ? 'Dinâmico' : '';
+    const typeBadge = typeLabel ? `<small class="channel-kind-badge ${escapeHtml(settings.kind || 'voice')}">${escapeHtml(typeLabel)}</small>` : '';
+    return `${heading}<section class="voice-channel-group"><button type="button" class="room-channel voice-channel${channel === activeVoiceChannel ? ' active' : ''}" data-voice-channel="${escapeHtml(channel)}" title="${humanCount} de ${limit} pessoas"><span class="channel-label">${voiceChannelIcon}<span>${escapeHtml(visibleName)}</span>${typeBadge}</span><span class="voice-channel-info">${duration}<em class="channel-call-limit">${humanCount}/${limit}</em></span></button>${roster}</section>`;
   }).join('')}<h3>${textTitle}</h3>${ROOM_CHANNELS.text.map((channel) => {
     const visibleName = i18n?.channel(channel, 'text') || channel; const mentioned = mentionChannels.has(channel); const unread = unreadChannels.has(channel);
     const marker = mentioned ? `<b class="mention-channel-badge" title="${escapeHtml(mentionTitle)}" aria-label="${escapeHtml(mentionTitle)}">@</b>` : (unread ? `<b class="unread-dot" title="${escapeHtml(unreadTitle)}"></b>` : '');
-    const category = ROOM_CHANNEL_LAYOUT.text.find((item) => item.name === channel)?.category || ''; const heading = category && category !== lastTextCategory ? `<h4 class="room-category">${escapeHtml(category)}</h4>` : ''; lastTextCategory = category;
-    return `${heading}<button class="room-channel${channel === activeTextChannel ? ' active' : ''}${mentioned ? ' has-mention' : ''}" data-text-channel="${escapeHtml(channel)}"><span># ${escapeHtml(visibleName)}</span>${marker}</button>`;
+    const settings = ROOM_CHANNEL_LAYOUT.text.find((item) => item.name === channel) || {}; const category = settings.category || ''; const heading = category && category !== lastTextCategory ? `<h4 class="room-category">${escapeHtml(category)}</h4>` : ''; lastTextCategory = category;
+    const forum = settings.kind === 'forum';
+    return `${heading}<button class="room-channel${forum ? ' forum-channel' : ''}${channel === activeTextChannel ? ' active' : ''}${mentioned ? ' has-mention' : ''}" data-text-channel="${escapeHtml(channel)}"><span>${forum ? '▤' : '#'} ${escapeHtml(visibleName)}</span>${forum ? '<small class="channel-kind-badge forum">Fórum</small>' : ''}${marker}</button>`;
   }).join('')}`;
   const activeChannelName = i18n?.channel(activeTextChannel, 'text') || activeTextChannel; $('message-input').placeholder = i18n?.t('chat.placeholder', { channel: activeChannelName }) || `Mensagem em #${activeChannelName}`;
   if (panel.voiceupRosterMarkup !== markup) {
@@ -906,7 +1031,7 @@ function makePeer(role = 'offerer') {
   };
   return pc;
 }
-function markConnected() { if (!peer?.name) return; showPeer(peer.name, 'Conectado · P2P direto', true, peer.color); setStatus('Conexao P2P direta ativa', true); $('pair-panel').classList.add('hidden'); startPingMeasure(); if (!peer.connectSoundPlayed) { peer.connectSoundPlayed = true; playNotification('connect'); } }
+function markConnected() { if (!peer?.name) return; showPeer(peer.name, 'Conectado · P2P direto', true, peer.color); setStatus('Conexao P2P direta ativa', true); $('pair-panel').classList.add('hidden'); startPingMeasure(); if (!peer.connectSoundPlayed) { peer.connectSoundPlayed = true; playNotification('call-join'); } }
 async function receiveData(raw) {
   try {
     const msg = JSON.parse(raw);
@@ -915,7 +1040,7 @@ async function receiveData(raw) {
       const mentions = Array.isArray(msg.mentions) ? msg.mentions.map(String) : [];
       const mentionClientIds = Array.isArray(msg.mentionClientIds) ? msg.mentionClientIds.map(String) : [];
       const mentioned = isMentionedForCurrentUser(mentions, mentionClientIds);
-      const message = { id: String(msg.messageId || ''), text: String(msg.text || ''), name: msg.name || peer?.name || 'Participante', color: msg.color || peer?.color, avatar: msg.avatar || peer?.avatar, createdAt: Number(msg.createdAt) || Date.now(), mentions, mentionClientIds, mentioned, mine: false };
+      const message = { id: String(msg.messageId || ''), text: String(msg.text || '').slice(0, 500), textFile: normalizeMessageTextFile(msg.textFile), name: msg.name || peer?.name || 'Participante', color: msg.color || peer?.color, avatar: msg.avatar || peer?.avatar, createdAt: Number(msg.createdAt) || Date.now(), mentions, mentionClientIds, mentioned, mine: false };
       if (!channelMessages.has(channel)) channelMessages.set(channel, []);
       channelMessages.get(channel).push(message);
       registerIncomingChannelActivity(channel, mentioned);
@@ -950,7 +1075,7 @@ function selectedFrameRate() { const value = Number($('fps-select')?.value || 30
 function quality() { const h = Number($('quality-select').value) || 720; const fps = selectedFrameRate(); return { width: { ideal: Math.round(h * 16 / 9) }, height: { ideal: h }, frameRate: { ideal: fps, max: fps } }; }
 function screenMotionPriority() { return preserveScreenSourceQuality || selectedFrameRate() >= 30; }
 function videoContentHint(kind = 'camera') { return kind === 'screen' && !screenMotionPriority() ? 'detail' : 'motion'; }
-function videoDegradationPreference(kind = 'camera') { return kind === 'screen' ? (screenMotionPriority() ? 'maintain-framerate' : 'maintain-resolution') : 'balanced'; }
+function videoDegradationPreference(kind = 'camera') { return kind === 'screen' && !screenMotionPriority() ? 'maintain-resolution' : 'balanced'; }
 function applyVideoContentHint(track, kind = 'camera') { if (!track) return; try { track.contentHint = videoContentHint(kind); } catch { /* Older capture drivers may not expose contentHint. */ } }
 function videoBitrate(kind = 'camera') {
   const height = Number($('quality-select').value) || 720;
@@ -963,12 +1088,30 @@ function videoBitrate(kind = 'camera') {
   const base = (kind === 'screen' ? screenBase : cameraBase)[height] || (kind === 'screen' ? 3800000 : 2500000);
   return Math.round(base * (fps === 60 ? 1.6 : fps === 15 ? .65 : 1));
 }
-function configureVideoSenderParameters(parameters, kind = 'camera', withDegradationPreference = true) {
+function screenSenderLimits(track) {
+  const settings = track?.getSettings?.() || {};
+  const fps = preserveScreenSourceQuality ? Math.min(60, Number(settings.frameRate) || selectedFrameRate()) : selectedFrameRate();
+  const height = preserveScreenSourceQuality ? Number(settings.height) || 1080 : Number($('quality-select').value) || 720;
+  const base = height <= 360 ? 900000 : height <= 480 ? 1500000 : height <= 720 ? 3800000 : height <= 1080 ? 7500000 : height <= 1440 ? 12000000 : 20000000;
+  return { fps, bitrate: Math.round(base * (fps > 30 ? 1.6 : fps <= 15 ? .65 : 1)) };
+}
+const liveSenderStates = new Map();
+let liveQualityTimer = null;
+function configureVideoSenderParameters(parameters, kind = 'camera', withDegradationPreference = true, sender = null) {
   parameters.encodings ||= [{}];
   parameters.encodings[0] ||= {};
-  if (kind === 'screen' && preserveScreenSourceQuality) {
-    delete parameters.encodings[0].maxBitrate;
-    delete parameters.encodings[0].maxFramerate;
+  if (kind === 'screen') {
+    const limits = screenSenderLimits(sender?.track);
+    parameters.encodings[0].maxBitrate = limits.bitrate;
+    parameters.encodings[0].maxFramerate = Math.min(limits.fps, liveSenderStates.get(sender)?.policy.fps || limits.fps);
+    if (globalThis.voiceupViewerQuality && sender?.track) {
+      const source = sender.track.getSettings?.() || {};
+      const caps = globalThis.voiceupViewerQuality.encoding(source, {
+        ...limits, height: preserveScreenSourceQuality ? source.height : Number($('quality-select').value),
+        fps: parameters.encodings[0].maxFramerate
+      }, globalThis.voiceupViewerQuality.senders.get(sender) || 'auto');
+      Object.assign(parameters.encodings[0], caps);
+    }
   } else {
     parameters.encodings[0].maxBitrate = videoBitrate(kind);
     parameters.encodings[0].maxFramerate = selectedFrameRate();
@@ -979,14 +1122,44 @@ function configureVideoSenderParameters(parameters, kind = 'camera', withDegrada
 }
 async function tuneVideoSender(sender, kind = 'camera') {
   if (!sender?.getParameters || !sender?.setParameters) return;
-  // Chromium 43 supports degradationPreference. Keep a fallback so an older
-  // participant/driver can still receive the bitrate and FPS limits.
+  if (kind === 'screen' && window.voiceupLiveQuality && sender.track) {
+    const key = JSON.stringify(screenSenderLimits(sender.track));
+    const previous = liveSenderStates.get(sender);
+    if (!previous || previous.track !== sender.track || previous.key !== key) {
+      liveSenderStates.set(sender, { track: sender.track, key, policy: window.voiceupLiveQuality.createState() });
+    }
+    if (!liveQualityTimer) liveQualityTimer = setTimeout(sampleLiveQuality, 3000);
+  }
+  // Retry with fresh transaction parameters without the optional preference.
   for (const withPreference of [true, false]) {
     try {
-      const parameters = configureVideoSenderParameters(sender.getParameters(), kind, withPreference);
+      const parameters = configureVideoSenderParameters(sender.getParameters(), kind, withPreference, sender);
       await sender.setParameters(parameters);
-      return;
+      return true;
     } catch { /* Retry once without the optional degradation preference. */ }
+  }
+  return false;
+}
+async function sampleLiveQuality() {
+  try {
+    const active = new Set(currentMode === 'hosted' ? videoSenders() : peer?.pc?.getSenders?.() || []);
+    await Promise.allSettled([...liveSenderStates].map(async ([sender, state]) => {
+      if (!active.has(sender) || sender.track !== state.track || state.track.readyState === 'ended') {
+        liveSenderStates.delete(sender); return;
+      }
+      if (!sender.getStats) return;
+      const reports = await sender.getStats();
+      let outbound;
+      reports.forEach((report) => {
+        if (report.type === 'outbound-rtp' && !report.isRemote && (report.kind === 'video' || report.mediaType === 'video')) outbound = report;
+      });
+      if (!outbound || liveSenderStates.get(sender) !== state || sender.track !== state.track) return;
+      const previousPolicy = { ...state.policy };
+      const fps = window.voiceupLiveQuality.sample(state.policy, outbound, screenSenderLimits(state.track).fps);
+      if (fps !== null && !(await tuneVideoSender(sender, 'screen'))) state.policy = previousPolicy;
+    }));
+  } finally {
+    liveQualityTimer = liveSenderStates.size ? setTimeout(sampleLiveQuality, 3000) : null;
   }
 }
 async function publishVideo(track, kind) { const senders = videoSenders(); if (!senders.length) throw new Error('Canal de video indisponivel.'); applyVideoContentHint(track, kind); const results = await Promise.allSettled(senders.map(async (sender) => { await sender.replaceTrack(track); await tuneVideoSender(sender, kind); })); if (!results.some((result) => result.status === 'fulfilled')) throw new Error('Nenhum participante estava pronto para receber video.'); sendSignal('video-on', kind); }
@@ -1140,7 +1313,7 @@ async function shareScreen() {
     await stopSharedSystemAudio();
     screenStream?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
     if (window.voiceupDesktop?.selectDesktopSource) await window.voiceupDesktop.selectDesktopSource(selection);
-    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: preserveScreenSourceQuality ? true : quality(), audio: selection.includeAudio });
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: preserveScreenSourceQuality ? { frameRate: { ideal: 60, max: 60 } } : quality(), audio: selection.includeAudio });
     const track = screenStream.getVideoTracks()[0];
     applyVideoContentHint(track, 'screen');
     if (!preserveScreenSourceQuality && track?.applyConstraints) {
@@ -1165,12 +1338,12 @@ async function shareScreen() {
 function currentVideoKind() { return screenStream ? 'screen' : cameraStream ? 'camera' : ''; }
 async function syncHostedVideoForPeer(p) { const track = (screenStream || cameraStream)?.getVideoTracks?.()[0] || null; if (!p?.videoSender || !track) return; try { await p.videoSender.replaceTrack(track); if (p.channel?.readyState === 'open') p.channel.send(JSON.stringify({ type: 'video-on', description: currentVideoKind() })); } catch { /* the next peer negotiation retries the media track */ } }
 function bindHostedChannel(p, channel) { p.channel = channel; channel.onmessage = ({ data }) => receiveHostedData(p, data); channel.onopen = () => { channel.send(JSON.stringify({ type: 'intro', name: myName, color: myColor, avatar: myAvatar, clientId, status: effectivePresenceStatus, platform: globalThis.voiceupPlatform.local() })); syncHostedVideoForPeer(p); markHostedConnected(p); }; channel.onclose = () => { if (!p.left) { p.connected = false; renderHostedParticipants(); } }; }
-function markHostedConnected(p) { p.connected = true; renderHostedParticipants(); showHostedStage(p, true); setStatus(`${readyHostedPeers().length + 1} pessoas conectadas · P2P`, true); $('pair-panel').classList.add('hidden'); startPingMeasure(); if (!p.connectSoundPlayed) { p.connectSoundPlayed = true; playNotification('connect'); } }
+function markHostedConnected(p) { p.connected = true; renderHostedParticipants(); showHostedStage(p, true); setStatus(`${readyHostedPeers().length + 1} pessoas conectadas · P2P`, true); $('pair-panel').classList.add('hidden'); startPingMeasure(); }
 function attachHostedTrack(p, track, streams) { const stream = track.kind === 'video' ? new MediaStream([track]) : (streams[0] || new MediaStream([track])); if (track.kind === 'audio') { p.audio?.pause(); p.audio = new Audio(); p.audio.srcObject = stream; p.audio.autoplay = true; p.audio.muted = p.muted; if (audioOutputId && typeof p.audio.setSinkId === 'function') p.audio.setSinkId(audioOutputId).catch(() => {}); p.audio.play().catch(() => {}); } if (track.kind === 'video') { p.videoStream = stream; const reveal = () => showHostedVideo(p, p.videoLabel || 'Video recebido'); track.onunmute = reveal; track.onended = () => hideVideoTile(p.id); reveal(); setTimeout(reveal, 350); } }
 function makeHostedConnection(p) { const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }], iceCandidatePoolSize: 2 }); p.pc = pc; const audioTrack = outgoingAudioTrack(); if (audioTrack) pc.addTrack(audioTrack, new MediaStream([audioTrack])); const videoTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' }); p.videoSender = videoTransceiver.sender; const activeVideoTrack = (screenStream || cameraStream)?.getVideoTracks?.()[0]; if (activeVideoTrack) p.videoSender.replaceTrack(activeVideoTrack).catch(() => {}); pc.ontrack = ({ track, streams }) => attachHostedTrack(p, track, streams); pc.ondatachannel = ({ channel }) => bindHostedChannel(p, channel); pc.onicecandidate = ({ candidate }) => { if (candidate) hostedSocket?.emit('signal', { target: p.id, data: { candidate: candidate.toJSON() } }); }; pc.onconnectionstatechange = () => { if (pc.connectionState === 'connected' && p.channel?.readyState === 'open') markHostedConnected(p); if (['failed', 'disconnected', 'closed'].includes(pc.connectionState) && !p.left && pc.connectionState !== 'closed') { p.connected = false; renderHostedParticipants(); } }; return pc; }
 async function createHostedPeer(id, name, initiator, color, avatarPhoto = '') { if (hostedPeers.has(id)) return hostedPeers.get(id); const p = { id, name: name || 'Visitante', color: safeColor(color), avatar: safeAvatar(avatarPhoto), channel: null, pc: null, pendingCandidates: [], connected: false, muted: false, speaking: false, left: false, videoStream: null, videoLabel: 'Video recebido' }; hostedPeers.set(id, p); makeHostedConnection(p); renderHostedParticipants(); showHostedStage(p, false); if (initiator) { bindHostedChannel(p, p.pc.createDataChannel('voiceup-chat')); await p.pc.setLocalDescription(await p.pc.createOffer()); hostedSocket.emit('signal', { target: id, data: { description: p.pc.localDescription } }); } return p; }
 async function receiveHostedSignal({ from, name, color, avatar, data }) { try { const p = hostedPeers.get(from) || await createHostedPeer(from, name, false, color, avatar); if (Object.prototype.hasOwnProperty.call(data || {}, 'voiceState')) { p.speaking = Boolean(data.voiceState); renderHostedParticipants(); return; } if (data.description) { await p.pc.setRemoteDescription(data.description); if (p.pendingCandidates.length) await Promise.all(p.pendingCandidates.splice(0).map((candidate) => p.pc.addIceCandidate(candidate))); if (data.description.type === 'offer') { await p.pc.setLocalDescription(await p.pc.createAnswer()); hostedSocket.emit('signal', { target: from, data: { description: p.pc.localDescription } }); } } if (data.candidate) { if (p.pc.remoteDescription) await p.pc.addIceCandidate(data.candidate); else p.pendingCandidates.push(data.candidate); } } catch { toast('Erro ao negociar uma conexao da sala.'); } }
-async function receiveHostedData(p, raw) { try { const msg = JSON.parse(raw); if (msg.type === 'chat') { const mentions = Array.isArray(msg.mentions) ? msg.mentions.map(String) : []; const mentionClientIds = Array.isArray(msg.mentionClientIds) ? msg.mentionClientIds.map(String) : []; const mentioned = isMentionedForCurrentUser(mentions, mentionClientIds); playNotification(mentioned ? 'mention' : 'message'); return addMessage(msg.text, msg.name || p.name, false, msg.color || p.color, { mentions, mentionClientIds, mentioned }); } if (msg.type === 'presence-state') { p.status = normalizedPresenceStatus(msg.status); rememberHostedMember({ id: p.id, name: p.name, color: p.color, avatar: p.avatar, status: p.status }, serverMembers.get(p.id)?.voiceChannel); window.dispatchEvent(new CustomEvent('voiceup-presence-changed')); return; } if (msg.type === 'intro') { p.name = msg.name || p.name; p.color = safeColor(msg.color || p.color); p.avatar = safeAvatar(msg.avatar || p.avatar); p.clientId = msg.clientId || p.clientId; p.status = normalizedPresenceStatus(msg.status); return markHostedConnected(p); } if (msg.type === 'video-on') { showHostedVideo(p, msg.description === 'screen' ? 'Tela compartilhada' : 'Video recebido'); return; } if (msg.type === 'video-off') { hideVideoTile(p.id); return; } if (msg.type === 'voice-state') { p.speaking = Boolean(msg.description); renderHostedParticipants(); } } catch { toast('Erro ao receber dados de um participante.'); } }
+async function receiveHostedData(p, raw) { try { const msg = JSON.parse(raw); if (msg.type === 'chat') { const mentions = Array.isArray(msg.mentions) ? msg.mentions.map(String) : []; const mentionClientIds = Array.isArray(msg.mentionClientIds) ? msg.mentionClientIds.map(String) : []; const mentioned = isMentionedForCurrentUser(mentions, mentionClientIds); playNotification(mentioned ? 'mention' : 'message'); return addMessage(msg.text, msg.name || p.name, false, msg.color || p.color, { mentions, mentionClientIds, mentioned, textFile: normalizeMessageTextFile(msg.textFile) }); } if (msg.type === 'presence-state') { p.status = normalizedPresenceStatus(msg.status); rememberHostedMember({ id: p.id, name: p.name, color: p.color, avatar: p.avatar, status: p.status }, serverMembers.get(p.id)?.voiceChannel); window.dispatchEvent(new CustomEvent('voiceup-presence-changed')); return; } if (msg.type === 'intro') { p.name = msg.name || p.name; p.color = safeColor(msg.color || p.color); p.avatar = safeAvatar(msg.avatar || p.avatar); p.clientId = msg.clientId || p.clientId; p.status = normalizedPresenceStatus(msg.status); return markHostedConnected(p); } if (msg.type === 'video-on') { showHostedVideo(p, msg.description === 'screen' ? 'Tela compartilhada' : 'Video recebido'); return; } if (msg.type === 'video-off') { hideVideoTile(p.id); return; } if (msg.type === 'voice-state') { p.speaking = Boolean(msg.description); renderHostedParticipants(); } } catch { toast('Erro ao receber dados de um participante.'); } }
 
 async function enterApp(mode = 'manual') { $('welcome').classList.add('hidden'); $('app').classList.remove('hidden'); setCallMode(mode); $('self-name').textContent = myName; paintAvatar($('self-avatar'), myName, myColor, myAvatar); paintAvatar($('stage-avatar'), myName, myColor, myAvatar); $('stage-name').textContent = 'Voce esta pronto'; $('participants').innerHTML = `<div id="self-participant" class="participant">${selfParticipant()}</div>`; await requestAudio(); }
 async function makeOffer() { await enterApp('manual'); const pc = makePeer('offerer'); bindChannel(pc.createDataChannel('voiceup-chat')); setStatus('Coletando rotas P2P...'); await pc.setLocalDescription(await pc.createOffer()); const complete = await waitForIce(pc); $('pair-instruction').textContent = complete ? '1. Copie este convite e envie para a outra pessoa.' : '1. Convite preparado com as rotas disponiveis. Copie e envie para a outra pessoa.'; $('pair-code').value = pack({ type: 'offer', name: myName, color: myColor, avatar: myAvatar, description: pc.localDescription, candidates: peer.manualCandidates }); }
@@ -1191,7 +1364,7 @@ function decodeHostInvite(value) {
 }
 function decodeHostCode(value) { return decodeHostInvite(value).host; }
 function discardHostedPeer(id) { const p = hostedPeers.get(id); if (!p) return; p.left = true; p.audio?.pause(); p.pc?.close(); hostedPeers.delete(id); hideVideoTile(id); if (activeRemoteId === id) activeRemoteId = hostedPeers.keys().next().value || null; }
-function removeHostedPeer(id, name) { discardHostedPeer(id); renderHostedParticipants(); if (activeRemoteId) showHostedStage(hostedPeers.get(activeRemoteId), true); else { paintAvatar($('stage-avatar'), myName, myColor, myAvatar); $('stage-name').textContent = 'Voce esta pronto'; $('stage-message').textContent = `${name || 'A outra pessoa'} saiu da chamada.`; } setStatus(hostedPeers.size ? `${hostedPeers.size + 1} pessoas na sala` : 'Aguardando participante', hostedPeers.size > 0); playNotification('disconnect'); }
+function removeHostedPeer(id, name) { discardHostedPeer(id); renderHostedParticipants(); if (activeRemoteId) showHostedStage(hostedPeers.get(activeRemoteId), true); else { paintAvatar($('stage-avatar'), myName, myColor, myAvatar); $('stage-name').textContent = 'Voce esta pronto'; $('stage-message').textContent = `${name || 'A outra pessoa'} saiu da chamada.`; } setStatus(hostedPeers.size ? `${hostedPeers.size + 1} pessoas na sala` : 'Aguardando participante', hostedPeers.size > 0); playNotification('call-leave'); }
 function clearHostedVoice() { hostedPeers.forEach((p) => { p.left = true; p.audio?.pause(); p.pc?.close(); hideVideoTile(p.id); }); hostedPeers.clear(); activeRemoteId = null; renderHostedParticipants(); }
 async function switchVoiceChannel(channel) {
   const next = ROOM_CHANNELS.voice.includes(channel) ? channel : 'Geral';
@@ -1306,7 +1479,7 @@ async function joinHostedRoom() {
     const isCurrentSocket = () => hostedSocket === socket && attempt === hostedJoinAttempt;
     let joinedSocketId = '';
     let legacyJoinTimer = null;
-    const joinPayload = (extra = {}, protectedIdentity = false) => ({ roomId, roomPassword, voiceChannel: activeVoiceChannel || HOSTED_LOBBY_CHANNEL, name: myName, color: myColor, avatar: myAvatar, clientId, status: effectivePresenceStatus, platform: globalThis.voiceupPlatform.local(), capabilities: ['cluster-routing', 'webrtc-telemetry', 'advanced-channels', ...(protectedIdentity ? ['identity-proof-v1'] : [])], ...extra });
+    const joinPayload = (extra = {}, protectedIdentity = false) => ({ roomId, roomPassword, voiceChannel: activeVoiceChannel || HOSTED_LOBBY_CHANNEL, name: myName, color: myColor, avatar: myAvatar, clientId, status: effectivePresenceStatus, platform: globalThis.voiceupPlatform.local(), capabilities: ['cluster-routing', 'webrtc-telemetry', 'advanced-channels', 'server-access-v1', ...(protectedIdentity ? ['identity-proof-v1'] : [])], ...extra });
     const emitProtectedJoin = async (challenge) => {
       const socketId = socket.id;
       if (!isCurrentSocket() || !socket.connected || !challenge || joinedSocketId === socketId) return;
@@ -1354,10 +1527,23 @@ async function joinHostedRoom() {
       rememberCurrentMember(); (members || []).forEach((member) => rememberHostedMember(member));
       syncVoiceChannelActivity([...serverMembers.values()], packet);
       renderRoomChannels();
+      window.dispatchEvent(new CustomEvent('voiceup-room-presence', { detail: { packet } }));
     });
     socket.on('server-profile', (profile) => { if (isCurrentSocket()) rememberHostedServerProfile(profile); });
+    socket.on('server-access', (packet = {}) => {
+      if (!isCurrentSocket()) return;
+      window.voiceupCurrentServerAccess = packet;
+      window.dispatchEvent(new CustomEvent('voiceup-server-access', { detail: { packet, socket } }));
+    });
+    socket.on('server-member-moved', ({ by, voiceChannel } = {}) => {
+      if (!isCurrentSocket()) return;
+      clearHostedVoice();
+      toast(`${by || 'A equipe do servidor'} moveu você para ${voiceChannel || 'fora da call'}.`);
+    });
     socket.on('room-joined', ({ peers = [], voiceChannel, serverProfile }) => {
       if (!isCurrentSocket()) return;
+      if (!socket.__voiceupServerJoined || socket.__voiceupWasDisconnected) playNotification('server-connect');
+      socket.__voiceupServerJoined = true; socket.__voiceupWasDisconnected = false;
       rememberHostedServerProfile(serverProfile);
       activeVoiceChannel = ROOM_CHANNELS.voice.includes(voiceChannel) ? voiceChannel : '';
       rememberCurrentMember();
@@ -1367,7 +1553,7 @@ async function joinHostedRoom() {
       if (occupied.has(myColor)) applyMyColor(AVATAR_COLORS.find((color) => !occupied.has(color)) || myColor);
       if (activeVoiceChannel) peers.forEach((p) => createHostedPeer(p.id, p.name, true, p.color, p.avatar));
     });
-    socket.on('peer-joined', ({ id, name, color, avatar, status, clientId: peerClientId }) => { if (!isCurrentSocket()) return; rememberHostedMember({ id, name, color, avatar, status, clientId: peerClientId }, activeVoiceChannel); renderRoomChannels(); if (activeVoiceChannel && id !== socket.id) createHostedPeer(id, name, false, color, avatar); });
+    socket.on('peer-joined', ({ id, name, color, avatar, status, clientId: peerClientId }) => { if (!isCurrentSocket()) return; rememberHostedMember({ id, name, color, avatar, status, clientId: peerClientId }, activeVoiceChannel); renderRoomChannels(); if (activeVoiceChannel && id !== socket.id) { playNotification('call-join'); createHostedPeer(id, name, false, color, avatar); } });
     socket.on('text-message', (packet) => { if (isCurrentSocket()) receiveHostedText(packet); });
     socket.on('message-edited', (packet) => { if (isCurrentSocket()) applyMessageEdit(packet); });
     socket.on('latency-pong', ({ sentAt }) => { if (!isCurrentSocket()) return; const ping = Date.now() - Number(sentAt); if (Number.isFinite(ping) && ping >= 0 && ping < 10000) updatePingBadge(ping); });
@@ -1404,7 +1590,10 @@ async function joinHostedRoom() {
     });
     socket.on('disconnect', (reason) => {
       if (!isCurrentSocket() || socket.__voiceupSessionReplaced || reason === 'io client disconnect') return;
-      clearHostedVoice();
+      if (socket.__voiceupServerJoined && !socket.__voiceupWasDisconnected) playNotification('server-disconnect');
+      socket.__voiceupWasDisconnected = true;
+      // Keep a still-working P2P call while signalling is briefly unavailable.
+      // Peers are retired on authenticated reconnect or the grace timeout.
       setStatus('Reconectando ao servidor…');
     });
     socket.on('connect_error', () => { if (isCurrentSocket()) setStatus(socket.__voiceupEverConnected ? 'Reconectando ao servidor…' : 'Servidor host indisponível'); });
@@ -1499,14 +1688,14 @@ async function downloadPendingClientUpdate() {
   if (!pendingUpdate) return;
   const button = $('check-update');
   button.disabled = true;
-  $('update-status').textContent = 'Baixando o pacote...';
+  $('update-status').textContent = 'Baixando e verificando o pacote...';
   const download = await window.voiceupDesktop.downloadUpdate();
-  if (download.ok) $('update-status').textContent = 'Pacote aberto. Siga os passos para atualizar.';
+  if (download.ok) $('update-status').textContent = download.silent ? 'Instalacao silenciosa iniciada. O VoiceUP sera reiniciado.' : 'Pacote verificado aberto.';
   else { $('update-status').textContent = download.message; button.disabled = false; }
 }
 async function confirmPendingClientUpdate() {
   if (!pendingUpdate) return;
-  const accepted = await showVoiceupDialog({ title: 'Atualizacao disponivel', message: `Baixar e abrir o pacote VoiceUP ${pendingUpdate.version}?`, detail: 'O pacote adequado ao seu sistema sera aberto quando o download terminar.', icon: '↓', actions: [{ value: 'confirm', label: 'Baixar', style: 'primary' }, { value: 'cancel', label: 'Agora nao' }] });
+  const accepted = await showVoiceupDialog({ title: 'Atualizacao disponivel', message: `Atualizar o VoiceUP para ${pendingUpdate.version}?`, detail: 'A assinatura sera conferida e, no Windows, a instalacao acontecera silenciosamente sem apagar perfil, servidores salvos ou configuracoes.', icon: '↓', actions: [{ value: 'confirm', label: 'Atualizar', style: 'primary' }, { value: 'cancel', label: 'Agora nao' }] });
   if (accepted === 'confirm') await downloadPendingClientUpdate();
 }
 function promptAutomaticClientUpdate(result) {
@@ -1650,8 +1839,30 @@ $('fullscreen-button').addEventListener('click', async () => { const next = !doc
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && document.body.classList.contains('video-theater')) { document.body.classList.remove('video-theater'); window.voiceupDesktop?.setVideoFullscreen(false); $('fullscreen-button').title = 'Abrir live em tela cheia'; } });
 async function refreshActiveMediaQuality() { saveProfile(); if (cameraStream) await startCamera(); if (screenStream) { const track = screenStream.getVideoTracks()[0]; applyVideoContentHint(track, 'screen'); if (!preserveScreenSourceQuality) { try { await track.applyConstraints(quality()); } catch { /* capture source can cap resolution or FPS */ } } await publishVideo(track, 'screen').catch(() => {}); } }
 $('quality-select').addEventListener('change', () => void refreshActiveMediaQuality()); $('fps-select').addEventListener('change', () => void refreshActiveMediaQuality());
-$('message-form').addEventListener('submit', (event) => { event.preventDefault(); const text = $('message-input').value.trim(); if (!text) return; const id = messageId(); const createdAt = Date.now(); const mentions = mentionIdsForText(text); if (currentMode === 'hosted') { if (!hostedSocket?.connected) return toast('Conecte-se ao servidor antes de enviar mensagens.'); hostedSocket.emit('text-message', { text, textChannel: activeTextChannel, messageId: id, createdAt, mentions }); } else { if (!hasActiveCall()) return toast('A conexao ainda esta sendo estabelecida.'); const message = { id, text, name: myName, color: myColor, avatar: myAvatar, createdAt, mentions, mentionClientIds: [], mine: true }; if (!channelMessages.has(activeTextChannel)) channelMessages.set(activeTextChannel, []); channelMessages.get(activeTextChannel).push(message); peer.channel.send(JSON.stringify({ type: 'chat', text, name: myName, color: myColor, avatar: myAvatar, textChannel: activeTextChannel, messageId: id, createdAt, mentions })); addMessage(text, myName, true, myColor, message); playNotification('message'); } $('message-input').value = ''; });
-$('leave-button').addEventListener('click', () => { playNotification('disconnect'); clearInterval(latencyTimer); localStream?.getTracks().forEach((t) => t.stop()); cameraStream?.getTracks().forEach((t) => t.stop()); screenStream?.getTracks().forEach((t) => t.stop()); peer?.pc.close(); hostedPeers.forEach((p) => p.pc?.close()); hostedSocket?.disconnect(); location.reload(); });
+function sendChatMessage({ raw, reply = null, forumThreadId = '', forumTitle = '' } = {}) {
+  const outgoing = prepareOutgoingMessage(raw); if (!outgoing) return false;
+  const { text, textFile } = outgoing; const id = messageId(); const createdAt = Date.now(); const mentions = textFile ? [] : mentionIdsForText(text);
+  const forum = activeTextChannelSettings().kind === 'forum';
+  if (forum && !forumThreadId && !activeForumThreadId) return toast('Abra um tópico antes de enviar uma mensagem.'), false;
+  const threadId = forum ? String(forumThreadId || activeForumThreadId) : '';
+  if (currentMode === 'hosted') {
+    if (!hostedSocket?.connected) return toast('Conecte-se ao servidor antes de enviar mensagens.'), false;
+    hostedSocket.emit('text-message', { text, textFile, textChannel: activeTextChannel, messageId: id, createdAt, mentions, reply, ...(threadId ? { forumThreadId: threadId, forumTitle } : {}) });
+  } else {
+    if (!hasActiveCall()) return toast('A conexão ainda está sendo estabelecida.'), false;
+    const message = { id, text, textFile, name: myName, color: myColor, avatar: myAvatar, createdAt, mentions, mentionClientIds: [], mine: true, reply, ...(threadId ? { forumThreadId: threadId, forumTitle } : {}) };
+    if (!channelMessages.has(activeTextChannel)) channelMessages.set(activeTextChannel, []);
+    channelMessages.get(activeTextChannel).push(message);
+    peer.channel.send(JSON.stringify({ type: 'chat', text, textFile, name: myName, color: myColor, avatar: myAvatar, textChannel: activeTextChannel, messageId: id, createdAt, mentions, reply, ...(threadId ? { forumThreadId: threadId, forumTitle } : {}) }));
+    renderChannelMessages(); playNotification('message');
+  }
+  $('message-input').value = ''; $('message-input').dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+}
+$('message-form').addEventListener('submit', (event) => { event.preventDefault(); sendChatMessage({ raw: $('message-input').value }); });
+$('message-input').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('message-form').requestSubmit(); } });
+$('message-input').addEventListener('input', () => { const input = $('message-input'); input.style.height = 'auto'; input.style.height = `${Math.min(132, Math.max(40, input.scrollHeight))}px`; input.style.overflowY = input.scrollHeight > 132 ? 'auto' : 'hidden'; });
+$('leave-button').addEventListener('click', () => { playNotification(activeVoiceChannel ? 'call-leave' : 'server-disconnect'); clearInterval(latencyTimer); localStream?.getTracks().forEach((t) => t.stop()); cameraStream?.getTracks().forEach((t) => t.stop()); screenStream?.getTracks().forEach((t) => t.stop()); peer?.pc.close(); hostedPeers.forEach((p) => p.pc?.close()); hostedSocket?.disconnect(); location.reload(); });
 
 for (const eventName of ['pointerdown', 'keydown', 'wheel', 'touchstart']) window.addEventListener(eventName, notePresenceActivity, { passive: true });
 let lastPresencePointerSample = 0;

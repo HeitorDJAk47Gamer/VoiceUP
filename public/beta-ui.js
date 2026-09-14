@@ -960,7 +960,10 @@ function setParticipantScreenView(participant, viewing, { announce = true } = {}
   // Recalculate on both transitions; otherwise its gain can remain at zero
   // after opening a live that started with the tile hidden.
   applyLiveAudioLevels();
-  if (changed && announce) sendLiveViewerState(participant, next);
+  if (changed && announce) {
+    sendLiveViewerState(participant, next);
+    playNotification(next ? 'live-watch-in' : 'live-watch-out');
+  }
   return changed;
 }
 
@@ -1826,7 +1829,7 @@ refreshDisconnectServerLabel();
 document.querySelector('#settings-save')?.addEventListener('click', () => setTimeout(refreshDisconnectServerLabel, 0));
 disconnectServerButton?.addEventListener('click', () => {
   if (currentMode !== 'hosted') return;
-  playNotification('disconnect');
+  playNotification('server-disconnect');
   clearInterval(latencyTimer);
   stopVoiceDetection();
   localStream?.getTracks?.().forEach((track) => track.stop());
@@ -1875,7 +1878,7 @@ window.voiceupShowServerRemoval = ({ action, message } = {}) => {
   serverRemovalActive = true;
   const banned = action === 'banned';
   stopHostedSessionForRemoval();
-  playNotification('disconnect');
+  playNotification('server-disconnect');
   document.querySelector('#server-removal-eyebrow').textContent = banned ? 'ACESSO BLOQUEADO' : 'FORA DO SERVIDOR';
   document.querySelector('#server-removal-title').textContent = banned ? 'Você foi banido do servidor' : 'Você foi expulso do servidor';
   document.querySelector('#server-removal-message').textContent = message || (banned
@@ -1919,10 +1922,10 @@ refreshSelfMediaState();
 // Manual presence selector. Automatic idle reuses the orange status but does
 // not overwrite the user's saved selection.
 const presenceLabels = {
-  'pt-BR': { online: 'Online', idle: 'Ausente', dnd: 'Não perturbe', automatic: 'Ausente automaticamente' },
-  'en-US': { online: 'Online', idle: 'Idle', dnd: 'Do not disturb', automatic: 'Automatically idle' },
-  'es-ES': { online: 'En línea', idle: 'Ausente', dnd: 'No molestar', automatic: 'Ausente automáticamente' },
-  'fr-FR': { online: 'En ligne', idle: 'Absent', dnd: 'Ne pas déranger', automatic: 'Absence automatique' }
+  'pt-BR': { online: 'Online', idle: 'Ausente', activity: 'Em atividade', dnd: 'Não perturbe', automatic: 'Ausente automaticamente' },
+  'en-US': { online: 'Online', idle: 'Idle', activity: 'Active', dnd: 'Do not disturb', automatic: 'Automatically idle' },
+  'es-ES': { online: 'En línea', idle: 'Ausente', activity: 'Activo', dnd: 'No molestar', automatic: 'Ausente automáticamente' },
+  'fr-FR': { online: 'En ligne', idle: 'Absent', activity: 'Actif', dnd: 'Ne pas déranger', automatic: 'Absence automatique' }
 };
 const presenceText = (status = effectivePresenceStatus) => (presenceLabels[language] || presenceLabels['pt-BR'])[status] || status;
 const selfCard = document.querySelector('.self-card');
@@ -1931,7 +1934,8 @@ if (selfCard && !document.querySelector('#presence-status-button')) {
   (selfCard.querySelector('.self-avatar-control') || selfCard).append(button);
 }
 if (selfCard && !document.querySelector('#presence-menu')) {
-  document.body.insertAdjacentHTML('beforeend', `<aside id="presence-menu" class="presence-menu hidden" role="dialog" aria-label="Definir status">${['online', 'idle', 'dnd'].map((status) => `<button type="button" data-presence-status="${status}">${globalThis.voiceupPlatform.badge(globalThis.voiceupPlatform.local(), status, presenceText(status))}<span><strong>${presenceText(status)}</strong><small>${status === 'dnd' ? 'Silencia sons e notificações de mensagens' : status === 'idle' ? 'Mantém você como ausente' : 'Ausência automática após 10 minutos'}</small></span></button>`).join('')}</aside>`);
+  const descriptions = { online: 'Ausência automática após 10 minutos', idle: 'Mantém você como ausente', activity: 'Como Não perturbe, mas mantém todas as notificações', dnd: 'Silencia sons e notificações de mensagens' };
+  document.body.insertAdjacentHTML('beforeend', `<aside id="presence-menu" class="presence-menu hidden" role="dialog" aria-label="Definir status">${['online', 'idle', 'activity', 'dnd'].map((status) => `<button type="button" data-presence-status="${status}">${globalThis.voiceupPlatform.badge(globalThis.voiceupPlatform.local(), status, presenceText(status))}<span><strong>${presenceText(status)}</strong><small>${descriptions[status]}</small></span></button>`).join('')}</aside>`);
 }
 const presenceButton = document.querySelector('#presence-status-button');
 const presenceMenu = document.querySelector('#presence-menu');
@@ -2847,14 +2851,15 @@ const bindHostedStatusAndPresence = (socket) => {
   });
   socket.on('disconnect', (reason) => {
     if (hostedSocket !== socket) return;
+    if (socket.__voiceupSessionReplaced || socket.__voiceupReconnectCancelled) return;
     if (reason !== 'io client disconnect') {
-      clearHostedVoice();
       renderRoomChannels();
       renderBetaMembers();
       document.body.classList.add('hosted-reconnecting');
       clearTimeout(reconnectTimer);
       reconnectTimer = window.setTimeout(() => {
-        if (socket.connected) return;
+        if (socket !== hostedSocket || socket.connected || socket.__voiceupReconnectCancelled || socket.__voiceupSessionReplaced) return;
+        clearHostedVoice();
         serverMembers.clear();
         rememberCurrentMember();
         renderRoomChannels(); renderBetaMembers(); renderCentralCallMembers();
@@ -2862,7 +2867,7 @@ const bindHostedStatusAndPresence = (socket) => {
       clearTimeout(failoverTimer);
       const alternate = betaClusterAlternates.find((node) => /^https?:\/\//i.test(node?.url || '') && !betaClusterVisited.has(String(node.url).replace(/\/$/, '')));
       if (alternate) failoverTimer = window.setTimeout(() => {
-        if (!socket.connected) betaSwitchClusterHost(alternate.url, 'Host indisponível · ativando failover…');
+        if (socket === hostedSocket && !socket.connected && !socket.__voiceupReconnectCancelled && !socket.__voiceupSessionReplaced) betaSwitchClusterHost(alternate.url, 'Host indisponível · ativando failover…');
       }, 900);
     }
     setStatus(reason === 'io client disconnect' ? 'Servidor desconectado' : 'Reconectando ao servidor…');
@@ -3249,7 +3254,7 @@ async function leaveHostedVoiceChannel() {
   hostedSocket.emit('request-room-presence');
   setStatus('No servidor · fora das calls', true);
   document.querySelector('#connection-state').textContent = 'Fora da call';
-  playNotification('disconnect');
+  playNotification('call-leave');
   return true;
 }
 const leaveCallButton = document.querySelector('#leave-button');
@@ -3265,8 +3270,9 @@ const betaSwitchVoiceChannel = switchVoiceChannel;
 switchVoiceChannel = async function switchVoiceChannelBeta17(channel) {
   const wasOutsideCall = currentMode === 'hosted' && !activeVoiceChannel;
   const result = await betaSwitchVoiceChannel(channel);
-  if (wasOutsideCall && ROOM_CHANNELS.voice.includes(channel)) {
+  if (wasOutsideCall && ROOM_CHANNELS.voice.includes(channel) && activeVoiceChannel === channel) {
     localStream?.getAudioTracks?.().forEach((track) => { track.enabled = micEnabled; });
+    playNotification('call-join');
   }
   return result;
 };

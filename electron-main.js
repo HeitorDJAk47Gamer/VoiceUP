@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, desktopCapturer, ipcMain, Tray, Menu, globalShortcut, net: electronNet } = require('electron');
+const { app, BrowserWindow, shell, desktopCapturer, ipcMain, Tray, Menu, globalShortcut, session, net: electronNet } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('node:crypto');
@@ -147,6 +147,19 @@ const startDirectRoom = async (input = {}) => {
 const processAudioHelperPath = () => app.isPackaged
   ? path.join(process.resourcesPath, 'native', 'voiceup-process-audio.exe')
   : path.join(__dirname, 'native', 'voiceup-process-audio.exe');
+const dictationHotkeyPath = () => app.isPackaged
+  ? path.join(process.resourcesPath, 'native', 'voiceup-dictation-hotkey.exe')
+  : path.join(__dirname, 'native', 'voiceup-dictation-hotkey.exe');
+function startWindowsVoiceTyping() {
+  if (process.platform !== 'win32' || !fs.existsSync(dictationHotkeyPath())) return Promise.resolve({ ok: false, reason: 'voice-typing-unavailable' });
+  return new Promise((resolve) => {
+    const child = spawn(dictationHotkeyPath(), [], { windowsHide: true, stdio: 'ignore' });
+    child.once('error', () => resolve({ ok: false, reason: 'voice-typing-start-failed', message: 'Não foi possível abrir o Ditado por Voz do Windows.' }));
+    child.once('exit', (code) => resolve(code === 0
+      ? { ok: true, message: 'Ditado por Voz do Windows aberto.' }
+      : { ok: false, reason: 'voice-typing-hotkey-failed', message: 'O Windows não aceitou o atalho de ditado. Tente Win + H.' }));
+  });
+}
 const processAudioCapability = () => ({
   available: process.platform === 'win32' && fs.existsSync(processAudioHelperPath()),
   mode: process.platform === 'win32' ? 'process-tree-include-exclude' : 'unavailable',
@@ -287,7 +300,7 @@ const fetchLinkPreview = async (raw) => {
   try {
     let response;
     for (let redirect = 0; redirect < 4; redirect += 1) {
-      response = await electronNet.fetch(current.href, { redirect: 'manual', signal: controller.signal, headers: { Accept: 'text/html,application/xhtml+xml;q=0.9,image/avif,image/webp,image/apng,image/*;q=0.8', 'User-Agent': `VoiceUP/${app.getVersion()}` } });
+      response = await electronNet.fetch(current.href, { redirect: 'manual', signal: controller.signal, headers: { Accept: 'text/html,application/xhtml+xml;q=0.9,image/avif,image/webp,image/apng,image/*;q=0.8', 'User-Agent': session.defaultSession.getUserAgent() } });
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
       const location = response.headers.get('location'); if (!location) return null;
       current = await publicPreviewUrl(new URL(location, current).href);
@@ -311,6 +324,9 @@ const fetchLinkPreview = async (raw) => {
     const titleTag = html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '';
     const title = cleanPreviewText(metadata['og:title'] || metadata['twitter:title'] || titleTag, 140);
     const description = cleanPreviewText(metadata['og:description'] || metadata['twitter:description'] || metadata.description, 240);
+    // Compatibility/consent/challenge pages are not metadata about the shared link.
+    const blockedPage = /(?:seu navegador não é compatível|navegador (?:não suportado|incompatível)|your browser (?:is not supported|isn't supported)|unsupported browser|upgrade your browser|before you continue to|antes de continuar para|just a moment|access denied|verify you are human)/i;
+    if (blockedPage.test(`${title} ${description}`)) return null;
     const siteName = cleanPreviewText(metadata['og:site_name'] || current.hostname.replace(/^www\./, ''), 70);
     const rawImage = metadata['og:image:secure_url'] || metadata['og:image'] || metadata['twitter:image'] || '';
     let image = '';
@@ -409,6 +425,7 @@ function configureGlobalShortcuts(shortcuts = {}) {
   clearGlobalShortcuts();
   const accepted = {};
   for (const [action, rawAccelerator] of Object.entries(shortcuts || {})) {
+    if (!['mic', 'output', 'camera', 'screen', 'leave', 'settings'].includes(action)) continue;
     const accelerator = String(rawAccelerator || '').trim();
     if (!accelerator || accelerator.length > 64 || !/^[\w+\- ]+$/i.test(accelerator)) continue;
     try {
@@ -511,6 +528,7 @@ secureHandle('capture:select', (_event, selection = {}) => {
 secureHandle('capture:process-audio-capability', () => processAudioCapability());
 secureHandle('capture:process-audio-start', (_event, sourceId) => startProcessAudioCapture(String(sourceId || '').slice(0, 180)));
 secureHandle('capture:process-audio-stop', () => stopProcessAudioCapture('renderer-stopped'));
+secureHandle('dictation:start', () => startWindowsVoiceTyping());
 secureHandle('link:preview', async (_event, raw) => { try { return await fetchLinkPreview(String(raw || '').slice(0, 2048)); } catch { return null; } });
 secureHandle('window:set-video-fullscreen', (_event, enabled) => { mainWindow?.setFullScreen(Boolean(enabled)); return Boolean(enabled); });
 secureHandle('window:settings', () => publicWindowSettings());

@@ -20,7 +20,7 @@ assert.match(packageJson.scripts['dist:linux:server'], /--linux AppImage deb --x
 assert.doesNotMatch(packageJson.scripts['dist:linux'], /powershell|build:native|voiceup-process-audio\.exe|--win\b/i, 'O build Linux não pode depender do helper Windows.');
 assert.doesNotMatch(packageJson.scripts['dist:linux:server'], /powershell|build:native|voiceup-process-audio\.exe|--win\b/i, 'O ServerHost Linux não pode depender do helper Windows.');
 assert.equal(packageJson.build.extraResources, undefined, 'Recursos nativos Windows não podem ser globais.');
-assert.equal(packageJson.build.win.extraResources[0].from, 'native/voiceup-process-audio.exe');
+assert.ok(packageJson.build.win.extraResources.some(resource => resource.from === 'native/voiceup-process-audio.exe'));
 assert.deepEqual(packageJson.build.linux.target, ['AppImage', 'deb']);
 assert.match(packageJson.build.linux.icon, /\.png$/i);
 assert.equal(packageJson.build.linux.executableName, 'voiceup');

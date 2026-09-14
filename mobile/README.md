@@ -6,7 +6,7 @@ instaladores desktop já publicados.
 
 ## Compatibilidade
 
-A edição **1.2.1** mantém o protocolo compatível com **VoiceUP 1.1.2+** e
+A edição **1.2.2-mobile-beta.1** mantém o protocolo compatível com **VoiceUP 1.1.2+** e
 adapta os recursos de servidor e cliente para o celular.
 
 Nesta versão, o ícone e a tela de abertura do Android usam a identidade do
@@ -46,8 +46,10 @@ compactos, enquanto a saída do servidor ganhou um botão maior em vermelho.
 - microfone e áudio recebido independentes;
 - volume global de vozes e transmissões, além de volume/silenciamento por
   participante;
-- áudio de compartilhamento de tela separado da voz quando o Android oferece a
-  faixa de áudio;
+- compartilhamento nativo da tela inteira, sem seletor de janelas, com escolha
+  entre vídeo com ou sem áudio do sistema;
+- áudio de compartilhamento separado da voz no Android 10 ou superior, quando
+  o conteúdo aberto permite sua captura;
 - cancelamento de eco, redução de ruído e ganho automático configuráveis;
 - câmera frontal/traseira, qualidade 480p/720p e troca durante a call;
 - tela cheia para câmeras e transmissões;
@@ -59,23 +61,52 @@ compactos, enquanto a saída do servidor ganhou um botão maior em vermelho.
 
 ## Limitações do Android
 
-O compartilhamento de tela usa `getDisplayMedia` e depende da versão do Android
-e do WebView do aparelho. Alguns dispositivos disponibilizam vídeo sem o áudio
-do sistema. Hospedar um ServerHost, capturar o áudio de processos do Windows,
-UPnP/NAT-PMP e instalar plugins continuam sendo funções do desktop/servidor.
+O compartilhamento usa a autorização `MediaProjection` do próprio Android e
+mantém uma notificação visível enquanto estiver ativo. O áudio do sistema exige
+Android 10 ou superior e pode ser bloqueado pelo aplicativo que estiver
+reproduzindo o conteúdo; nesse caso, a imagem continua sem áudio. A ponte desta
+beta precisa de validação em aparelho físico, principalmente ao trocar de app,
+girar a tela e compartilhar por períodos longos. Hospedar um ServerHost,
+capturar áudio de processos do Windows, UPnP/NAT-PMP e instalar plugins
+continuam sendo funções do desktop/servidor.
 
 O aplicativo pede autorização de microfone e câmera quando cada recurso é usado.
 ServerHosts locais em `http://` são permitidos para testes na mesma rede; em um
 servidor público, use `https://`.
 
-## APK oficial
+## Distribuição Android
 
-O workflow de publicação gera o APK estável como:
+O artefato desta beta deve ser identificado como:
 
-`VoiceUP-1.2.1-android.apk`
+`VoiceUP-1.2.2-mobile-beta.1.apk` (teste local) ou
+`VoiceUP-1.2.2-android.apk` (catálogo estável futuro)
 
-O APK release não é depurável e usa a mesma identidade de assinatura do APK
-oficial 1.2.0, preservando perfil, servidores e preferências ao atualizar.
+O APK consulta manualmente o catálogo assinado em **Ajustes > Atualizações do
+APK** e abre somente o download oficial. O Android mantém as confirmações de
+instalação; o aplicativo não instala atualizações silenciosamente.
+
+Por padrão, o Gradle compila o canal `apk`. A edição da Play Store deve
+ser criada com `-PvoiceupDistributionChannel=play`; nela, o botão de download
+externo é removido da interface e bloqueado também pela ponte nativa:
+
+```powershell
+cd mobile
+npm run aab:play
+```
+
+O primeiro build Play precisa de uma chave de upload. O VoiceUP mantém essa
+chave fora do repositório e protege a senha com a conta atual do Windows:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/setup-play-signing.ps1
+npm run aab:play
+```
+
+Guarde a pasta `%USERPROFILE%\.voiceup\android-signing` em local privado. A
+credencial automática é protegida pela conta atual do Windows; se essa chave for
+perdida, solicite a redefinição da chave de upload no Play Console. Ela é
+separada da chave de assinatura que fica protegida pelo Play App Signing. Nunca
+adicione a chave ou suas credenciais ao Git.
 
 ## Desenvolver e validar
 
@@ -100,7 +131,7 @@ com Python e Pillow antes do `sync`:
 python tools/generate-android-brand-assets.py
 ```
 
-Use Android 15 / API 35 e as Build Tools correspondentes. O script detecta um
+Use Android 16 / API 36 e as Build Tools correspondentes. O script detecta um
 Java compatível com o Gradle (17 a 23) e um compilador Java 21 ou mais recente.
 Também é possível indicar os caminhos com `VOICEUP_GRADLE_JAVA_HOME` e
 `VOICEUP_JAVA_COMPILER_HOME`. O projeto aceita Android 6.0 (API 23) ou superior.

@@ -3,6 +3,9 @@
 
   const installedVersion = String(window.voiceupVersion || '1.2.1');
   const version = installedVersion;
+  const releaseHistory = window.voiceupBetaReleaseHistory?.version === installedVersion
+    ? window.voiceupBetaReleaseHistory
+    : window.voiceupReleaseHistory;
   const seenKey = 'voiceup-release-notes-seen-v1';
   const locale = () => ['pt-BR', 'en-US', 'es-ES', 'fr-FR'].includes(document.documentElement.lang) ? document.documentElement.lang : 'pt-BR';
   const labels = {
@@ -12,7 +15,7 @@
     'fr-FR': { eyebrow: 'VERSION {version}', close: 'Compris', reopen: 'Nouveautés de {version}', auto: 'Enregistrement auto' }
   };
   const copy = Object.fromEntries(Object.entries(labels).map(([language, text]) =>
-    [language, { ...text, ...window.voiceupReleaseHistory.locales[language] }]));
+    [language, { ...text, ...releaseHistory.locales[language] }]));
 
   document.body.insertAdjacentHTML('beforeend', `<div id="release-notes-modal" class="release-notes-modal hidden" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
     <article class="release-notes-card">

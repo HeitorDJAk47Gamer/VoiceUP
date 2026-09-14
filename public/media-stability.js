@@ -16,17 +16,20 @@
 
   document.head.insertAdjacentHTML('beforeend', `<style id="media-stability-style">
     /* Fullscreen must own the entire Electron viewport. */
-    body.video-theater{overflow:hidden!important;background:#05070d!important}
-    body.video-theater #app.app{display:block!important;position:fixed!important;inset:0!important;width:100vw!important;height:100dvh!important;min-height:0!important;overflow:hidden!important;background:#05070d!important}
+    body.video-theater{overflow:hidden!important;background:#000!important;margin:0!important;padding:0!important}
+    body.video-theater> :not(#video-frame){display:none!important}
+    body.video-theater #app.app{display:none!important}
     body.video-theater .content{display:block!important;position:static!important;width:100%!important;height:100%!important;min-height:0!important;border:0!important;background:#05070d!important}
     body.video-theater .content>.control-dock,body.video-theater .control-dock{display:none!important}
     body.video-theater #video-frame{display:block!important;position:fixed!important;inset:0!important;z-index:90!important;width:100vw!important;height:100dvh!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;aspect-ratio:auto!important;border:0!important;border-radius:0!important;box-shadow:none!important;background:#05070d!important}
-    body.video-theater #video-gallery{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-height:0!important;padding:10px!important;gap:10px!important;overflow:hidden!important}
+    body.video-theater #video-gallery{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;min-height:0!important;margin:0!important;padding:0!important;gap:0!important;overflow:hidden!important}
     body.video-theater.video-theater-single #video-gallery{grid-template-columns:1fr!important;grid-template-rows:1fr!important}
     body.video-theater.video-theater-single #video-gallery .video-tile:not(.theater-focused){display:none!important}
     body.video-theater.video-theater-single #video-gallery .video-tile.theater-focused{display:flex!important;grid-column:1/-1!important;grid-row:1/-1!important;width:100%!important;height:100%!important}
-    body.video-theater .video-tile{min-width:0!important;min-height:0!important;border-radius:10px!important}
-    body.video-theater .video-tile video{width:100%!important;height:100%!important;object-fit:contain!important}
+    body.video-theater #video-gallery .video-tile{min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;background:#000!important}
+    body.video-theater .video-tile video{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;object-fit:contain!important;border-radius:0!important;background:#000!important}
+    body.video-theater #video-frame #local-video,body.video-theater .call-participant-tray,body.video-theater .video-tile-label,body.video-theater .media-tile-controls,body.video-theater .media-layout-toolbar{display:none!important}
+    body.video-theater.theater-controls-idle #video-frame,body.video-theater.theater-controls-idle #video-frame *{cursor:none!important}
     body.video-theater #local-video{position:fixed!important;z-index:102!important;right:20px!important;bottom:76px!important;top:auto!important;max-width:28vw!important;max-height:24vh!important}
     body.video-theater #fullscreen-button{display:none!important}
     #fullscreen-button{position:absolute!important;z-index:18!important;right:13px!important;bottom:13px!important;top:auto!important;display:grid!important;place-items:center!important;border:1px solid color-mix(in srgb,var(--focus) 52%,#fff)!important;border-radius:9px!important;background:rgba(7,13,23,.92)!important;color:#f7fbff!important;box-shadow:0 7px 18px rgba(0,0,0,.34)!important}
@@ -40,6 +43,7 @@
     body.video-theater.video-theater-single .media-layout-toolbar{display:none!important}
     #video-theater-toolbar{position:fixed;z-index:2147483647;top:max(14px,env(safe-area-inset-top));right:max(16px,env(safe-area-inset-right));display:none;align-items:center;gap:8px;padding:8px;border:1px solid rgba(255,255,255,.2);border-radius:13px;background:rgba(8,12,20,.86);box-shadow:0 12px 34px rgba(0,0,0,.38);backdrop-filter:blur(14px)}
     body.video-theater #video-theater-toolbar{display:flex}
+    body.video-theater.theater-controls-idle #video-theater-toolbar{opacity:0;pointer-events:none;visibility:hidden}
     #video-theater-toolbar button{min-height:38px;display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:8px 11px;border:1px solid rgba(255,255,255,.16);border-radius:9px;background:#1b2940;color:#f5f8ff;font:700 12px/1 'DM Sans',sans-serif;white-space:nowrap}
     #video-theater-toolbar button:hover{border-color:var(--focus);background:#263a58}
     #video-theater-toolbar .theater-stop-share{background:#ad4050;color:#fff;border-color:#d96272}
@@ -86,6 +90,29 @@
   document.body.append(toolbar);
   const exitButton = toolbar.querySelector('.theater-exit');
   const stopButton = toolbar.querySelector('.theater-stop-share');
+  let frameAnchor = null;
+  let controlsTimer = null;
+  const showTheaterControls = () => {
+    if (!document.body.classList.contains('video-theater')) return;
+    document.body.classList.remove('theater-controls-idle');
+    clearTimeout(controlsTimer);
+    controlsTimer = setTimeout(() => {
+      if (!toolbar.contains(document.activeElement) && !toolbar.matches(':hover')) document.body.classList.add('theater-controls-idle');
+    }, 2200);
+  };
+  const restoreTheaterLayout = () => {
+    clearTimeout(controlsTimer);
+    document.body.classList.remove('video-theater', 'theater-controls-idle');
+    document.body.append(toolbar);
+    if (frameAnchor?.parentNode) frameAnchor.replaceWith(frame);
+    frameAnchor = null;
+    selectTheaterTile(null);
+  };
+  document.addEventListener('pointermove', showTheaterControls, { passive: true });
+  document.addEventListener('pointerdown', showTheaterControls, { passive: true });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Tab') showTheaterControls(); });
+  toolbar.addEventListener('focusout', showTheaterControls);
+  toolbar.addEventListener('pointerleave', showTheaterControls);
 
   const hasScreen = () => Boolean(screenStream?.getVideoTracks?.().some((track) => track.readyState === 'live'));
   const viewedScreenTile = () => {
@@ -134,8 +161,7 @@
   };
 
   const leaveTheater = async () => {
-    document.body.classList.remove('video-theater');
-    selectTheaterTile(null);
+    restoreTheaterLayout();
     try {
       if (window.voiceupDesktop?.setVideoFullscreen) await window.voiceupDesktop.setVideoFullscreen(false);
       else if (document.fullscreenElement) await document.exitFullscreen();
@@ -143,8 +169,17 @@
     syncToolbar();
   };
   const enterTheater = async (tile = null) => {
+    // Escape the call grid's size constraints and transformed ancestors without
+    // recreating the video elements or interrupting their MediaStreams.
+    if (!frameAnchor) {
+      frameAnchor = document.createComment('video-frame-home');
+      frame.before(frameAnchor);
+      document.body.append(frame);
+    }
+    frame.append(toolbar);
     selectTheaterTile(tile);
     document.body.classList.add('video-theater');
+    showTheaterControls();
     try {
       if (window.voiceupDesktop?.setVideoFullscreen) await window.voiceupDesktop.setVideoFullscreen(true);
       else await frame.requestFullscreen?.();
@@ -176,8 +211,7 @@
   });
   document.addEventListener('fullscreenchange', () => {
     if (!document.fullscreenElement && !window.voiceupDesktop) {
-      document.body.classList.remove('video-theater');
-      selectTheaterTile(null);
+      restoreTheaterLayout();
     }
     syncToolbar();
   });

@@ -3,7 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const crypto = require('node:crypto');
+const { spawn } = require('node:child_process');
 const releaseIntegrity = require('./public/release-integrity');
+const { createRecovery } = require('./update-recovery');
 
 const OWNER = 'HeitorDJAk47Gamer';
 const REPOSITORY = 'VoiceUP';
@@ -195,13 +197,13 @@ function signedReleaseEnvelope(version, assets) {
   return read(expectedUrl);
 }
 
-function download(url, destination, redirects = 0) {
+function download(url, destination, redirects = 0, onProgress = () => {}) {
   return new Promise((resolve, reject) => {
     if (!trustedDownloadUrl(url)) return reject(new Error('O endereço da atualização não pertence ao canal oficial do VoiceUP.'));
     const request = https.get(url, { headers: { 'User-Agent': 'VoiceUP-Desktop-Updater', Accept: 'application/octet-stream' } }, (response) => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location && redirects < 5) {
         response.resume();
-        return resolve(download(new URL(response.headers.location, url).href, destination, redirects + 1));
+        return resolve(download(new URL(response.headers.location, url).href, destination, redirects + 1, onProgress));
       }
       if (response.statusCode !== 200) {
         response.resume();
@@ -213,6 +215,7 @@ function download(url, destination, redirects = 0) {
         return reject(new Error('A atualização excede o tamanho máximo permitido.'));
       }
       let downloadedBytes = 0;
+      const totalBytes = declaredLength > 0 ? declaredLength : 0;
       let settled = false;
       const file = fs.createWriteStream(destination, { flags: 'wx' });
       const fail = (error) => {
@@ -224,6 +227,7 @@ function download(url, destination, redirects = 0) {
       };
       response.on('data', (chunk) => {
         downloadedBytes += chunk.length;
+        onProgress({ downloadedBytes, totalBytes, percent: totalBytes ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 1000) / 10) : null });
         if (downloadedBytes > MAX_INSTALLER_BYTES) fail(new Error('A atualização excede o tamanho máximo permitido.'));
       });
       response.on('error', fail);
@@ -238,6 +242,24 @@ function download(url, destination, redirects = 0) {
       file.on('error', fail);
     }).on('error', (error) => { fs.unlink(destination, () => reject(error)); });
     request.setTimeout(30000, () => request.destroy(new Error('O download da atualização parou de responder.')));
+  });
+}
+
+function launchVerifiedUpdate(destination, options = {}) {
+  const platform = String(options.platform || process.platform);
+  if (platform !== 'win32') return options.shellApi?.openPath ? options.shellApi.openPath(destination) : shell.openPath(destination);
+  const spawnProcess = options.spawnProcess || spawn;
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawnProcess(destination, ['/S', '--updated'], { detached: true, stdio: 'ignore', windowsHide: true });
+    } catch (error) { reject(error); return; }
+    if (!child || typeof child.once !== 'function') { reject(new Error('Não foi possível iniciar o instalador silencioso.')); return; }
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref?.();
+      resolve('');
+    });
   });
 }
 
@@ -277,6 +299,12 @@ async function verifyDownloadedUpdate(filePath, asset, options = {}) {
 
 function registerUpdateHandlers(ipcMain, assetPrefix, isTrustedEvent = () => true, options = {}) {
   let checkInFlight = null;
+  let installInFlight = null;
+  const product = /^VoiceUPServer/.test(assetPrefix) ? 'serverhost' : 'client';
+  const recovery = () => createRecovery(path.join(app.getPath('userData'), `update-recovery-${product}`));
+  const publishProgress = (event, progress) => {
+    try { if (!event?.sender?.isDestroyed?.()) event?.sender?.send?.('update:progress', progress); } catch { /* a janela pode fechar durante a instalação */ }
+  };
   function check() {
     if (checkInFlight) return checkInFlight;
     checkInFlight = (async () => {
@@ -321,26 +349,53 @@ function registerUpdateHandlers(ipcMain, assetPrefix, isTrustedEvent = () => tru
     catch (error) { return { ok: false, message: error.message || 'Falha ao consultar o GitHub.' }; }
   });
 
+  ipcMain.handle('update:recovery', async (event) => {
+    if (!isTrustedEvent(event)) return { ok: false };
+    const pending = recovery().read();
+    return { ok: true, pending: Boolean(pending && isNewer(pending.version, app.getVersion())), version: pending?.version || '', message: 'Uma atualização anterior não foi concluída. Você pode tentar novamente sem alterar seu perfil.' };
+  });
+
   ipcMain.handle('update:download', async (event) => {
     if (!isTrustedEvent(event)) return { ok: false, message: 'Solicitação de atualização bloqueada pelo VoiceUP.' };
+    if (installInFlight) return installInFlight;
     let updateDirectory = '';
-    try {
+    installInFlight = (async () => { try {
+      publishProgress(event, { phase: 'checking', percent: 2, message: 'Preparando a atualização segura…', minimizable: true });
       const update = await check();
       if (update.packageUnavailable) throw new Error(update.message);
       if (!update.available) throw new Error('Nenhuma atualização verificada está disponível para esta instalação.');
+      const cache = recovery();
+      const cachedDestination = cache.candidate(update);
+      cache.save({ version: update.version, phase: 'downloading' });
+      let cached = false;
+      try { await verifyDownloadedUpdate(cachedDestination, update, { platform: process.platform, product }); cached = true; } catch { /* Never trust a stale or partial cached file. */ }
       updateDirectory = fs.mkdtempSync(path.join(app.getPath('temp'), 'voiceup-update-'));
-      const destination = path.join(updateDirectory, path.basename(update.assetName));
-      await download(update.downloadUrl, destination);
+      let destination = cached ? cachedDestination : path.join(updateDirectory, path.basename(update.assetName));
+      publishProgress(event, { phase: 'downloading', percent: 3, version: update.version, message: `Baixando VoiceUP ${update.version}…`, minimizable: true });
+      if (!cached) await download(update.downloadUrl, destination, 0, ({ downloadedBytes, totalBytes, percent }) => publishProgress(event, { phase: 'downloading', percent: percent ?? null, downloadedBytes, totalBytes: totalBytes || update.size || 0, version: update.version, message: `Baixando VoiceUP ${update.version}…`, minimizable: true }));
+      publishProgress(event, { phase: 'verifying', percent: 100, version: update.version, message: 'Verificando assinatura e integridade…', minimizable: true });
       await verifyDownloadedUpdate(destination, update, { platform: process.platform });
+      if (!cached) {
+        // Only this product's digest-addressed cache can be replaced here.
+        fs.copyFileSync(destination, cachedDestination);
+        destination = cachedDestination;
+        await verifyDownloadedUpdate(destination, update, { platform: process.platform, product });
+      }
+      cache.save({ version: update.version, phase: 'installing' });
       if (process.platform === 'linux' && /\.AppImage$/i.test(destination)) fs.chmodSync(destination, 0o755);
-      const result = await shell.openPath(destination);
+      publishProgress(event, { phase: 'installing', percent: 100, version: update.version, message: process.platform === 'win32' ? 'Instalando silenciosamente. O VoiceUP será reiniciado…' : 'Abrindo o pacote verificado…', minimizable: false });
+      const result = await launchVerifiedUpdate(destination, { platform: process.platform, spawnProcess: options.spawnProcess, shellApi: shell });
       if (result) throw new Error(result);
-      return { ok: true };
+      if (updateDirectory) { fs.rmSync(updateDirectory, { recursive: true, force: true }); updateDirectory = ''; }
+      if (process.platform === 'win32') setTimeout(() => app.quit(), 650);
+      return { ok: true, installing: process.platform === 'win32', silent: process.platform === 'win32', version: update.version };
     } catch (error) {
       if (updateDirectory) fs.rmSync(updateDirectory, { recursive: true, force: true });
+      publishProgress(event, { phase: 'error', percent: null, message: error.message || 'Falha ao baixar a atualização.', minimizable: true });
       return { ok: false, message: error.message || 'Falha ao baixar a atualizacao.' };
-    }
+    } })().finally(() => { installInFlight = null; });
+    return installInFlight;
   });
 }
 
-module.exports = { registerUpdateHandlers, isNewer, assetFor, updateAssetName, updateAvailability, preferredLinuxExtension, trustedDownloadUrl, verifyDownloadedUpdate };
+module.exports = { registerUpdateHandlers, isNewer, assetFor, updateAssetName, updateAvailability, preferredLinuxExtension, trustedDownloadUrl, verifyDownloadedUpdate, launchVerifiedUpdate };

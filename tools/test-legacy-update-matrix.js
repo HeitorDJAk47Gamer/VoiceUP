@@ -7,7 +7,11 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const workspace = path.resolve(__dirname, '..');
-const releaseVersion = require('../package.json').version;
+const packageVersion = require('../package.json').version;
+// Legacy updaters only consume the stable GitHub channel. While the workspace
+// is on a beta, exercise the future stable core instead of pretending that a
+// prerelease is an official release (old parsers intentionally drop suffixes).
+const releaseVersion = packageVersion.split('-')[0];
 const products = [
   ['client', 'VoiceUP Setup ', `VoiceUP.Setup.${releaseVersion}.exe`],
   ['serverhost', 'VoiceUPServer Setup ', `VoiceUPServer.Setup.${releaseVersion}.exe`]
@@ -91,7 +95,7 @@ async function checkTag(tag, installedVersion, prefix) {
   }
   assert.deepEqual(compatible, ['v1.0.25:client', 'v1.0.25:serverhost', 'v1.1.2:client', 'v1.1.2:serverhost']);
   assert.deepEqual(manualTransition, ['v1.1.0:client', 'v1.1.0:serverhost', 'v1.1.1:client', 'v1.1.1:serverhost']);
-  console.log(`PASS atualizações antigas: 1.0.25 e 1.1.2 resolvem os nomes ${releaseVersion}; 1.1.0/1.1.1 permanecem corretamente sinalizadas como transição manual por causa da URL já embutida.`);
+  console.log(`PASS atualizações antigas: 1.0.25 e 1.1.2 resolvem os nomes da futura estável ${releaseVersion}; 1.1.0/1.1.1 permanecem corretamente sinalizadas como transição manual por causa da URL já embutida.`);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

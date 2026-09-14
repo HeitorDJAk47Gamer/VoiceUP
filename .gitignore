@@ -46,6 +46,7 @@ tools/.security-*/
 *.jks
 *.dpapi
 .release-tools/
+.voiceup-private/
 release-beta-platform*/
 release-store-v*/
 test-1.1.3-mobile-beta.*/

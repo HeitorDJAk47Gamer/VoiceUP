@@ -52,6 +52,10 @@
   };
   const persistShortcuts = async () => {
     localStorage.setItem(shortcutStorageKey, JSON.stringify(shortcutPreferences));
+    if (document.activeElement?.matches?.('[data-global-shortcut]')) {
+      await window.voiceupDesktop?.clearShortcuts?.();
+      return;
+    }
     const accelerators = Object.fromEntries(['mic', 'output', 'camera', 'screen', 'leave', 'settings']
       .map((action) => [action, String(shortcutPreferences[action] || '').trim()])
       .filter(([, accelerator]) => accelerator));
@@ -66,6 +70,14 @@
         ? `${active} de ${total} atalhos globais ativos.`
         : 'Atalhos globais ficam disponíveis no aplicativo .exe.';
     }
+    document.querySelectorAll('[data-global-shortcut]').forEach((input) => {
+      const action = input.dataset.globalShortcut, requested = accelerators[action];
+      const invalid = Boolean(requested && window.voiceupDesktop?.configureShortcuts && !accepted[action]);
+      input.setAttribute('aria-invalid', String(invalid));
+      let feedback = input.parentElement.querySelector('.shortcut-feedback');
+      if (!feedback) { feedback = document.createElement('small'); feedback.className = 'shortcut-feedback'; feedback.id = `shortcut-feedback-${action}`; input.after(feedback); input.setAttribute('aria-describedby', feedback.id); }
+      feedback.textContent = invalid ? 'Combinação inválida, repetida ou em uso por outro programa.' : requested ? 'Configurado' : 'Desativado';
+    });
   };
   const shortcutAction = (action) => {
     const target = ({ mic: 'mic-button', output: 'output-button', camera: 'cam-button', screen: 'screen-button', leave: 'leave-button', settings: 'settings-button' })[action];
@@ -75,7 +87,7 @@
   void persistShortcuts();
 
   document.addEventListener('keydown', (event) => {
-    if (!shortcutPreferences.pushToTalk || event.repeat || event.code !== shortcutPreferences.pushToTalkKey || isTypingTarget(event.target)) return;
+    if (!shortcutPreferences.pushToTalk || event.repeat || event.code !== shortcutPreferences.pushToTalkKey || isTypingTarget(event.target) || event.target?.closest?.('[role="dialog"]')) return;
     pushToTalkPressed = true;
     pushToTalkPreviousMic = Boolean(micEnabled);
     setMicrophoneEnabled(true);
@@ -121,11 +133,30 @@
       if (pttToggle.checked) setMicrophoneEnabled(false); else releasePushToTalk();
       void persistShortcuts();
     });
-    pttKey.addEventListener('change', () => { shortcutPreferences.pushToTalkKey = pttKey.value; releasePushToTalk(); void persistShortcuts(); });
+    pttKey.addEventListener('change', () => { releasePushToTalk(); shortcutPreferences.pushToTalkKey = pttKey.value; void persistShortcuts(); });
     settingsPanels.querySelectorAll('[data-global-shortcut]').forEach((input) => input.addEventListener('change', () => {
       shortcutPreferences[input.dataset.globalShortcut] = input.value.trim();
       void persistShortcuts();
     }));
+    settingsPanels.querySelectorAll('[data-global-shortcut]').forEach((input) => {
+      input.placeholder = 'Pressione Ctrl/Alt/Shift + tecla';
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Tab' || event.key === 'Escape') return;
+        event.preventDefault(); event.stopPropagation();
+        if (event.key === 'Backspace' || event.key === 'Delete') input.value = '';
+        else {
+          if (event.repeat || !event.ctrlKey && !event.altKey && !event.metaKey || ['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return;
+          const key = /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : /^Digit\d$/.test(event.code) ? event.code.slice(5) : /^F\d{1,2}$/.test(event.key) ? event.key : '';
+          if (!key) return;
+          input.value = [event.ctrlKey && 'CommandOrControl', event.altKey && 'Alt', event.shiftKey && 'Shift', event.metaKey && 'Super', key].filter(Boolean).join('+');
+        }
+        input.dispatchEvent(new Event('change'));
+      });
+    });
+    // Release global grabs while recording so an existing shortcut cannot
+    // mute the call or close it instead of reaching the input.
+    settingsPanels.addEventListener('focusin', (event) => { if (event.target.matches('[data-global-shortcut]')) void window.voiceupDesktop?.clearShortcuts?.(); });
+    settingsPanels.addEventListener('focusout', (event) => { if (event.target.matches('[data-global-shortcut]')) void persistShortcuts(); });
     settingsTabs.querySelector('[data-settings-tab="shortcuts"]')?.addEventListener('click', () => {
       settingsTabs.querySelectorAll('.settings-tab').forEach((button) => button.classList.toggle('active', button.dataset.settingsTab === 'shortcuts'));
       settingsPanels.querySelectorAll('.settings-panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.settingsPanel === 'shortcuts'));
@@ -139,7 +170,12 @@
   const reconnectBanner = document.createElement('div');
   reconnectBanner.id = 'reconnect-banner';
   reconnectBanner.className = 'reconnect-banner hidden';
-  reconnectBanner.innerHTML = '<i></i><span>Reconectando ao servidor…</span><small>voz e chat voltarão automaticamente</small>';
+  reconnectBanner.setAttribute('role', 'status');
+  reconnectBanner.innerHTML = '<i></i><span>Reconectando ao servidor…</span><small>voz e chat voltarão automaticamente</small><button type="button">Cancelar</button>';
+  reconnectBanner.querySelector('button').onclick = () => {
+    if (hostedSocket) { hostedSocket.__voiceupReconnectCancelled = true; hostedSocket.disconnect(); hostedSocket = null; }
+    clearHostedVoice(); setReconnectState(false); setStatus('Reconexão cancelada · entre no servidor para tentar novamente');
+  };
   document.body.append(reconnectBanner);
   const setReconnectState = (active, failed = false) => {
     document.body.classList.toggle('hosted-reconnecting', active);
@@ -151,15 +187,17 @@
   const bindTransparentReconnect = (socket) => {
     if (!socket || socket.__voiceupReconnectFeatures) return;
     socket.__voiceupReconnectFeatures = true;
-    socket.io?.on('reconnect_attempt', () => setReconnectState(true));
-    socket.io?.on('reconnect_error', () => setReconnectState(true));
-    socket.io?.on('reconnect_failed', () => setReconnectState(true, true));
-    socket.io?.on('reconnect', () => setReconnectState(false));
-    socket.on('connect', () => setReconnectState(false));
-    socket.on('disconnect', (reason) => { if (reason !== 'io client disconnect') setReconnectState(true); });
+    const current = () => socket === hostedSocket && !socket.__voiceupSessionReplaced && !socket.__voiceupReconnectCancelled;
+    socket.io?.on('reconnect_attempt', (attempt) => { if (current()) { setReconnectState(true); reconnectBanner.querySelector('small').textContent = `Tentativa ${attempt} · canal e configurações preservados`; } });
+    socket.io?.on('reconnect_error', () => { if (current()) setReconnectState(true); });
+    socket.io?.on('reconnect_failed', () => { if (current()) setReconnectState(true, true); });
+    // A socket connection isn't a completed, authenticated room join yet.
+    socket.on('room-joined', () => { if (current()) setReconnectState(false); });
+    socket.on('disconnect', (reason) => { if (current()) setReconnectState(reason !== 'io client disconnect'); });
   };
   const joinHostedRoomBeforeFeatures = joinHostedRoom;
   joinHostedRoom = async function joinHostedRoomWithReconnect(...args) {
+    setReconnectState(false);
     const result = await joinHostedRoomBeforeFeatures(...args);
     bindTransparentReconnect(hostedSocket);
     return result;
@@ -265,15 +303,15 @@
     const stableMentionIds = Array.isArray(packet.mentionClientIds) ? packet.mentionClientIds.map(String) : [];
     const mentioned = !mine && isMentionedForCurrentUser(mentionIds, stableMentionIds);
     const message = {
-      id, text: String(packet.text || '').slice(0, packet.pluginId ? 10000 : 500), name: packet.name || 'Participante', color: packet.color,
+      id, text: String(packet.text || '').slice(0, packet.pluginId ? 10000 : 500), textFile: normalizeMessageTextFile(packet.textFile), name: packet.name || 'Participante', color: packet.color,
       avatar: packet.avatar || serverMembers.get(packet.from)?.avatar || '', createdAt: Number(packet.createdAt) || Date.now(),
       editedAt: Number(packet.editedAt) || 0, mentions: mentionIds, mentionClientIds: stableMentionIds, mentioned,
-      mine, reply: packet.reply || null, reactions: packet.reactions || {}, pinned: Boolean(packet.pinned), pinnedBy: packet.pinnedBy || '', authorClientId: packet.authorClientId || '', pluginId: packet.pluginId || ''
+      mine, reply: packet.reply || null, reactions: packet.reactions || {}, pinned: Boolean(packet.pinned), pinnedBy: packet.pinnedBy || '', authorClientId: packet.authorClientId || '', pluginId: packet.pluginId || '', forumThreadId: String(packet.forumThreadId || ''), forumTitle: String(packet.forumTitle || '').slice(0, 100)
     };
     if (!channelMessages.has(channel)) channelMessages.set(channel, []);
     channelMessages.get(channel).push(message);
     registerIncomingChannelActivity(channel, mentioned);
-    if (channel === activeTextChannel) addMessage(message.text, message.name, message.mine, message.color, message);
+    if (channel === activeTextChannel) renderChannelMessages();
     if (!mine) playNotification(mentioned ? 'mention' : 'message');
     renderRoomChannels(); renderPinnedMessages();
   };
@@ -287,7 +325,7 @@
       const mine = Boolean(packet.authorClientId && packet.authorClientId === clientId);
       const mentionIds = Array.isArray(packet.mentions) ? packet.mentions.map(String) : [];
       const stableMentionIds = Array.isArray(packet.mentionClientIds) ? packet.mentionClientIds.map(String) : [];
-      channelMessages.get(channel).push({ id: String(packet.messageId || ''), text: String(packet.text || '').slice(0, packet.pluginId ? 10000 : 500), name: packet.name, color: packet.color, avatar: packet.avatar || '', createdAt: Number(packet.createdAt) || Date.now(), editedAt: Number(packet.editedAt) || 0, mentions: mentionIds, mentionClientIds: stableMentionIds, mentioned: !mine && isMentionedForCurrentUser(mentionIds, stableMentionIds), mine, reply: packet.reply || null, reactions: packet.reactions || {}, pinned: Boolean(packet.pinned), pinnedBy: packet.pinnedBy || '', authorClientId: packet.authorClientId || '', pluginId: packet.pluginId || '' });
+      channelMessages.get(channel).push({ id: String(packet.messageId || ''), text: String(packet.text || '').slice(0, packet.pluginId ? 10000 : 500), textFile: normalizeMessageTextFile(packet.textFile), name: packet.name, color: packet.color, avatar: packet.avatar || '', createdAt: Number(packet.createdAt) || Date.now(), editedAt: Number(packet.editedAt) || 0, mentions: mentionIds, mentionClientIds: stableMentionIds, mentioned: !mine && isMentionedForCurrentUser(mentionIds, stableMentionIds), mine, reply: packet.reply || null, reactions: packet.reactions || {}, pinned: Boolean(packet.pinned), pinnedBy: packet.pinnedBy || '', authorClientId: packet.authorClientId || '', pluginId: packet.pluginId || '', forumThreadId: String(packet.forumThreadId || ''), forumTitle: String(packet.forumTitle || '').slice(0, 100) });
     }
     for (const records of channelMessages.values()) records.sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
     renderChannelMessages();
@@ -336,7 +374,7 @@
         const mentions = Array.isArray(msg.mentions) ? msg.mentions.map(String) : [];
         const mentionClientIds = Array.isArray(msg.mentionClientIds) ? msg.mentionClientIds.map(String) : [];
         const mentioned = isMentionedForCurrentUser(mentions, mentionClientIds);
-        const record = { id: msg.messageId, text: msg.text, name: msg.name || peer?.name, mine: false, color: msg.color || peer?.color, createdAt: msg.createdAt, avatar: msg.avatar || peer?.avatar, mentions, mentionClientIds, mentioned, reply: msg.reply || null, reactions: msg.reactions || {}, pinned: false };
+        const record = { id: msg.messageId, text: String(msg.text || '').slice(0, 500), textFile: normalizeMessageTextFile(msg.textFile), name: msg.name || peer?.name, mine: false, color: msg.color || peer?.color, createdAt: msg.createdAt, avatar: msg.avatar || peer?.avatar, mentions, mentionClientIds, mentioned, reply: msg.reply || null, reactions: msg.reactions || {}, pinned: false };
         if (!channelMessages.has(activeTextChannel)) channelMessages.set(activeTextChannel, []);
         if (!messageRecordAnyChannel(record.id)) channelMessages.get(activeTextChannel).push(record);
         registerIncomingChannelActivity(activeTextChannel, mentioned);
@@ -356,7 +394,7 @@
         const mentions = Array.isArray(msg.mentions) ? msg.mentions.map(String) : [];
         const mentionClientIds = Array.isArray(msg.mentionClientIds) ? msg.mentionClientIds.map(String) : [];
         const mentioned = isMentionedForCurrentUser(mentions, mentionClientIds);
-        const record = { id: msg.messageId, text: msg.text, name: msg.name || participant.name, mine: false, color: msg.color || participant.color, createdAt: msg.createdAt, avatar: msg.avatar || participant.avatar, mentions, mentionClientIds, mentioned, reply: msg.reply || null, reactions: msg.reactions || {}, pinned: false };
+        const record = { id: msg.messageId, text: String(msg.text || '').slice(0, 500), textFile: normalizeMessageTextFile(msg.textFile), name: msg.name || participant.name, mine: false, color: msg.color || participant.color, createdAt: msg.createdAt, avatar: msg.avatar || participant.avatar, mentions, mentionClientIds, mentioned, reply: msg.reply || null, reactions: msg.reactions || {}, pinned: false };
         if (!channelMessages.has(activeTextChannel)) channelMessages.set(activeTextChannel, []);
         if (!messageRecordAnyChannel(record.id)) channelMessages.get(activeTextChannel).push(record);
         registerIncomingChannelActivity(activeTextChannel, mentioned);
@@ -371,18 +409,8 @@
 
   byId('message-form')?.addEventListener('submit', (event) => {
     event.preventDefault(); event.stopImmediatePropagation();
-    const input = byId('message-input'); const text = input.value.trim(); if (!text) return;
-    const id = messageId(); const createdAt = Date.now(); const mentions = mentionIdsForText(text); const reply = replyingTo ? { ...replyingTo } : null;
-    if (currentMode === 'hosted') {
-      if (!hostedSocket?.connected) return toast('Aguarde a reconexão com o servidor.');
-      hostedSocket.emit('text-message', { text, textChannel: activeTextChannel, messageId: id, createdAt, mentions, reply });
-    } else {
-      if (!hasActiveCall() || !sendManualChatEvent({ type: 'chat', text, name: myName, color: myColor, avatar: myAvatar, messageId: id, createdAt, mentions, reply })) return toast('A conexão ainda está sendo estabelecida.');
-      const record = { id, text, name: myName, mine: true, color: myColor, createdAt, avatar: myAvatar, mentions, reply, reactions: {}, pinned: false };
-      if (!channelMessages.has(activeTextChannel)) channelMessages.set(activeTextChannel, []);
-      channelMessages.get(activeTextChannel).push(record); addMessage(text, myName, true, myColor, record); playNotification('message');
-    }
-    input.value = ''; input.dispatchEvent(new Event('input', { bubbles: true })); clearReply();
+    const input = byId('message-input'); const reply = replyingTo ? { ...replyingTo } : null;
+    if (sendChatMessage({ raw: input.value, reply })) clearReply();
   }, true);
 
   let reactionPopover = null;

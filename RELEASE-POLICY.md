@@ -17,15 +17,24 @@ O número da beta sempre cresce para a mesma versão-alvo. Uma beta já gerada n
 
 Na Microsoft Store, que aceita apenas quatro números, o último componente
 separa os canais. Assim, `1.1.3-beta.9` vira `1.1.3.9` no manifesto AppX e a
-estável `1.1.3` usa o número interno reservado `1.1.3.65535`. A beta seguinte
+estável `1.1.3` usa `1.1.3.0`, conforme exigido para as publicações oficiais. Betas AppX são somente para sideload e não devem ser enviadas à loja. A beta seguinte
 de outra versão, como `1.1.4-beta.1`, volta a usar `1.1.4.1` e continua maior.
 O nome e a versão exibidos dentro do VoiceUP permanecem os valores SemVer.
 
 ## Canais e retenção local
 
-São mantidas até três releases públicas e, separadamente, até três betas mais
-recentes. Uma beta é experimental e pode receber correções antes de se tornar
-estável; uma release pública é o canal recomendado aos usuários.
+São mantidas localmente até três releases públicas e, separadamente, até três
+betas mais recentes **de cada plataforma que possua artefato gerado**. Uma pasta
+multiplataforma pode atender à retenção de mais de uma plataforma. Se ainda não
+existirem três betas de uma plataforma, são mantidas somente as disponíveis;
+versões inexistentes não são recriadas apenas para completar a quantidade.
+
+O arquivo permanente contém somente instaladores, pacotes portáteis
+distribuíveis, manifestos, hashes e notas. Pastas desempacotadas, caches e
+saídas intermediárias são descartáveis depois que o pacote de teste ou a
+release correspondente estiver validado. Uma beta é experimental e pode
+receber correções antes de se tornar estável; uma release pública é o canal
+recomendado aos usuários.
 
 ## Requisitos para uma beta
 

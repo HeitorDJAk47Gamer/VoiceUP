@@ -14,6 +14,8 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(VoiceUpUpdaterPlugin.class);
+        registerPlugin(VoiceUpScreenSharePlugin.class);
         super.onCreate(savedInstanceState);
         requestMediaPermissionsIfNeeded();
     }

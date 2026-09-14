@@ -1,14 +1,23 @@
 apply plugin: 'com.android.application'
 
+def voiceupDistributionChannel = (project.findProperty('voiceupDistributionChannel') ?: 'apk').toString().toLowerCase()
+if (!['apk', 'play'].contains(voiceupDistributionChannel)) {
+    throw new GradleException("voiceupDistributionChannel deve ser 'apk' ou 'play'.")
+}
+
 android {
     namespace "com.goatgank.voiceup"
     compileSdk rootProject.ext.compileSdkVersion
+    buildFeatures {
+        buildConfig true
+    }
     defaultConfig {
         applicationId "com.goatgank.voiceup"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 120101
-        versionName "1.2.1"
+        versionCode 120299
+        versionName "1.2.2"
+        buildConfigField "String", "DISTRIBUTION_CHANNEL", "\"${voiceupDistributionChannel}\""
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

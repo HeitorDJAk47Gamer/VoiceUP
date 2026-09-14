@@ -54,7 +54,7 @@ function build() {
     return `<script>${code}</script>`;
   }).join('\n');
   html = html.replace(/<script src="[^"]+"><\/script>/g, '');
-  html = html.replace(/<link rel="stylesheet" href="([^"]+)"\/>/g, (_, file) => `<style>/* ${file} */\n${read(`public/${file}`).replace(/<\/style/gi, '<\\/style')}</style>`);
+  html = html.replace(/<link rel="stylesheet" href="([^"]+)"\s*\/?>/g, (_, file) => `<style>/* ${file} */\n${read(`public/${file}`).replace(/<\/style/gi, '<\\/style')}</style>`);
   html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]+>/, `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; form-action 'none'; script-src ${hashes.join(' ')}; style-src 'unsafe-inline'; img-src data: blob: https: http:; media-src data: blob: https: http:; connect-src https: http: wss: ws:; font-src data:; frame-src https://www.youtube-nocookie.com; worker-src blob:"/>`);
   html = html.replace('<title>VoiceUP</title>', '<title>VoiceUP SelfWeb</title>')
     .replace('<body>', '<body class="selfweb">')

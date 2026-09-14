@@ -5,11 +5,17 @@ contextBridge.exposeInMainWorld('voiceupDesktop', {
   version: () => ipcRenderer.invoke('update:check'),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  updateRecovery: () => ipcRenderer.invoke('update:recovery'),
+  onUpdateProgress: (handler) => {
+    ipcRenderer.removeAllListeners('update:progress');
+    ipcRenderer.on('update:progress', (_event, progress) => handler(progress));
+  },
   desktopSources: () => ipcRenderer.invoke('capture:sources'),
   selectDesktopSource: (selection) => ipcRenderer.invoke('capture:select', selection),
   processAudioCapability: () => ipcRenderer.invoke('capture:process-audio-capability'),
   startProcessAudio: (sourceId) => ipcRenderer.invoke('capture:process-audio-start', sourceId),
   stopProcessAudio: () => ipcRenderer.invoke('capture:process-audio-stop'),
+  startWindowsVoiceTyping: () => ipcRenderer.invoke('dictation:start'),
   rnnoiseAsset: (name) => ipcRenderer.invoke('audio:rnnoise-asset', name),
   onProcessAudioData: (handler) => {
     ipcRenderer.removeAllListeners('capture:process-audio-data');

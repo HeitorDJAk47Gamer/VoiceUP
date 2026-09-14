@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   clampVolume,
   embedForText,
@@ -11,6 +12,9 @@ import {
   pingQuality,
   tokenizeInline
 } from '../src/chat-utils.js';
+import { hasActiveVideoTrack, isPublishingTrack, shouldRenderRemoteVideo } from '../src/media-utils.js';
+import { verifyReleaseEnvelope } from '../src/release-verifier.js';
+import { androidUpdateFromPayload, compareVoiceUpVersions } from '../src/update-utils.js';
 
 test('detecta menções sem confundir nomes parciais', () => {
   const members = [{ id: '1', name: 'Ana' }, { id: '2', name: 'Anabela' }, { id: '3', name: 'João Silva' }];
@@ -60,4 +64,43 @@ test('limita volumes ao intervalo do elemento de áudio', () => {
   assert.equal(clampVolume(2), 1);
   assert.equal(clampVolume(-1), 0);
   assert.equal(clampVolume('0.35'), 0.35);
+});
+
+test('não transforma receptores WebRTC vazios em câmeras ou lives', () => {
+  const negotiatedOnly = { readyState: 'live', muted: true };
+  const publishing = { readyState: 'live', muted: false };
+  const ended = { readyState: 'ended', muted: false };
+  const stream = (tracks) => ({ getVideoTracks: () => tracks });
+  assert.equal(isPublishingTrack(negotiatedOnly), true);
+  assert.equal(hasActiveVideoTrack(stream([negotiatedOnly])), false);
+  assert.equal(hasActiveVideoTrack(stream([ended])), false);
+  assert.equal(shouldRenderRemoteVideo(true, stream([publishing])), true);
+  assert.equal(shouldRenderRemoteVideo(false, stream([publishing])), false);
+  assert.equal(shouldRenderRemoteVideo(true, stream([negotiatedOnly])), false);
+});
+
+test('compara beta mobile e seleciona somente atualização Android mais nova', () => {
+  assert.equal(compareVoiceUpVersions('1.2.2', '1.2.2-mobile-beta.1'), 1);
+  assert.equal(compareVoiceUpVersions('1.2.2-mobile-beta.2', '1.2.2-mobile-beta.1'), 1);
+  assert.equal(compareVoiceUpVersions('1.2.1', '1.2.2-mobile-beta.1'), -1);
+  const payload = {
+    version: '1.2.2',
+    artifacts: [{ product: 'client', platform: 'android', arch: 'universal', name: 'VoiceUP-1.2.2-android.apk', sha256: 'a'.repeat(64), size: 42 }]
+  };
+  assert.deepEqual(androidUpdateFromPayload(payload, '1.2.2-mobile-beta.1'), {
+    available: true,
+    version: '1.2.2',
+    fileName: 'VoiceUP-1.2.2-android.apk',
+    sha256: 'a'.repeat(64),
+    size: 42
+  });
+  assert.equal(androidUpdateFromPayload({ ...payload, version: '1.2.1' }, '1.2.2-mobile-beta.1').available, false);
+});
+
+test('confirma a assinatura do catálogo oficial antes de oferecer o APK', async () => {
+  const path = new URL('../../deploy/shardcloud/downloads/release-downloads.json', import.meta.url);
+  const envelope = JSON.parse(await readFile(path, 'utf8'));
+  const payload = await verifyReleaseEnvelope(envelope);
+  assert.equal(payload.repository, 'HeitorDJAk47Gamer/VoiceUP');
+  assert.equal(payload.artifacts.some((file) => file.platform === 'android' && file.arch === 'universal'), true);
 });

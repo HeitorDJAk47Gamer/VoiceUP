@@ -1,9 +1,25 @@
-# VoiceUP 1.2.1 para Linux
+# VoiceUP 1.2.2-beta.11 para Linux
 
 Cliente e ServerHost usam a mesma base do Desktop e têm pacotes separados para
 Linux x64. O Electron está incluído; não é necessário instalar Node.js.
 
-## Pacotes
+## Beta local acompanhando o Windows
+
+Esta edição usa a mesma base funcional da versão Windows `1.2.2-beta.11`,
+incluindo a administração pelo Client, canais configuráveis, backup do
+ServerHost, canais Palco/Fórum/Dinâmico e mensagens com código/TXT. Ela ainda
+não foi publicada.
+
+O pacote local de teste contém:
+
+- `VoiceUP-1.2.2-beta.11-linux-x64.tar.gz`: Cliente portátil;
+- `VoiceUPServer-1.2.2-beta.11-linux-x64.tar.gz`: ServerHost portátil.
+
+Extraia o arquivo e, dentro da pasta, execute `chmod +x voiceup
+chrome-sandbox chrome_crashpad_handler` e depois `./voiceup`. Para o ServerHost,
+use `voiceup-server`.
+
+## Pacotes da versão pública estável
 
 - `VoiceUP-1.2.1-linux-x64.AppImage`: Cliente portátil.
 - `VoiceUP-1.2.1-linux-x64.deb`: Cliente para Debian/Ubuntu e derivados.

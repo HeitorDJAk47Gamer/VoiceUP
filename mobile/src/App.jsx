@@ -3,7 +3,6 @@ import { io } from 'socket.io-client';
 import { Capacitor } from '@capacitor/core';
 import { platformPresence, mergePresenceMember } from './presence-utils.js';
 import '../../public/platform-presence.css';
-import '../../public/release-history.js';
 import {
   REACTION_CHOICES,
   clampVolume,
@@ -20,11 +19,21 @@ import {
   tokenizeInline
 } from './chat-utils.js';
 import { signIdentityChallenge } from './identity-utils.js';
+import { isPublishingTrack, shouldRenderRemoteVideo } from './media-utils.js';
+import { distributionChannel, isNativeAndroid, openOfficialApkDownload, startNativeScreenShare } from './native-android.js';
+import { verifyReleaseEnvelope } from './release-verifier.js';
+import { androidUpdateFromPayload } from './update-utils.js';
 
 const LOBBY_CHANNEL = '__lobby__';
 const DEFAULT_HOST = 'https://voiceup.shardweb.app';
 const DEFAULT_ROOM = 'ggk';
-const MOBILE_VERSION = '1.2.1';
+const MOBILE_VERSION = '1.2.2';
+const UPDATE_MANIFEST_URL = `${DEFAULT_HOST}/api/release-integrity`;
+const MOBILE_RELEASE_NOTES = [
+  'Câmeras e lives aparecem somente quando uma faixa de vídeo realmente está sendo transmitida.',
+  'Compartilhamento nativo da tela inteira no Android, com escolha entre transmitir com ou sem áudio.',
+  'Consulta manual de atualizações assinadas para a edição distribuída por APK.'
+];
 const CLIENT_ID = getOrCreateClientId();
 const CLIENT_PLATFORM = Capacitor.getPlatform() === 'android' ? 'android' : 'selfweb';
 const COLORS = ['#55d6c9', '#7d8cff', '#f06aa6', '#ffbd57', '#6ee786', '#a970ff'];
@@ -249,7 +258,7 @@ function MessageItem({ message, mine, mentioned, memberNames, externalMediaAutoL
   </article>;
 }
 
-function SettingsPanel({ preferences, setPreferences, connectionState, latency, activeVoice, cameraOn, onSwitchCamera }) {
+function SettingsPanel({ preferences, setPreferences, connectionState, latency, activeVoice, cameraOn, onSwitchCamera, updateState, distribution, onCheckUpdates, onDownloadUpdate }) {
   const update = (patch) => setPreferences((current) => ({ ...current, ...patch }));
   return <section className="settings-view">
     <header><p className="eyebrow">PREFERÊNCIAS</p><h1>Ajustes do celular</h1><p>As alterações ficam salvas somente neste aparelho.</p></header>
@@ -279,10 +288,21 @@ function SettingsPanel({ preferences, setPreferences, connectionState, latency, 
         <label className="toggle-setting"><input type="checkbox" checked={preferences.externalMediaAutoLoad === true} onChange={(event) => update({ externalMediaAutoLoad: event.target.checked })} /><span>Carregar imagens externas automaticamente</span></label>
         <small>Desativado por padrão. Você ainda poderá liberar cada imagem ou prévia no chat.</small>
       </section>
+      {distribution === 'play' ? <section className="settings-card update-card">
+        <h2>Atualizações</h2>
+        <p>Esta compilação recebe atualizações pela Play Store.</p>
+        <small>O instalador APK externo fica desativado neste canal.</small>
+      </section> : distribution !== 'unknown' && <section className="settings-card update-card">
+        <h2>Atualizações do APK</h2>
+        <p className={`update-status ${updateState.status}`} role="status">{updateState.message || 'Consulte o catálogo oficial assinado quando quiser.'}</p>
+        <button type="button" className="settings-action" disabled={updateState.status === 'checking'} onClick={onCheckUpdates}>{updateState.status === 'checking' ? 'Procurando…' : 'Procurar atualizações'}</button>
+        {updateState.status === 'available' && <button type="button" className="settings-action primary" onClick={onDownloadUpdate}>Baixar APK {updateState.version}</button>}
+        <small>O download abre o site oficial. O Android continua mostrando suas próprias confirmações de instalação.</small>
+      </section>}
       <section className="settings-card app-about">
         <h2>Sobre</h2>
         <p><span>Versão mobile</span><strong>{MOBILE_VERSION}</strong></p>
-        <details className="release-history"><summary>Novidades da {MOBILE_VERSION}</summary><p>{window.voiceupReleaseHistory.locales['pt-BR'].subtitle}</p><ul>{window.voiceupReleaseHistory.locales['pt-BR'].notes.map(note => <li key={note}>{note}</li>)}</ul></details>
+        <details className="release-history"><summary>Novidades da {MOBILE_VERSION}</summary><p>Beta mobile com correções de call e recursos próprios do Android.</p><ul>{MOBILE_RELEASE_NOTES.map((note) => <li key={note}>{note}</li>)}</ul></details>
         <p><span>Compatibilidade</span><strong>VoiceUP 1.1.2+</strong></p>
         <p><span>Conexão</span><strong>{connectionState === 'connected' ? `Online${latency !== null ? ` · ${latency} ms` : ''}` : connectionState === 'reconnecting' ? 'Reconectando' : 'Offline'}</strong></p>
       </section>
@@ -338,8 +358,12 @@ function App() {
   const [micMuted, setMicMuted] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
+  const [screenStarting, setScreenStarting] = useState(false);
+  const [screenShareChoiceOpen, setScreenShareChoiceOpen] = useState(false);
   const [localLiveViewers, setLocalLiveViewers] = useState([]);
   const [clock, setClock] = useState(Date.now());
+  const [distribution, setDistribution] = useState('unknown');
+  const [updateState, setUpdateState] = useState({ status: 'idle', message: '', version: '' });
 
   const socketRef = useRef(null);
   const members = useMemo(() => reportedMembers.map((member) => String(member.id) === String(socketRef.current?.id)
@@ -360,6 +384,9 @@ function App() {
   const cameraTrackRef = useRef(null);
   const screenTrackRef = useRef(null);
   const screenAudioTrackRef = useRef(null);
+  const nativeScreenSessionRef = useRef(null);
+  const screenStoppingRef = useRef(false);
+  const screenStartTokenRef = useRef(0);
   const activeVoiceRef = useRef('');
   const noticeTimerRef = useRef(null);
   const latencyTimerRef = useRef(null);
@@ -387,6 +414,14 @@ function App() {
   useEffect(() => { tabRef.current = tab; }, [tab]);
 
   useEffect(() => {
+    let mounted = true;
+    distributionChannel()
+      .then((channel) => { if (mounted) setDistribution(channel); })
+      .catch(() => { if (mounted) setDistribution(isNativeAndroid() ? 'apk' : 'web'); });
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
     if (!activeVoice) return undefined;
     setClock(Date.now());
     const timer = setInterval(() => setClock(Date.now()), 1000);
@@ -399,6 +434,9 @@ function App() {
     audioStreamRef.current?.getTracks().forEach((track) => track.stop());
     cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenStartTokenRef.current += 1;
+    void nativeScreenSessionRef.current?.stop();
+    nativeScreenSessionRef.current = null;
     screenAudioTrackRef.current = null;
     clearInterval(latencyTimerRef.current);
     clearTimeout(typingSendTimerRef.current);
@@ -418,6 +456,32 @@ function App() {
     setNotice(message);
     noticeTimerRef.current = setTimeout(() => setNotice(''), 4200);
   }, []);
+
+  const checkForUpdates = useCallback(async () => {
+    if (distribution === 'play') return;
+    setUpdateState({ status: 'checking', message: 'Verificando a assinatura do catálogo oficial…', version: '' });
+    try {
+      const response = await fetch(UPDATE_MANIFEST_URL, { cache: 'no-store', headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error('O catálogo oficial está temporariamente indisponível.');
+      const envelope = await response.json();
+      const payload = await verifyReleaseEnvelope(envelope);
+      const result = androidUpdateFromPayload(payload, MOBILE_VERSION);
+      setUpdateState(result.available
+        ? { status: 'available', message: `A versão ${result.version} está disponível e teve a assinatura confirmada.`, version: result.version }
+        : { status: 'current', message: `Você já usa esta versão ou uma mais recente. Catálogo oficial: ${result.version}.`, version: result.version });
+    } catch (error) {
+      setUpdateState({ status: 'error', message: error?.message || 'Não foi possível procurar atualizações agora.', version: '' });
+    }
+  }, [distribution]);
+
+  const downloadAvailableUpdate = useCallback(async () => {
+    if (updateState.status !== 'available' || distribution === 'play') return;
+    try {
+      await openOfficialApkDownload();
+    } catch (error) {
+      setUpdateState((current) => ({ ...current, status: 'error', message: error?.message || 'Não foi possível abrir o download oficial.' }));
+    }
+  }, [distribution, updateState.status]);
 
   const updatePeerView = useCallback((peer) => {
     setRemotePeers((current) => ({
@@ -549,7 +613,7 @@ function App() {
         }));
         if (cameraTrackRef.current?.readyState === 'live') channel.send(JSON.stringify({ type: 'video-on', description: 'camera' }));
         if (screenTrackRef.current?.readyState === 'live') channel.send(JSON.stringify({ type: 'video-on', description: 'screen' }));
-        if (peer.screenActive || peer.screenStream) sendLiveViewState(peer, tabRef.current === 'call');
+        if (shouldRenderRemoteVideo(peer.screenActive, peer.screenStream)) sendLiveViewState(peer, tabRef.current === 'call');
       } catch { /* negotiated connection may be closing */ }
     };
     channel.onclose = () => {
@@ -690,13 +754,25 @@ function App() {
       } else {
         let kind = transceiver === peer.screenTransceiver ? 'screen' : transceiver === peer.cameraTransceiver ? 'camera' : '';
         if (!kind) { kind = peer.receivedVideoCount === 0 ? 'camera' : 'screen'; peer.receivedVideoCount += 1; }
-        if (kind === 'screen') { peer.screenStream = stream; peer.screenActive = true; sendLiveViewState(peer, tabRef.current === 'call'); }
-        else { peer.cameraStream = stream; peer.cameraActive = true; }
+        if (kind === 'screen') peer.screenStream = stream;
+        else peer.cameraStream = stream;
+        const setActive = (active) => {
+          if (kind === 'screen') {
+            peer.screenActive = Boolean(active);
+            sendLiveViewState(peer, Boolean(active) && tabRef.current === 'call');
+          } else {
+            peer.cameraActive = Boolean(active);
+          }
+          updatePeerView(peer);
+        };
+        track.onunmute = () => setActive(true);
+        track.onmute = () => setActive(false);
         track.onended = () => {
           if (kind === 'screen') { peer.screenStream = null; peer.screenActive = false; sendLiveViewState(peer, false); }
           else { peer.cameraStream = null; peer.cameraActive = false; }
           updatePeerView(peer);
         };
+        if (track.muted === false) queueMicrotask(() => setActive(true));
       }
       updatePeerView(peer);
     };
@@ -902,9 +978,10 @@ function App() {
       audioStreamRef.current?.getTracks().forEach((track) => track.stop());
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
       screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+      screenStartTokenRef.current += 1; void nativeScreenSessionRef.current?.stop(); nativeScreenSessionRef.current = null;
       audioStreamRef.current = null; cameraStreamRef.current = null; screenStreamRef.current = null;
       localAudioTrackRef.current = null; cameraTrackRef.current = null; screenTrackRef.current = null; screenAudioTrackRef.current = null;
-      activeVoiceRef.current = ''; setActiveVoice(''); setCameraOn(false); setScreenOn(false); setLocalLiveViewers([]);
+      activeVoiceRef.current = ''; setActiveVoice(''); setCameraOn(false); setScreenOn(false); setScreenStarting(false); setScreenShareChoiceOpen(false); setLocalLiveViewers([]);
       socket.disconnect();
       if (socketRef.current === socket) socketRef.current = null;
       setInServer(false); setConnecting(false); setConnectionState('offline');
@@ -915,9 +992,10 @@ function App() {
       audioStreamRef.current?.getTracks().forEach((track) => track.stop());
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
       screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+      screenStartTokenRef.current += 1; void nativeScreenSessionRef.current?.stop(); nativeScreenSessionRef.current = null;
       audioStreamRef.current = null; cameraStreamRef.current = null; screenStreamRef.current = null;
       localAudioTrackRef.current = null; cameraTrackRef.current = null; screenTrackRef.current = null;
-      activeVoiceRef.current = ''; setActiveVoice(''); setCameraOn(false); setScreenOn(false);
+      activeVoiceRef.current = ''; setActiveVoice(''); setCameraOn(false); setScreenOn(false); setScreenStarting(false); setScreenShareChoiceOpen(false);
       socket.disconnect(); socketRef.current = null;
       setInServer(false); setConnecting(false); setConnectionState('offline');
       setAppError(message || (action === 'banned' ? 'Você foi banido deste servidor.' : 'Você foi removido deste servidor.'));
@@ -976,11 +1054,12 @@ function App() {
     audioStreamRef.current?.getTracks().forEach((track) => track.stop());
     cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenStartTokenRef.current += 1; void nativeScreenSessionRef.current?.stop(); nativeScreenSessionRef.current = null;
     audioStreamRef.current = null; localAudioTrackRef.current = null;
     cameraStreamRef.current = null; cameraTrackRef.current = null;
     screenStreamRef.current = null; screenTrackRef.current = null; screenAudioTrackRef.current = null;
     setMicMuted(false);
-    setCameraOn(false); setScreenOn(false);
+    setCameraOn(false); setScreenOn(false); setScreenStarting(false); setScreenShareChoiceOpen(false);
     socketRef.current?.emit('audio-state-update', { micMuted: false, outputMuted: Boolean(preferencesRef.current.outputMuted) });
     socketRef.current?.emit('media-state-update', { camera: false, screen: false });
     setLocalLiveViewers([]);
@@ -1034,8 +1113,8 @@ function App() {
 
   const publishServerMediaState = useCallback((kind, track) => {
     socketRef.current?.emit('media-state-update', {
-      camera: kind === 'camera' ? Boolean(track) : cameraTrackRef.current?.readyState === 'live',
-      screen: kind === 'screen' ? Boolean(track) : screenTrackRef.current?.readyState === 'live'
+      camera: kind === 'camera' ? isPublishingTrack(track) : isPublishingTrack(cameraTrackRef.current),
+      screen: kind === 'screen' ? isPublishingTrack(track) : isPublishingTrack(screenTrackRef.current)
     });
   }, []);
 
@@ -1070,13 +1149,40 @@ function App() {
       await sender?.replaceTrack(track || null);
       if (track) await tuneVideoSender(sender, kind);
     }));
-    broadcastMediaState(track ? 'video-on' : 'video-off', kind);
+    broadcastMediaState(isPublishingTrack(track) ? 'video-on' : 'video-off', kind);
     publishServerMediaState(kind, track);
   }, [broadcastMediaState, publishServerMediaState, tuneVideoSender]);
 
   const publishScreenAudio = useCallback(async (track) => {
     await Promise.allSettled([...peersRef.current.values()].map((peer) => peer.screenAudioSender?.replaceTrack(track || null)));
   }, []);
+
+  const stopScreenShare = useCallback(async ({ stopNative = true, message = '' } = {}) => {
+    if (screenStoppingRef.current) return;
+    const session = nativeScreenSessionRef.current;
+    const stream = screenStreamRef.current;
+    const hadShare = Boolean(session || stream || screenTrackRef.current || screenAudioTrackRef.current || screenOn);
+    screenStartTokenRef.current += 1;
+    nativeScreenSessionRef.current = null;
+    screenStreamRef.current = null;
+    screenTrackRef.current = null;
+    screenAudioTrackRef.current = null;
+    setScreenShareChoiceOpen(false);
+    setScreenStarting(false);
+    setScreenOn(false);
+    setLocalLiveViewers([]);
+    if (!hadShare) return;
+    screenStoppingRef.current = true;
+    try {
+      await publishTrack('screen', null);
+      await publishScreenAudio(null);
+      if (stopNative) await session?.stop?.().catch(() => {});
+      stream?.getTracks().forEach((track) => track.stop());
+    } finally {
+      screenStoppingRef.current = false;
+    }
+    if (message) showNotice(message);
+  }, [publishScreenAudio, publishTrack, screenOn, showNotice]);
 
   const toggleCamera = useCallback(async () => {
     if (cameraTrackRef.current?.readyState === 'live') {
@@ -1129,39 +1235,80 @@ function App() {
     }
   }, [publishTrack, showNotice]);
 
-  const toggleScreen = useCallback(async () => {
-    if (screenTrackRef.current?.readyState === 'live') {
-      await publishTrack('screen', null);
-      await publishScreenAudio(null);
-      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
-      screenStreamRef.current = null; screenTrackRef.current = null; screenAudioTrackRef.current = null;
-      setScreenOn(false); setLocalLiveViewers([]); return;
-    }
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      showNotice('O compartilhamento de tela ainda não foi disponibilizado pelo Android deste aparelho.');
-      return;
-    }
+  const startScreenShare = useCallback(async (withAudio) => {
+    const token = screenStartTokenRef.current + 1;
+    screenStartTokenRef.current = token;
+    setScreenShareChoiceOpen(false);
+    setScreenStarting(true);
+    let nativeSession = null;
+    let stream = null;
     try {
       const prioritizeFps = preferencesRef.current.prioritizeLiveFps !== false;
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: prioritizeFps ? 30 : 20, max: 30 } },
-        audio: true
-      });
-      const track = stream.getVideoTracks()[0];
-      const audioTrack = stream.getAudioTracks()[0] || null;
-      try { if (track) track.contentHint = prioritizeFps ? 'motion' : 'detail'; } catch { /* optional WebRTC hint */ }
+      if (isNativeAndroid()) {
+        nativeSession = await startNativeScreenShare({
+          withAudio,
+          maxDimension: Number(preferencesRef.current.videoQuality) || 720,
+          frameRate: prioritizeFps ? 12 : 8,
+          onStatus: showNotice,
+          onStopped: (reason) => {
+            if (screenStartTokenRef.current === token) void stopScreenShare({ stopNative: false, message: reason });
+          }
+        });
+        stream = nativeSession.stream;
+      } else {
+        if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('Este dispositivo não disponibilizou a captura de tela.');
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: { ideal: prioritizeFps ? 30 : 20, max: 30 }, displaySurface: 'monitor' },
+          audio: Boolean(withAudio),
+          preferCurrentTab: false,
+          selfBrowserSurface: 'exclude',
+          surfaceSwitching: 'exclude'
+        });
+      }
+      if (screenStartTokenRef.current !== token || !activeVoiceRef.current) {
+        await nativeSession?.stop?.().catch(() => {});
+        stream?.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const track = stream?.getVideoTracks?.()[0] || null;
+      const audioTrack = stream?.getAudioTracks?.()[0] || null;
+      if (!track) throw new Error('O Android não forneceu a imagem da tela.');
+      try { track.contentHint = prioritizeFps ? 'motion' : 'detail'; } catch { /* optional WebRTC hint */ }
+      nativeScreenSessionRef.current = nativeSession;
+      screenStreamRef.current = stream;
+      screenTrackRef.current = track;
+      screenAudioTrackRef.current = audioTrack;
       track.onended = () => {
-        void publishTrack('screen', null); void publishScreenAudio(null);
-        screenStreamRef.current = null; screenTrackRef.current = null; screenAudioTrackRef.current = null; setScreenOn(false); setLocalLiveViewers([]);
+        if (screenStartTokenRef.current === token) void stopScreenShare({ stopNative: true, message: 'Compartilhamento de tela encerrado.' });
       };
-      screenStreamRef.current = stream; screenTrackRef.current = track; screenAudioTrackRef.current = audioTrack;
       await publishTrack('screen', track);
       await publishScreenAudio(audioTrack);
       setScreenOn(true);
+      showNotice(audioTrack ? 'Tela inteira compartilhada com áudio.' : 'Tela inteira compartilhada sem áudio.');
     } catch (error) {
-      if (error?.name !== 'NotAllowedError') showNotice(error?.message || 'Não foi possível compartilhar a tela.');
+      await nativeSession?.stop?.().catch(() => {});
+      stream?.getTracks?.().forEach((track) => track.stop());
+      if (screenStartTokenRef.current === token) {
+        nativeScreenSessionRef.current = null;
+        screenStreamRef.current = null;
+        screenTrackRef.current = null;
+        screenAudioTrackRef.current = null;
+        setScreenOn(false);
+        if (error?.code !== 'SCREEN_CAPTURE_DENIED' && error?.name !== 'NotAllowedError') showNotice(error?.message || 'Não foi possível compartilhar a tela.');
+      }
+    } finally {
+      if (screenStartTokenRef.current === token) setScreenStarting(false);
     }
-  }, [publishScreenAudio, publishTrack, showNotice]);
+  }, [publishScreenAudio, publishTrack, showNotice, stopScreenShare]);
+
+  const requestScreenShare = useCallback(() => {
+    if (screenStarting) return;
+    if (screenOn || isPublishingTrack(screenTrackRef.current)) {
+      void stopScreenShare();
+      return;
+    }
+    setScreenShareChoiceOpen(true);
+  }, [screenOn, screenStarting, stopScreenShare]);
 
   const broadcastTyping = useCallback((active) => {
     peersRef.current.forEach((peer) => {
@@ -1315,7 +1462,7 @@ function App() {
 
   useEffect(() => {
     peersRef.current.forEach((peer) => {
-      sendLiveViewState(peer, tab === 'call' && Boolean(peer.screenStream && peer.screenActive));
+      sendLiveViewState(peer, tab === 'call' && shouldRenderRemoteVideo(peer.screenActive, peer.screenStream));
     });
   }, [remotePeers, sendLiveViewState, tab]);
 
@@ -1351,7 +1498,7 @@ function App() {
             <div className="form-actions"><button className="secondary-button" onClick={saveCurrentServer}>Salvar</button><button className="primary-button" disabled={connecting} onClick={connectServer}>{connecting ? 'Conectando…' : 'Entrar na sala'}</button></div>
           </section>
           {savedServers.length > 0 && <section className="saved-list"><h3>Meus servidores</h3>{savedServers.map((item, index) => <div className="saved-entry" key={`${item.host}-${item.roomId}-${index}`}><button className="saved-open" onClick={() => setServer((current) => ({ ...current, ...item, password: '' }))}><span className="saved-icon">S</span><span><strong>{item.name || item.roomId}</strong><small>{item.host} · sala {item.roomId}</small></span></button><button className="saved-remove" title="Remover servidor salvo" aria-label={`Remover ${item.name || item.roomId}`} onClick={() => removeSavedServer(item)}>×</button></div>)}</section>}
-          <p className="mobile-note">Compatível com VoiceUP 1.1.2 ou mais recente. A transmissão de tela depende do suporte do Android.</p>
+          <p className="mobile-note">Compatível com VoiceUP 1.1.2 ou mais recente. A tela inteira usa a confirmação do Android; o áudio do sistema exige Android 10+.</p>
         </section>
       </main>
     );
@@ -1388,14 +1535,18 @@ function App() {
               {cameraOn && <MediaTile stream={cameraStreamRef.current} muted mirror={preferences.cameraFacing !== 'environment'} local label={`${profile.name} (você) · câmera`} />}
               {screenOn && <MediaTile stream={screenStreamRef.current} muted local label={`${profile.name} (você) · tela`} badge={localLiveViewers.length ? `${localLiveViewers.length} assistindo` : 'Ao vivo'} />}
               {!cameraOn && !screenOn && <article className="member-tile local"><Avatar name={profile.name} color={profile.color} avatar={profile.avatar} size="hero" status={profile.status} platform={CLIENT_PLATFORM} /><strong>{profile.name} (você)</strong><small>{micMuted ? 'Microfone desligado' : `Canal ${activeVoice}${activeCallDuration ? ` · ${activeCallDuration}` : ''}`}</small></article>}
-              {activeRemotePeers.map((peer) => <section className="peer-media" key={peer.id}>{peer.screenStream && <MediaTile stream={peer.screenStream} label={`${peer.name} · tela`} badge="Ao vivo" />}{peer.cameraStream && <MediaTile stream={peer.cameraStream} label={`${peer.name} · câmera`} />}{!peer.cameraStream && !peer.screenStream && <article className="member-tile"><Avatar name={peer.name} color={peer.color} avatar={peer.avatar} size="hero" status={members.find((member) => member.id === peer.id)?.status || peer.status || 'online'} platform={members.find((member) => member.id === peer.id)?.platform || peer.platform} /><strong>{peer.name}</strong><MediaBadges state={{ camera: peer.cameraActive, screen: peer.screenActive }} /><small>{peer.audioState?.micMuted ? 'Microfone desligado' : 'Conectado ao canal'}</small></article>}</section>)}
+              {activeRemotePeers.map((peer) => {
+                const showScreen = shouldRenderRemoteVideo(peer.screenActive, peer.screenStream);
+                const showCamera = shouldRenderRemoteVideo(peer.cameraActive, peer.cameraStream);
+                return <section className="peer-media" key={peer.id}>{showScreen && <MediaTile stream={peer.screenStream} label={`${peer.name} · tela`} badge="Ao vivo" />}{showCamera && <MediaTile stream={peer.cameraStream} label={`${peer.name} · câmera`} />}{!showCamera && !showScreen && <article className="member-tile"><Avatar name={peer.name} color={peer.color} avatar={peer.avatar} size="hero" status={members.find((member) => member.id === peer.id)?.status || peer.status || 'online'} platform={members.find((member) => member.id === peer.id)?.platform || peer.platform} /><strong>{peer.name}</strong><MediaBadges state={{ camera: showCamera, screen: showScreen }} /><small>{peer.audioState?.micMuted ? 'Microfone desligado' : 'Conectado ao canal'}</small></article>}</section>;
+              })}
             </div>
             <div className="call-controls" role="toolbar" aria-label="Controles da chamada">
               <button type="button" className={micMuted ? 'danger' : ''} aria-label={micMuted ? 'Ativar microfone' : 'Desativar microfone'} aria-pressed={micMuted} title={micMuted ? 'Ativar microfone' : 'Desativar microfone'} onClick={toggleMic}><UiIcon name={micMuted ? 'mic-off' : 'mic'} /></button>
               <button type="button" className={preferences.outputMuted ? 'danger' : ''} aria-label={preferences.outputMuted ? 'Ativar áudio' : 'Desativar áudio'} aria-pressed={Boolean(preferences.outputMuted)} title={preferences.outputMuted ? 'Ativar áudio' : 'Desativar áudio'} onClick={toggleOutput}><UiIcon name={preferences.outputMuted ? 'volume-off' : 'volume'} /></button>
               <button type="button" className={cameraOn ? 'on' : ''} aria-label={cameraOn ? 'Desativar câmera' : 'Ativar câmera'} aria-pressed={cameraOn} title={cameraOn ? 'Desativar câmera' : 'Ativar câmera'} onClick={toggleCamera}><UiIcon name={cameraOn ? 'camera' : 'camera-off'} /></button>
               {cameraOn && <button type="button" aria-label="Trocar câmera" title="Trocar câmera" onClick={switchCamera}><UiIcon name="switch-camera" /></button>}
-              <button type="button" className={screenOn ? 'on' : ''} aria-label={screenOn ? 'Parar compartilhamento de tela' : 'Compartilhar tela'} aria-pressed={screenOn} title={screenOn ? 'Parar compartilhamento de tela' : 'Compartilhar tela'} onClick={toggleScreen}><UiIcon name="screen" /></button>
+              <button type="button" className={screenOn ? 'on' : ''} disabled={screenStarting} aria-label={screenStarting ? 'Iniciando compartilhamento de tela' : screenOn ? 'Parar compartilhamento de tela' : 'Compartilhar tela'} aria-pressed={screenOn} aria-busy={screenStarting} title={screenOn ? 'Parar compartilhamento de tela' : 'Compartilhar tela'} onClick={requestScreenShare}><UiIcon name="screen" /></button>
               <button type="button" aria-label="Abrir ajustes" title="Ajustes" onClick={() => setTab('settings')}><UiIcon name="settings" /></button>
               <button type="button" className="hangup" aria-label="Sair da call" title="Sair da call" onClick={leaveVoice}><UiIcon name="hangup" /></button>
             </div>
@@ -1410,7 +1561,7 @@ function App() {
           <form className="chat-form" onSubmit={sendMessage}><input value={draft} onChange={(event) => changeDraft(event.target.value)} placeholder={activeTextSettings.readOnly ? 'Este canal é somente leitura' : `Mensagem em #${activeText}`} maxLength="500" disabled={Boolean(activeTextSettings.readOnly)} /><button type="submit" disabled={Boolean(activeTextSettings.readOnly) || !draft.trim()}>{editingMessage ? 'Salvar' : 'Enviar'}</button></form>
         </section>}
         {tab === 'members' && <section className="members-mobile"><h1>Membros</h1><MemberList members={membersById} selfId={socketRef.current?.id} activeVoice={activeVoice} peerAudio={peerAudio} onPeerAudio={updatePeerAudio} onMention={mentionMember} /></section>}
-        {tab === 'settings' && <SettingsPanel preferences={preferences} setPreferences={setPreferences} connectionState={connectionState} latency={latency} activeVoice={activeVoice} cameraOn={cameraOn} onSwitchCamera={switchCamera} />}
+        {tab === 'settings' && <SettingsPanel preferences={preferences} setPreferences={setPreferences} connectionState={connectionState} latency={latency} activeVoice={activeVoice} cameraOn={cameraOn} onSwitchCamera={switchCamera} updateState={updateState} distribution={distribution} onCheckUpdates={checkForUpdates} onDownloadUpdate={downloadAvailableUpdate} />}
       </section>
       <aside className="members-panel"><header><strong>Membros</strong></header><MemberList members={membersById} selfId={socketRef.current?.id} activeVoice={activeVoice} peerAudio={peerAudio} onPeerAudio={updatePeerAudio} onMention={mentionMember} /></aside>
       <nav className="mobile-nav" aria-label="Navegação do servidor"><button className={tab === 'channels' ? 'active' : ''} aria-pressed={tab === 'channels'} aria-controls="server-channels" onClick={() => setTab('channels')}>Canais</button><button className={tab === 'call' ? 'active' : ''} aria-pressed={tab === 'call'} onClick={() => setTab('call')}>Call</button><button className={tab === 'chat' ? 'active' : ''} aria-pressed={tab === 'chat'} onClick={() => selectTextChannel(activeText)}>Chat{totalUnread > 0 && <b>{Math.min(99, totalUnread)}</b>}</button><button className={tab === 'members' ? 'active' : ''} aria-pressed={tab === 'members'} onClick={() => setTab('members')}>Membros</button><button className={tab === 'settings' ? 'active' : ''} aria-pressed={tab === 'settings'} onClick={() => setTab('settings')}>Ajustes</button></nav>
@@ -1420,6 +1571,16 @@ function App() {
         const muted = Boolean(preferences.outputMuted || local.muted);
         return [<AudioSink key={`${peer.id}-voice`} stream={peer.audioStream} muted={muted} volume={clampVolume(preferences.voiceVolume) * clampVolume(local.volume)} />, <AudioSink key={`${peer.id}-stream`} stream={peer.screenAudioStream} muted={muted} volume={clampVolume(preferences.streamVolume) * clampVolume(local.volume)} />];
       })}</div>
+      {screenShareChoiceOpen && <div className="screen-share-backdrop" onClick={() => setScreenShareChoiceOpen(false)}>
+        <section className="screen-share-dialog" role="dialog" aria-modal="true" aria-labelledby="screen-share-title" onClick={(event) => event.stopPropagation()}>
+          <header><span className="screen-share-icon"><UiIcon name="screen" /></span><div><h2 id="screen-share-title">Compartilhar tela inteira</h2><p>O Android mostrará a confirmação de captura antes de iniciar.</p></div><button type="button" className="dialog-close" aria-label="Cancelar compartilhamento" title="Cancelar" onClick={() => setScreenShareChoiceOpen(false)}><UiIcon name="close" /></button></header>
+          <div className="screen-share-options">
+            <button type="button" onClick={() => startScreenShare(true)}><UiIcon name="volume" /><span><strong>Compartilhar com áudio</strong><small>Inclui sons permitidos pelos aplicativos abertos.</small></span></button>
+            <button type="button" onClick={() => startScreenShare(false)}><UiIcon name="volume-off" /><span><strong>Compartilhar sem áudio</strong><small>Transmite somente a imagem da tela.</small></span></button>
+          </div>
+          <small className="screen-share-privacy">Uma notificação permanente permite encerrar a transmissão a qualquer momento.</small>
+        </section>
+      </div>}
     </main>
   );
 }

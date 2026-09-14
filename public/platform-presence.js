@@ -6,7 +6,7 @@
 ((root) => {
   'use strict';
   const platforms = Object.freeze({ windows: 'Windows', linux: 'Linux', android: 'Android', selfweb: 'SelfWeb' });
-  const statuses = Object.freeze({ online: 'Online', idle: 'Ausente', dnd: 'Não perturbe' });
+  const statuses = Object.freeze({ online: 'Online', idle: 'Ausente', activity: 'Em atividade', dnd: 'Não perturbe' });
   const normalize = (value) => typeof value === 'string' && Object.hasOwn(platforms, value) ? value : '';
   const status = (value) => Object.hasOwn(statuses, value) ? value : 'online';
   const merge = (next, previous) => normalize(next) || normalize(previous);

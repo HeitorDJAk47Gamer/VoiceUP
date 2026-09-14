@@ -4,6 +4,9 @@ $workspace = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $workspace 'native\process-audio-capture.cpp'
 $output = Join-Path $workspace 'native\voiceup-process-audio.exe'
 $object = Join-Path $workspace 'native\process-audio-capture.obj'
+$dictationSource = Join-Path $workspace 'native\voiceup-dictation-hotkey.cpp'
+$dictationOutput = Join-Path $workspace 'native\voiceup-dictation-hotkey.exe'
+$dictationObject = Join-Path $workspace 'native\voiceup-dictation-hotkey.obj'
 $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
 
 if (-not (Test-Path -LiteralPath $vswhere)) {
@@ -25,3 +28,11 @@ if ($compilerExitCode -ne 0 -or -not (Test-Path -LiteralPath $output)) {
 }
 
 Write-Output "Capturador nativo criado: $output"
+
+$dictationCommand = ('call "{0}" -no_logo -arch=x64 -host_arch=x64 >nul && cl.exe /nologo /std:c++17 /EHsc /O2 /MT /DUNICODE /D_UNICODE "{1}" /Fo:"{2}" /Fe:"{3}" /link User32.lib' -f $developerCommand, $dictationSource, $dictationObject, $dictationOutput)
+& $env:ComSpec /d /s /c $dictationCommand
+$dictationExitCode = $LASTEXITCODE
+if ($dictationExitCode -ne 0 -or -not (Test-Path -LiteralPath $dictationOutput)) {
+  throw "Falha ao compilar o atalho nativo de ditado (código $dictationExitCode)."
+}
+Write-Output "Atalho de ditado criado: $dictationOutput"

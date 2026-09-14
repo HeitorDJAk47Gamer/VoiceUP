@@ -132,6 +132,7 @@ input:focus, select:focus { border-color: #58ddce; box-shadow: 0 0 0 3px rgba(83
 .call-controls button.on { color: #062027; border-color: #59dfcf; background: #59dfcf; }
 .call-controls button.danger, .call-controls button.hangup { border-color: #e46575; background: #c94458; color: #fff; }
 .call-controls button.hangup { flex-basis: 58px; width: 58px; border-radius: 18px; box-shadow: 0 8px 20px rgba(201, 68, 88, .28); }
+.call-controls button:disabled { cursor: wait; opacity: .48; }
 
 .chat-view { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .chat-view > header { padding: 17px 23px; border-bottom: 1px solid #253a58; background: #0d192b; }
@@ -319,8 +320,32 @@ input:focus, select:focus { border-color: #58ddce; box-shadow: 0 0 0 3px rgba(83
 .toggle-setting input { width: 19px; min-height: 19px; height: 19px; accent-color: #58dfcf; }
 .camera-choice { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #c9d8ec; font-size: .8rem; }
 .camera-choice button { min-height: 37px; border: 1px solid #3d5878; border-radius: 10px; padding: 0 10px; color: #61dfd1; background: #14263d; font-weight: 800; }
+.update-card p { margin: 0; color: #a9bdd8; font-size: .8rem; line-height: 1.45; }
+.update-status { border: 1px solid #304964; border-radius: 11px; padding: 10px 11px; background: #101e31; }
+.update-status.available { color: #a8f6dd; border-color: rgba(82, 220, 185, .5); background: rgba(40, 126, 108, .16); }
+.update-status.error { color: #ffc5cc; border-color: rgba(229, 103, 119, .52); background: rgba(146, 45, 61, .18); }
+.settings-action { min-height: 42px; border: 1px solid #3d5878; border-radius: 11px; padding: 0 13px; color: #d7e5f7; background: #14263d; font-weight: 800; }
+.settings-action.primary { color: #062027; border-color: #58dfcf; background: #58dfcf; }
+.settings-action:disabled { cursor: wait; opacity: .55; }
 .app-about p { display: flex; justify-content: space-between; gap: 10px; margin: 0; color: #94aaca; font-size: .78rem; }
 .app-about strong { color: #e7f0fc; text-align: right; }
+
+.screen-share-backdrop { position: fixed; z-index: 40; inset: 0; display: grid; place-items: end center; padding: 18px; padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); background: rgba(2, 8, 16, .76); backdrop-filter: blur(5px); }
+.screen-share-dialog { width: min(480px, 100%); border: 1px solid #385271; border-radius: 22px; padding: 18px; color: #eef6ff; background: #0d1a2d; box-shadow: 0 28px 75px rgba(0, 0, 0, .55); }
+.screen-share-dialog > header { display: grid; grid-template-columns: 42px minmax(0, 1fr) 36px; align-items: start; gap: 11px; }
+.screen-share-dialog h2 { margin: 1px 0 0; font-size: 1.08rem; }
+.screen-share-dialog header p { margin: 5px 0 0; color: #93a9c7; font-size: .76rem; line-height: 1.4; }
+.screen-share-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 13px; color: #61e0d1; background: #17364a; }
+.dialog-close { display: grid; width: 36px; min-height: 36px; height: 36px; place-items: center; border: 0; border-radius: 10px; padding: 0; color: #b9cae2; background: #1c2c43; }
+.dialog-close .ui-icon { width: 17px; height: 17px; }
+.screen-share-options { display: grid; gap: 9px; margin-top: 17px; }
+.screen-share-options > button { display: grid; grid-template-columns: 31px minmax(0, 1fr); align-items: center; gap: 10px; min-height: 67px; border: 1px solid #385374; border-radius: 14px; padding: 10px 13px; color: #eaf3ff; background: #12243a; text-align: left; }
+.screen-share-options > button:first-child { border-color: rgba(88, 223, 207, .52); background: rgba(30, 91, 91, .32); }
+.screen-share-options > button .ui-icon { color: #61dfd1; }
+.screen-share-options span { display: grid; gap: 3px; }
+.screen-share-options strong { font-size: .86rem; }
+.screen-share-options small, .screen-share-privacy { color: #8fa6c5; font-size: .7rem; line-height: 1.4; }
+.screen-share-privacy { display: block; margin-top: 13px; }
 
 @media (max-width: 880px) {
   .mobile-nav { grid-template-columns: repeat(5, minmax(0, 1fr)); }

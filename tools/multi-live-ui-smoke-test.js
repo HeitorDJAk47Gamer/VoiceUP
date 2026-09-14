@@ -195,7 +195,13 @@ app.whenReady().then(async () => {
       focused: document.querySelector('#video-gallery .theater-focused')?.dataset.mediaOwner || '',
       displays: tiles.map((tile) => getComputedStyle(tile).display),
       stopLabel: document.querySelector('.theater-stop-share span')?.textContent || '',
-      participantTray: !document.querySelector('#call-participant-tray').hidden && getComputedStyle(document.querySelector('#call-participant-tray')).position === 'fixed'
+      participantTray: getComputedStyle(document.querySelector('#call-participant-tray')).display !== 'none',
+      fillsViewport: ['#video-frame','#video-gallery','#video-gallery .theater-focused'].every((selector) => {
+        const box = document.querySelector(selector).getBoundingClientRect();
+        return Math.abs(box.x) < 1 && Math.abs(box.y) < 1 && Math.abs(box.width - innerWidth) < 1 && Math.abs(box.height - innerHeight) < 1;
+      }),
+      border: getComputedStyle(document.querySelector('.theater-focused')).borderTopWidth,
+      appHidden: getComputedStyle(document.querySelector('#app')).display === 'none'
     };
   })()`);
   assert.equal(focused.theater, true);
@@ -203,7 +209,16 @@ app.whenReady().then(async () => {
   assert.equal(focused.focused, 'live-carla');
   assert.deepEqual(focused.displays, ['none', 'flex']);
   assert.equal(focused.stopLabel, 'Sair da live');
-  assert.equal(focused.participantTray, true);
+  assert.equal(focused.participantTray, false);
+  assert.equal(focused.fillsViewport, true);
+  assert.equal(focused.border, '0px');
+  assert.equal(focused.appHidden, true);
+  await evaluate(`document.activeElement?.blur(); document.dispatchEvent(new PointerEvent('pointermove'));`);
+  await pause(2500);
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('#video-theater-toolbar')).visibility`), 'hidden');
+  await evaluate(`document.dispatchEvent(new PointerEvent('pointermove'));`);
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('#video-theater-toolbar')).visibility`), 'visible');
+  fs.writeFileSync(path.join(__dirname, 'fullscreen-beta17.png'), (await window.webContents.capturePage()).toPNG());
 
   await evaluate(`document.querySelector('.theater-exit').click();`);
   await pause(250);
@@ -214,6 +229,7 @@ app.whenReady().then(async () => {
     visible: [...document.querySelectorAll('#video-gallery .video-tile:not(.hidden)')].filter((tile) => getComputedStyle(tile).display !== 'none').length
   }))()`);
   assert.deepEqual(restored, { theater: false, single: false, focused: 0, visible: 2 });
+  assert.equal(await evaluate(`document.querySelector('#video-frame').parentElement.classList.contains('stage')`), true);
   assert.deepEqual(rendererErrors, [], 'The Client must render the multi-live grid without uncaught errors.');
   console.log('PASS multi-live UI: adaptive square participants, collapsible live tray, two simultaneous lives and individual fullscreen.');
 }).catch((error) => {

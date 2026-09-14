@@ -4,7 +4,9 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
-async function runGameStreamTest() {
+async function runGameStreamTest(policySource) {
+  const configure = new Function('$', 'preserveScreenSourceQuality', 'liveSenderStates', `${policySource}; return configureVideoSenderParameters;`)(
+    (id) => ({ value: id === 'fps-select' ? '60' : '720' }), false, new Map());
   const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
   const canvas = document.createElement('canvas');
   canvas.width = 1280; canvas.height = 720;
@@ -69,14 +71,10 @@ async function runGameStreamTest() {
     while (performance.now() < deadline && (outbound.connectionState !== 'connected' || inbound.connectionState !== 'connected' || !receiver)) await wait(40);
     if (outbound.connectionState !== 'connected' || inbound.connectionState !== 'connected' || !receiver) throw new Error(`Pares não conectaram: ${outbound.connectionState}/${inbound.connectionState}`);
 
-    const parameters = sender.getParameters();
-    parameters.encodings ||= [{}];
-    parameters.encodings[0].maxBitrate = 6080000;
-    parameters.encodings[0].maxFramerate = 60;
-    parameters.degradationPreference = 'maintain-framerate';
+    const parameters = configure(sender.getParameters(), 'screen', true, sender);
     await sender.setParameters(parameters);
     const applied = sender.getParameters();
-    if (applied.degradationPreference !== 'maintain-framerate') throw new Error(`Preferência não aplicada: ${applied.degradationPreference || 'ausente'}`);
+    if (applied.degradationPreference !== 'balanced') throw new Error(`Preferência não aplicada: ${applied.degradationPreference || 'ausente'}`);
 
     await wait(1400);
     const startedAt = performance.now();
@@ -181,8 +179,21 @@ const connectCdp = (url) => new Promise((resolve, reject) => {
   try {
     const target = await waitForTarget(port);
     cdp = await connectCdp(target.webSocketDebuggerUrl);
+    const renderer = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
+    const policySource = ['selectedFrameRate', 'screenMotionPriority', 'videoDegradationPreference', 'videoBitrate', 'screenSenderLimits', 'configureVideoSenderParameters'].map((name) => {
+      const start = renderer.indexOf(`function ${name}(`);
+      if (start < 0) throw new Error(`Missing policy: ${name}`);
+      const opening = renderer.indexOf('{', start);
+      let depth = 0;
+      for (let index = opening; index < renderer.length; index++) {
+        if (renderer[index] === '{') depth++;
+        if (renderer[index] === '}') depth--;
+        if (!depth) return renderer.slice(start, index + 1);
+      }
+      throw new Error(`Incomplete policy: ${name}`);
+    }).join('\n');
     const evaluated = await cdp.send('Runtime.evaluate', {
-      expression: `(${runGameStreamTest.toString()})()`,
+      expression: `(${runGameStreamTest.toString()})(${JSON.stringify(policySource)})`,
       awaitPromise: true,
       returnByValue: true,
       userGesture: true

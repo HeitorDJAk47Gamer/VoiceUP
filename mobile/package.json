@@ -1,7 +1,7 @@
 {
   "name": "voiceup-mobile",
   "private": true,
-  "version": "1.2.1",
+  "version": "1.2.2",
   "type": "module",
   "description": "Cliente Android experimental do VoiceUP, feito em React e Capacitor.",
   "scripts": {
@@ -10,7 +10,8 @@
     "build": "vite build",
     "sync": "npm run build && npx cap sync android",
     "android": "npx cap open android",
-    "apk:debug": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-apk.ps1"
+    "apk:debug": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-apk.ps1",
+    "aab:play": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-play-aab.ps1"
   },
   "dependencies": {
     "@capacitor/android": "^7.4.4",

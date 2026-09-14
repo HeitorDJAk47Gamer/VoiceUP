@@ -29,10 +29,14 @@ Confira em 390×844, 320×568 e 844×390:
    Essas cinco ferramentas aparecem como ícones, com nome acessível e sem texto
    ocupando a linha da mensagem.
 9. Ajustes mostra volumes, processamento de áudio, câmera, vibração, privacidade
-   de mídias externas, fluidez da live, versão e ping.
+   de mídias externas, fluidez da live, versão, ping e a busca manual de APK.
 10. A barra inferior mantém as cinco abas acessíveis em 320×568 e 844×390.
 11. A call mostra controles circulares somente com ícones, sem rolagem horizontal.
 12. O cartão do perfil exibe o botão vermelho “Sair”, maior que o antigo atalho.
+13. Entrar na call sem ligar câmera ou tela não cria blocos vazios nem indicadores
+    falsos de câmera/live.
+14. O botão de tela abre as opções “com áudio” e “sem áudio”. A autorização,
+    captura e notificação são validadas somente no Android real.
 
 O servidor e os dados são locais e temporários. O fixture substitui o microfone
 por uma faixa silenciosa gerada, sem pedir permissões ou captar áudio real.

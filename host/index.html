@@ -28,6 +28,7 @@
       <nav class="nav" aria-label="Painel do servidor">
         <button class="nav-item active" type="button" data-view="overview"><span class="nav-icon">⌂</span><span>Visão geral</span></button>
         <button class="nav-item" type="button" data-view="people"><span class="nav-icon">◎</span><span>Pessoas</span><b id="nav-member-count">0</b></button>
+        <button class="nav-item" type="button" data-view="access"><span class="nav-icon">♢</span><span>Cargos e acesso</span></button>
         <button class="nav-item" type="button" data-view="rooms"><span class="nav-icon">▦</span><span>Salas e canais</span><b id="nav-room-count">0</b></button>
         <button class="nav-item" type="button" data-view="extensions"><span class="nav-icon">◇</span><span>Plugins</span></button>
         <button class="nav-item" type="button" data-view="activity"><span class="nav-icon">⌁</span><span>Atividade</span></button>
@@ -55,6 +56,18 @@
           <div id="app-dialog-actions" class="app-dialog-actions"></div>
         </section>
       </div>
+
+      <div id="update-progress" class="update-progress hidden" role="dialog" aria-modal="true" aria-labelledby="update-progress-title">
+        <section class="update-progress-card">
+          <button id="update-progress-minimize" class="icon-button" type="button" title="Minimizar" aria-label="Minimizar atualização">−</button>
+          <span class="update-progress-icon" aria-hidden="true">↓</span>
+          <div><p class="eyebrow">ATUALIZAÇÃO SEGURA</p><h2 id="update-progress-title">Preparando o VoiceUP</h2><p id="update-progress-message">Aguarde um instante…</p></div>
+          <div class="update-progress-track"><i id="update-progress-bar"></i></div>
+          <small id="update-progress-detail">Você pode minimizar esta janela e continuar usando o painel.</small>
+          <button id="update-retry" class="hidden" type="button">Tentar novamente</button>
+        </section>
+      </div>
+      <button id="update-progress-chip" class="update-progress-chip hidden" type="button"><span></span><b>Atualizando VoiceUP</b><em id="update-progress-chip-value">0%</em></button>
 
       <section class="view active" data-page="overview">
         <div class="hero-card">
@@ -100,6 +113,24 @@
           <article class="panel"><div class="panel-heading"><h2>Participantes conectados</h2></div><div id="member-list" class="item-list"><div class="empty">Carregando participantes…</div></div></article>
           <article class="panel"><div class="panel-heading"><h2>Lista de banimentos</h2></div><div id="ban-list" class="item-list"><div class="empty">Nenhum banimento.</div></div></article>
           <article class="panel punishment-panel"><div class="panel-heading"><div><p class="eyebrow">CASTIGO DE CHAT</p><h2>Sem permissão para enviar mensagens</h2></div></div><div id="punishment-list" class="item-list"><div class="empty">Nenhum castigo ativo.</div></div></article>
+        </div>
+      </section>
+
+      <section class="view" data-page="access">
+        <div class="section-intro"><div><p class="eyebrow">SEGURANÇA E EQUIPE</p><h2>Cargos e permissões</h2><p>As permissões ficam ligadas à identidade protegida do perfil, nunca apenas ao nick.</p></div><span id="access-role-count" class="pill">3 cargos</span></div>
+        <div class="access-grid">
+          <article class="panel role-editor">
+            <div class="panel-heading"><div><p class="eyebrow">EDITOR DE CARGO</p><h2 id="role-editor-title">Criar cargo</h2></div><button id="clear-role-form" class="button secondary" type="button">Novo</button></div>
+            <input id="role-previous-id" type="hidden">
+            <label><span>Nome</span><input id="role-name" maxlength="32" placeholder="Ex.: Organizador"></label>
+            <label><span>Cor</span><span class="role-color-input"><input id="role-color" type="color" value="#56e2cf"><code id="role-color-value">#56e2cf</code></span></label>
+            <label><span>Posição</span><input id="role-position" type="number" min="-999" max="999" value="10"></label>
+            <fieldset><legend>Permissões</legend><div id="permission-editor" class="permission-editor"></div></fieldset>
+            <div class="role-editor-actions"><button id="delete-role" class="button danger hidden" type="button">Excluir</button><button id="save-role" class="button primary" type="button">Salvar cargo</button></div>
+          </article>
+          <article class="panel"><div class="panel-heading"><div><p class="eyebrow">HIERARQUIA</p><h2>Cargos disponíveis</h2></div></div><div id="role-list" class="role-list"><div class="empty">Carregando cargos…</div></div></article>
+          <article class="panel access-members"><div class="panel-heading"><div><p class="eyebrow">ATRIBUIÇÕES</p><h2>Pessoas e cargos</h2></div></div><p class="helper">Clientes antigos continuam entrando, mas precisam atualizar para receber permissões administrativas.</p><div id="role-member-list" class="role-member-list"><div class="empty">Nenhuma identidade conhecida.</div></div></article>
+          <article class="panel access-audit"><div class="panel-heading"><div><p class="eyebrow">AUDITORIA LOCAL</p><h2>Registro de segurança</h2></div><button id="clear-security-audit" class="button secondary" type="button">Limpar registro</button></div><p class="helper">Registra ações administrativas, identidade, data e resultado. Mensagens, senhas e chaves não entram neste arquivo.</p><div id="security-audit-list" class="security-audit-list"><div class="empty">Nenhuma ação registrada.</div></div></article>
         </div>
       </section>
 
@@ -160,7 +191,21 @@
           <label><span>Máximo por sala</span><small>Mensagens antigas excedentes são removidas automaticamente.</small><input id="chat-max-per-room" type="number" min="50" max="5000" value="300"><em>mensagens</em></label>
           <label><span>Cooldown global dos chats</span><small>Intervalo mínimo entre mensagens de cada pessoa. 0 desativa; o ajuste individual do canal pode ser maior.</small><input id="chat-cooldown-seconds" type="number" min="0" max="21600" value="0"><em>segundos</em></label>
           <label><span>Limite das mensagens de plugins</span><small>Somente bots de plugins podem ultrapassar os 500 caracteres dos usuários. Limite seguro: 500 a 10.000.</small><input id="plugin-message-max-length" type="number" min="500" max="10000" value="2000"><em>caracteres</em></label>
+          <label><span>Permitir arquivos e mensagens de voz nos chats</span><small>Desativado por padrão. Anexos ficam no host e entram no backup. Defina o limite que fizer sentido para o seu servidor.</small><input id="attachments-enabled" type="checkbox"></label>
+          <label><span>Tamanho máximo por arquivo</span><small>Imagens, documentos, arquivos e áudios. O host define o limite; capacidade técnica máxima de 256 MB para preservar o backup portátil.</small><input id="attachment-max-mb" type="number" min="1" max="256" value="5"><em>MB</em></label>
           <div class="settings-action"><span class="autosave-status">● Salvamento automático</span><button id="save-settings" class="button primary" type="button">Salvar configurações</button></div>
+        </article>
+        <article class="panel backup-panel">
+          <div class="panel-heading"><div><p class="eyebrow">BACKUP E MIGRAÇÃO</p><h2>Salvar ou restaurar o servidor inteiro</h2><p class="helper">Leve o servidor para outro computador e recupere salas, canais, mensagens, cargos, permissões, bans, castigos e configurações.</p></div><span class="pill">Arquivo portátil</span></div>
+          <div class="backup-content-grid">
+            <div class="backup-includes"><b>Sempre incluído</b><span>Configurações e imagem do servidor</span><span>Salas, categorias e canais</span><span>Cargos, permissões e identidades</span><span>Mensagens, moderação, relatórios e auditoria</span><span>Opções e dados persistentes dos plugins</span></div>
+            <div class="backup-options">
+              <label><input id="backup-include-plugins" type="checkbox" checked><span><b>Plugins personalizados</b><small>Inclui os arquivos JS. No outro PC, plugins externos precisarão ser aprovados novamente.</small></span></label>
+              <label><input id="backup-include-music" type="checkbox"><span><b>Músicas do servidor</b><small>Pode deixar o backup grande; marque se também quiser transportar os áudios.</small></span></label>
+            </div>
+          </div>
+          <div class="backup-actions"><button id="create-server-backup" class="button primary" type="button">Criar backup</button><button id="restore-server-backup" class="button secondary" type="button">Restaurar backup</button><button id="open-backup-folder" class="button secondary" type="button">Backups de segurança</button></div>
+          <div id="backup-status" class="backup-status" role="status"><span>◷</span><div><b>Nenhuma operação nesta sessão</b><small>O arquivo contém dados privados do servidor. Guarde-o em um local seguro.</small></div></div>
         </article>
         <article class="panel maintenance-panel">
           <div class="panel-heading"><div><p class="eyebrow">MANUTENÇÃO</p><h2>Mensagens e relatórios</h2></div></div>

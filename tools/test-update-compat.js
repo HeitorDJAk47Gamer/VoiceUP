@@ -1,7 +1,8 @@
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
-const { assetFor, isNewer, preferredLinuxExtension, trustedDownloadUrl, updateAssetName, updateAvailability } = require('../update-helper');
+const { assetFor, isNewer, launchVerifiedUpdate, preferredLinuxExtension, trustedDownloadUrl, updateAssetName, updateAvailability } = require('../update-helper');
 
 const version = '9.8.7';
 const assets = [
@@ -90,6 +91,8 @@ assert.equal(isNewer('1.1.3-beta.1', '1.1.3'), false);
 assert.equal(isNewer('1.2.1-beta.1', '1.2.0'), true);
 assert.equal(isNewer('1.2.1-beta.2', '1.2.1-beta.1'), true);
 assert.equal(isNewer('1.2.1', '1.2.1-beta.1'), true);
+assert.equal(isNewer('1.2.2', '1.2.2-beta.10'), true, 'A futura estável precisa atualizar esta beta.');
+assert.equal(isNewer('1.2.2-beta.10', '1.2.2'), false, 'Uma beta não pode substituir a estável equivalente.');
 for (const installed of ['1.0.25', '1.1.2', '1.2.0', '1.2.1-beta.6']) {
   assert.equal(isNewer('1.2.1', installed), true, `1.2.1 precisa ser oferecida para ${installed}`);
 }
@@ -104,9 +107,29 @@ const serverMain = fs.readFileSync(path.join(workspace, 'server-host-main.js'), 
 const updateHelper = fs.readFileSync(path.join(workspace, 'update-helper.js'), 'utf8');
 assert.match(clientMain, /registerUpdateHandlers\(ipcMain,\s*['"]VoiceUP Setup\s*['"]/);
 assert.match(serverMain, /registerUpdateHandlers\(ipcMain,\s*['"]VoiceUPServer Setup\s*['"]/);
-assert.match(updateHelper, /verifyDownloadedUpdate\(destination, update[^)]*\)[\s\S]*shell\.openPath\(destination\)/, 'A assinatura e o hash devem ser verificados antes de abrir o pacote.');
+assert.match(updateHelper, /verifyDownloadedUpdate\(destination, update[^)]*\)[\s\S]*launchVerifiedUpdate\(destination/, 'A assinatura e o hash devem ser verificados antes de iniciar o pacote.');
+assert.match(updateHelper, /spawnProcess\(destination, \['\/S', '--updated'\]/, 'No Windows o instalador precisa usar o modo silencioso do NSIS.');
+assert.match(updateHelper, /update:progress/, 'O atualizador precisa enviar progresso para a interface.');
 assert.match(updateHelper, /releaseIntegrity\.verifySync/, 'O atualizador precisa validar a assinatura Ed25519 fixada no aplicativo.');
 assert.match(updateHelper, /GitHub Release SHA-256/, 'O pacote Linux precisa ser aceito apenas após validar o SHA-256 oficial.');
 assert.match(updateHelper, /packageUnavailable/, 'A interface precisa distinguir uma versão nova de um pacote verificável.');
 
-console.log('Compatibilidade do atualizador validada para Cliente e ServerHost no Windows e Linux.');
+(async () => {
+  let spawnCall = null;
+  const child = new EventEmitter(); child.unref = () => { child.unrefCalled = true; };
+  const launching = launchVerifiedUpdate('C:\\Temp\\VoiceUP.Setup.9.8.7.exe', {
+    platform: 'win32',
+    spawnProcess: (...args) => { spawnCall = args; queueMicrotask(() => child.emit('spawn')); return child; }
+  });
+  assert.equal(await launching, '');
+  assert.deepEqual(spawnCall[1], ['/S', '--updated']);
+  assert.equal(spawnCall[2].windowsHide, true);
+  assert.equal(spawnCall[2].detached, true);
+  assert.equal(child.unrefCalled, true);
+  let openedLinux = '';
+  await launchVerifiedUpdate('/tmp/VoiceUP.AppImage', { platform: 'linux', shellApi: { openPath: async (target) => { openedLinux = target; return ''; } } });
+  assert.equal(openedLinux, '/tmp/VoiceUP.AppImage');
+  const packageConfig = require('../package.json');
+  assert.equal(packageConfig.build.nsis.deleteAppDataOnUninstall, false, 'Atualizações e reinstalações não podem remover os dados do usuário.');
+  console.log('Compatibilidade do atualizador validada para Cliente e ServerHost no Windows e Linux, incluindo instalação silenciosa e preservação de dados.');
+})().catch((error) => { console.error(error); process.exitCode = 1; });

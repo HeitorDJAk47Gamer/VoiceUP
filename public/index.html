@@ -9,9 +9,14 @@
   <link rel="stylesheet" href="style.css"/>
   <link rel="stylesheet" href="beta.css"/>
   <link rel="stylesheet" href="beta-features.css"/>
+  <link rel="stylesheet" href="forum-channels.css"/>
   <link rel="stylesheet" href="interface-polish.css"/>
   <link rel="stylesheet" href="channel-roster.css"/>
   <link rel="stylesheet" href="platform-presence.css"/>
+  <link rel="stylesheet" href="server-management.css"/>
+  <link rel="stylesheet" href="server-administration.css"/>
+  <link rel="stylesheet" href="update-experience.css"/>
+  <link rel="stylesheet" href="chat-rich-content.css"/>
 </head>
 <body>
   <main id="welcome" class="welcome">
@@ -91,7 +96,7 @@
     <aside id="right-panel" class="chat">
       <div class="panel-tabs"><button class="panel-tab active" data-panel="members">Membros</button><button class="panel-tab" data-panel="chat">Chat <i id="chat-unread" class="unread-dot hidden"></i></button></div>
       <section id="members-panel" class="side-panel active"><div id="members-clone" class="members-clone"></div></section>
-      <section id="chat-panel" class="side-panel"><div id="messages" class="messages"><div class="system-message">Após o pareamento, mensagens, voz, vídeo e tela vão diretamente entre os aplicativos.</div></div><form id="message-form"><input id="message-input" placeholder="Enviar mensagem…" maxlength="500" autocomplete="off"/><button aria-label="Enviar mensagem"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-8-8 18-2-7zM11 14l4-4"/></svg></button></form></section>
+      <section id="chat-panel" class="side-panel"><div id="messages" class="messages"><div class="system-message">Após o pareamento, mensagens, voz, vídeo e tela vão diretamente entre os aplicativos.</div></div><form id="message-form"><textarea id="message-input" rows="1" placeholder="Enviar mensagem…" maxlength="30000" autocomplete="off" aria-label="Mensagem"></textarea><button aria-label="Enviar mensagem"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-8-8 18-2-7zM11 14l4-4"/></svg></button></form></section>
     </aside>
   </main>
   <div id="voiceup-dialog" class="voiceup-dialog hidden" role="alertdialog" aria-modal="true" aria-labelledby="voiceup-dialog-title" aria-describedby="voiceup-dialog-message">
@@ -105,6 +110,9 @@
   <script src="socket-loader.js"></script>
   <script src="channel-roster.js"></script>
   <script src="platform-presence.js"></script>
+  <script src="chat-rich-content.js"></script>
+  <script src="live-quality.js"></script>
+  <script src="viewer-quality.js"></script>
   <script src="app.js"></script>
   <script src="rnnoise-engine.js"></script>
   <script src="beta-ui.js"></script>
@@ -117,5 +125,10 @@
   <script src="audio-call-polish.js"></script>
   <script src="channel-media-status.js"></script>
   <script src="platform-status.js"></script>
+  <script src="server-management.js"></script>
+  <script src="update-experience.js"></script>
+  <script src="desktop-improvements.js"></script>
+  <link rel="stylesheet" href="chat-attachments.css">
+  <script src="chat-attachments.js"></script>
 </body>
 </html>

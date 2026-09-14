@@ -36,6 +36,19 @@ function Select-JavaHome([string[]]$candidates, [scriptblock]$accept, [string]$b
     return $null
 }
 
+function Remove-TemporaryDirectory([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return }
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+            return
+        } catch {
+            if ($attempt -lt 5) { Start-Sleep -Milliseconds 500 }
+        }
+    }
+    Write-Warning "O Gradle ainda mantém um arquivo temporário aberto; a pasta será removida numa execução futura: $path"
+}
+
 $programFiles = ${env:ProgramFiles}
 $gradleJava = Select-JavaHome @(
     $env:VOICEUP_GRADLE_JAVA_HOME,
@@ -102,9 +115,7 @@ try {
 } finally {
     $env:TEMP = $previousTemp
     $env:TMP = $previousTmp
-    if (Test-Path -LiteralPath $buildTemporary) {
-        Remove-Item -LiteralPath $buildTemporary -Recurse -Force
-    }
+    Remove-TemporaryDirectory $buildTemporary
 }
 
 $package = Get-Content -Raw -LiteralPath (Join-Path $mobileDirectory 'package.json') | ConvertFrom-Json
@@ -142,11 +153,15 @@ DESTAQUES
 - participantes organizados por canal, duração da call e indicadores de câmera/live;
 - consentimento antes de carregar imagens e prévias externas;
 - grade para várias transmissões, tela cheia e contagem de espectadores;
+- câmera e live exibidas somente quando há vídeo realmente ativo;
+- compartilhamento nativo da tela inteira, com ou sem áudio do sistema;
+- procura manual por atualizações assinadas do APK;
 - prioridade de fluidez configurável para compartilhamento de tela.
 
 OBSERVAÇÃO
 Este é um pacote de teste assinado com a chave de desenvolvimento deste ambiente.
-Microfone, câmera, áudio e compartilhamento de tela precisam das permissões do Android.
+Microfone, câmera e tela precisam das permissões do Android. O áudio da tela exige
+Android 10 ou superior e depende da permissão de captura do aplicativo reproduzido.
 
 SHA-256
 $hash

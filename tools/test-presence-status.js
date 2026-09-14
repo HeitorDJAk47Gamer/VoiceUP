@@ -1,0 +1,13 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync('public/app.js', 'utf8');
+assert.match(source, /presenceStatus === 'dnd'/, 'Somente Não perturbe deve bloquear notificações.');
+assert.match(source, /\['online', 'idle', 'activity', 'dnd'\]/, 'Atividade precisa ser um status persistente válido.');
+const server = fs.readFileSync('signaling-server.js', 'utf8');
+assert.match(server, /\['online', 'idle', 'activity', 'dnd'\]/, 'O ServerHost precisa preservar o estado de atividade.');
+const ui = fs.readFileSync('public/beta-ui.js', 'utf8');
+assert.match(ui, /activity: 'Em atividade'/);
+assert.doesNotMatch(ui, /special: 'Especial'/);
+assert.doesNotMatch(fs.readFileSync('public/platform-presence.css', 'utf8'), /status-special/);
+console.log('Status azul de atividade validado.');
