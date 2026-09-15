@@ -34,3 +34,10 @@ Client e ServerHost devem manter nomes, executáveis, identificadores e diretór
 - Diferencie claramente no relatório: código alterado, build gerado, pacote de teste criado e publicação realizada.
 - Não afirme que Android, Linux, SelfWeb ou Cloud foram incluídos sem confirmar o artefato correspondente na pasta da beta.
 - Preserve configurações, perfil, identidade e dados persistentes durante atualizações.
+
+## Publicação do Cloud no GitHub privado
+
+- Por orientação do usuário, cada atualização publicada deve incluir o envio do Cloud correspondente para `HeitorDJAk47Gamer/VoiceUP-Server-Cloud` (repositório privado, branch `main`). Betas apenas locais continuam sem publicação.
+- Use o conteúdo do pacote Cloud validado e seu catálogo assinado. Nunca envie `.env`, chaves privadas, bancos, logs ou dados operacionais.
+- Confira diferenças e preserve arquivos extras do repositório; não use force-push. Verifique o commit remoto após enviar.
+- Diferencie envio ao GitHub privado de implantação na hospedagem: confirme a versão nas rotas públicas antes de afirmar que o Cloud em execução foi atualizado.
