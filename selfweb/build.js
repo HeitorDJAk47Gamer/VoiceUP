@@ -24,6 +24,11 @@ function adaptScript(source, file) {
     source = source.replace(versionLine, `window.voiceupVersion = ${JSON.stringify(manifest.version)};`)
       .replace('"url(\'../assets/voiceup-logo.png\')"', '`url("${window.voiceupSelfWebLogo}")`');
   }
+  if (file === 'desktop-improvements.js') {
+    const loader = "const style = document.createElement('link'); style.rel = 'stylesheet'; style.href = 'desktop-improvements.css'; document.head.append(style);";
+    if (!source.includes(loader)) throw new Error('Carregador de estilos desktop não encontrado.');
+    source = source.replace(loader, `const style = document.createElement('style'); style.textContent = ${JSON.stringify(read('public/desktop-improvements.css'))}; document.head.append(style);`);
+  }
   return source;
 }
 function build() {

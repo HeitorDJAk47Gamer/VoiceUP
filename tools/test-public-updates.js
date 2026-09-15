@@ -32,7 +32,7 @@ async function main() {
   fs.rmSync(folder, { recursive: true, force: true });
   fs.mkdirSync(folder, { recursive: true });
   try {
-    for (const legacyTag of ['v1.0.25', 'v1.1.2', 'v1.2.0']) {
+    for (const legacyTag of ['v1.0.25', 'v1.1.2', 'v1.2.0', 'v1.2.1']) {
       const legacy = execFileSync('git', ['show', `${legacyTag}:update-helper.js`], { cwd: path.join(__dirname, '..'), encoding: 'utf8', windowsHide: true });
       for (const [product, prefix] of [['client', 'VoiceUP Setup '], ['serverhost', 'VoiceUPServer Setup ']]) {
         const handlers = new Map();

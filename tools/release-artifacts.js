@@ -10,6 +10,7 @@ function classify(name, version) {
   if (name === `VoiceUPServer.Setup.${version}.exe`) return ['serverhost', 'windows', 'x64'];
   if (name === `VoiceUP.${version}.appx`) return ['client', 'store', 'x64'];
   if (name === `VoiceUP-${version}-android.apk`) return ['client', 'android', 'universal'];
+  if (name === `VoiceUP-${version}-play.aab`) return ['client', 'android', 'universal'];
   if (name === 'VoiceUP-SelfWeb.html') return ['selfweb', 'web', 'universal'];
   if (name === `VoiceUP-Server-Cloud-${version}.zip`) return ['cloud', 'node', 'universal'];
   for (const [prefix, product] of [['VoiceUP', 'client'], ['VoiceUPServer', 'serverhost']]) {
